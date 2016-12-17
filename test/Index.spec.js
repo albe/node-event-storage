@@ -2,7 +2,7 @@ const expect = require('expect.js');
 const fs = require('fs-extra');
 const Index = require('../src/Index');
 
-describe('index', function() {
+describe('Index', function() {
 
     let index;
 
@@ -40,18 +40,30 @@ describe('index', function() {
         expect(function(){ new Index('test/data/.index', { metadata: { test: 'anotherValue' } }) }).to.throwError();
     });
 
-    it('appends entries sequentially', function() {
-        index = new Index('test/data/.index');
-        for (let i = 1; i <= 100; i++) {
-            index.add(new Index.Entry(i, i));
-        }
-        index.close();
-        index.open();
-        let entries = index.all();
-        expect(entries.length).to.be(100);
-        for (let i = 1; i <= entries.length; i++) {
-            expect(entries[i - 1].number).to.be(i);
-        }
+    describe('write', function() {
+
+        it('appends entries sequentially', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 100; i++) {
+                index.add(new Index.Entry(i, i));
+            }
+            index.close();
+            index.open();
+            let entries = index.all();
+            expect(entries.length).to.be(100);
+            for (let i = 1; i <= entries.length; i++) {
+                expect(entries[i - 1].number).to.be(i);
+            }
+        });
+
+        it('calls callback eventually', function(done) {
+            index = new Index('test/data/.index');
+            let position = index.add(new Index.Entry(1, 0), (number) => {
+                expect(number).to.be(position);
+                done();
+            });
+        });
+
     });
 
     describe('get', function() {
@@ -147,6 +159,92 @@ describe('index', function() {
             for (let i = 0; i < entries.length; i++) {
                 expect(entries[i].number).to.be(1 + i);
             }
+        });
+
+    });
+
+    describe('find', function() {
+
+        it('returns 0 if no entry is lower or equal searched number', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 50; i++) {
+                index.add(new Index.Entry(50 + i, i));
+            }
+            expect(index.find(50)).to.be(0);
+        });
+
+        it('returns last entry if all entries are higher searched number', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 50; i++) {
+                index.add(new Index.Entry(i, i));
+            }
+            expect(index.find(51)).to.be(50);
+        });
+
+        it('returns the entry number on exact match', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 50; i++) {
+                index.add(new Index.Entry(i, i));
+            }
+            expect(index.find(25)).to.be(25);
+        });
+
+        it('returns the highest entry number lower than the searched number', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 50; i++) {
+                index.add(new Index.Entry(i*2, i));
+            }
+            expect(index.find(25)).to.be(12);
+        });
+
+    });
+
+    describe('truncate', function() {
+
+        it('truncates after the given index position', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 50; i++) {
+                index.add(new Index.Entry(i, i));
+            }
+            index.close();
+            index.open();
+
+            index.truncate(25);
+            expect(index.length).to.be(25);
+
+            index.close();
+            index.open();
+            expect(index.length).to.be(25);
+        });
+
+        it('correctly truncates after unflushed entries', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 50; i++) {
+                index.add(new Index.Entry(i, i));
+            }
+
+            index.truncate(25);
+            expect(index.length).to.be(25);
+
+            index.close();
+            index.open();
+            expect(index.length).to.be(25);
+        });
+
+        it('does nothing if truncating after index length', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 50; i++) {
+                index.add(new Index.Entry(i, i));
+            }
+            index.close();
+            index.open();
+
+            index.truncate(60);
+            expect(index.length).to.be(50);
+
+            index.close();
+            index.open();
+            expect(index.length).to.be(50);
         });
 
     });

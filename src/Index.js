@@ -18,6 +18,12 @@ class EntryInterface {
  */
 class Entry extends Array {
 
+    /**
+     * @param {number} number The sequence number of the index entry.
+     * @param {number} position The file position where the indexed document is stored.
+     * @param {number} size The size of the stored document (for verification).
+     * @param {number} partition The partition where the indexed document is stored.
+     */
     constructor(number, position, size = 0, partition = 0) {
         super(4);
         this[0] = number;
@@ -85,6 +91,10 @@ class Index {
      * @param {EntryInterface} [EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [fileName] The name of the file to use for storing the index.
      * @param {Object} [options] An object with additional index options.
+     *   Possible options are:
+     *    - writeBufferSize: The number of bytes to use for the write buffer. Default 4096.
+     *    - flushDelay: How many ms to delay the write buffer flush to optimize throughput. Default 100.
+     *    - metadata: An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
     constructor(EntryClass = Entry, fileName = '.index', options = {}) {
         if (typeof EntryClass === 'string') {
@@ -113,9 +123,10 @@ class Index {
         }
         let entrySize = EntryClass.size;
         this.readBuffer = Buffer.allocUnsafe(entrySize);
-        let writeBufferSize = options.writeBufferSize || 64 * entrySize;
+        let writeBufferSize = options.writeBufferSize || 4096;
         this.writeBuffer = Buffer.allocUnsafe(writeBufferSize);
         this.writeBufferPos = 0;
+        this.flushDelay = options.flushDelay || 100;
         this.flushCallbacks = [];
 
         this.EntryClass = EntryClass;
@@ -204,6 +215,7 @@ class Index {
         if (stat.size > length * this.EntryClass.size) {
             this.close();
             // Corrupt index file
+            console.log('expected', length * this.EntryClass.size, 'got', stat.size);
             throw new Error('Index file is corrupt!');
         }
 
@@ -306,6 +318,10 @@ class Index {
         if (!this.fd) {
             return false;
         }
+        if (this.flushTimeout) {
+            clearTimeout(this.flushTimeout);
+            this.flushTimeout = null;
+        }
         if (this.writeBufferPos === 0) return false;
         fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferPos);
         this.writeBufferPos = 0;
@@ -347,7 +363,7 @@ class Index {
         this.data[this.data.length] = entry;
 
         if (this.writeBufferPos === 0) {
-            process.nextTick(() => this.flush());
+            this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
         }
 
         this.writeBufferPos += entry.toBuffer(this.writeBuffer, this.writeBufferPos);
@@ -411,6 +427,7 @@ class Index {
         let readFrom = Math.max(this.readUntil + 1, from);
         let amount = (until - readFrom + 1);
 
+        // TODO: rewrite this to make use of a fixed read buffer
         let readBuffer = Buffer.allocUnsafe(amount * this.EntryClass.size);
         let readSize = fs.readSync(this.fd, readBuffer, 0, readBuffer.byteLength, this.headerSize + readFrom * this.EntryClass.size);
         let index = 0;
@@ -489,6 +506,50 @@ class Index {
         return this.data.slice(from - 1, until);
     }
 
+    /**
+     * Find the last index entry that has a sequence number lower than or equal to `number`.
+     *
+     * @api
+     * @param {number} number The sequence number to search for.
+     * @returns {number} The last index entry position that is lower than or equal to the given number.
+     */
+    find(number) {
+        let low = 1;
+        let high = this.data.length;
+        while (low <= high) {
+            let mid = low + ((high - low) >> 1);
+            let entry = this.get(mid);
+            if (entry.number === number) {
+                return mid;
+            }
+            if (entry.number < number) {
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
+        }
+        return high;
+    }
+
+    /**
+     * Truncate the index after the given entry number.
+     *
+     * @param {number} after The index entry number to truncate after.
+     */
+    truncate(after) {
+        if (after > this.length) {
+            return;
+        }
+        if (after < 0) {
+            after = 0;
+        }
+        if (this.fd) {
+            this.flush();
+        }
+
+        fs.truncateSync(this.fileName, this.headerSize + after * this.EntryClass.size);
+        this.data.splice(after);
+    }
 }
 
 module.exports = Index;

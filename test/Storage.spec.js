@@ -2,7 +2,7 @@ const expect = require('expect.js');
 const fs = require('fs-extra');
 const Storage = require('../src/Storage');
 
-describe('storage', function() {
+describe('Storage', function() {
 
     let storage;
 
@@ -16,4 +16,5 @@ describe('storage', function() {
     });
 
     it('needs to be tested.');
+
 });
