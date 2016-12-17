@@ -7,12 +7,11 @@ An optimized event store for node.js
 There is currently only a single event store implementation for node/javascript, namely https://github.com/adrai/node-eventstore
 
 It is a nice project, but has a few drawbacks though:
-
-    - its API is fully based around Event Streams, so in order to commit a new event the full existing Event Stream needs to be
+  - its API is fully based around Event Streams, so in order to commit a new event the full existing Event Stream needs to be
       retrieved first. This makes it unfit for client application scenarios that frequently restart the application.
-    - it has backends for quite a few existing databases, but none of them are optimized for event storage needs
-    - it stores event publishing meta information in the events, so it does updates to event data
-    - events are fixed onto one stream and it's not possible to create multiple streams that partially contain
+  - it has backends for quite a few existing databases, but none of them are optimized for event storage needs
+  - it stores event publishing meta information in the events, so it does updates to event data
+  - events are fixed onto one stream and it's not possible to create multiple streams that partially contain
       the same events. This makes creating projections hard and/or slow.
 
 ## Event-Storage and it's specifics
@@ -22,14 +21,13 @@ have no concept of overwriting or deleting data. They are purely append-only sto
 sequential reading (possibly with some filtering applied): 
 
 This means a couple of things:
-
-    - no write-ahead log or transaction log required - the storage itself is the transaction log!
-    - therefore writes are as fast as they can get, but you only can have a single writer
-    - durability comes for free if write caches are avoided
-    - reads and writes can happen lock-free, reads don't block writes and are always consistent (natural MVCC)
-    - indexes are append-only and hence gain the same benefits
-    - since only sequential reading is needed, indexes are simple file position lists - no fancy B+-Tree/fractal tree required
-    - indexes are therefore pretty cheap and can be created in high numbers
+  - no write-ahead log or transaction log required - the storage itself is the transaction log!
+  - therefore writes are as fast as they can get, but you only can have a single writer
+  - durability comes for free if write caches are avoided
+  - reads and writes can happen lock-free, reads don't block writes and are always consistent (natural MVCC)
+  - indexes are append-only and hence gain the same benefits
+  - since only sequential reading is needed, indexes are simple file position lists - no fancy B+-Tree/fractal tree required
+  - indexes are therefore pretty cheap and can be created in high numbers
 
 Using any SQL/NoSQL database for storing events therefore is sub-optimal, as those databases do a lot of work on
 top which is simply not needed. Write and read performance suffer.
