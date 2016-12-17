@@ -1,3 +1,5 @@
+https://travis-ci.org/albe/node-event-store.svg?branch=master
+
 # node-event-store
 
 An optimized event store for node.js
