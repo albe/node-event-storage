@@ -5,7 +5,9 @@ An optimized event store for node.js
 ## Why?
 
 There is currently only a single event store implementation for node/javascript, namely https://github.com/adrai/node-eventstore
+
 It is a nice project, but has a few drawbacks though:
+
     - its API is fully based around Event Streams, so in order to commit a new event the full existing Event Stream needs to be
       retrieved first. This makes it unfit for client application scenarios that frequently restart the application.
     - it has backends for quite a few existing databases, but none of them are optimized for event storage needs
@@ -20,6 +22,7 @@ have no concept of overwriting or deleting data. They are purely append-only sto
 sequential reading (possibly with some filtering applied): 
 
 This means a couple of things:
+
     - no write-ahead log or transaction log required - the storage itself is the transaction log!
     - therefore writes are as fast as they can get, but you only can have a single writer
     - durability comes for free if write caches are avoided
