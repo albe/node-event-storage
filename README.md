@@ -1,4 +1,4 @@
-https://travis-ci.org/albe/node-event-store.svg?branch=master
+[![Build Status](https://travis-ci.org/albe/node-event-store.svg?branch=master)](https://travis-ci.org/albe/node-event-store)
 
 # node-event-store
 
