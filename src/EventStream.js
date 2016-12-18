@@ -22,11 +22,25 @@ class EventStream extends Readable {
         }
     }
 */
+    /**
+     * Iterator implementation. Iterate over the stream in a `for ... of` loop.
+     */
+    *[Symbol.iterator]() {
+        let next;
+        while ((next = this.next()) !== false) {
+            yield next;
+        }
+    }
+
     next() {
         let next = this.iterator.next();
         return next.done ? false : next.value.payload;
     }
 
+    /**
+     * Readable stream implementation.
+     * @private
+     */
     _read() {
         let next = this.next();
         this.push(next ? next : null);
