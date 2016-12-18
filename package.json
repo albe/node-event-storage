@@ -1,7 +1,16 @@
 {
-  "name": "node-event-store",
+  "name": "event-storage",
   "version": "0.0.1",
-  "private": true,
+  "description": "An optimized embedded event store for node.js",
+  "keywords": ["event sourcing", "event store", "embedded", "cqrs"],
+  "homepage": "https://github.com/albe/node-event-storage",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/albe/node-event-storage"
+  },
+  "bugs": {
+    "url": "https://github.com/albe/node-event-storage/issues"
+  },
   "scripts": {
     "test": "mocha test/*.spec.js"
   },
@@ -12,6 +21,7 @@
       "email": "a.berl@outlook.com"
     }
   ],
+  "engines": { "node" : ">=6.0" },
   "dependencies": {
     "bluebird": "^3.4.6",
     "mkdirp": "^0.5.1",

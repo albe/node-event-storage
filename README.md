@@ -1,20 +1,20 @@
 [![Build Status](https://travis-ci.org/albe/node-event-store.svg?branch=master)](https://travis-ci.org/albe/node-event-store)
 
-# node-event-store
+# node-event-storage
 
-An optimized event store for node.js
+An optimized embedded event store for node.js
 
 Disclaimer: This is currently under heavy development and not production ready.
 
 ## Why?
 
-There is currently only a single event store implementation for node/javascript, namely https://github.com/adrai/node-eventstore
+There is currently only a single embedded event store implementation for node/javascript, namely https://github.com/adrai/node-eventstore
 
 It is a nice project, but has a few drawbacks though:
 
   - its API is fully based around Event Streams, so in order to commit a new event the full existing Event Stream needs to be
       retrieved first. This makes it unfit for client application scenarios that frequently restart the application.
-  - it has backends for quite a few existing databases, but none of them are optimized for event storage needs
+  - it has backends for quite a few existing databases (TingoDB, NeDB, MongoDB, ...), but none of them are optimized for event storage needs
   - it stores event publishing meta information in the events, so it does updates to event data
   - events are fixed onto one stream and it's not possible to create multiple streams that partially contain
       the same events. This makes creating projections hard and/or slow.
@@ -45,7 +45,7 @@ Small event sourced single-server applications that want to get near-optimal wri
 
 ## Installation
 
-`npm install node-event-store`
+`npm install event-storage`
 
 ## Run Tests
 
@@ -54,7 +54,7 @@ Small event sourced single-server applications that want to get near-optimal wri
 ## Usage
 
 ```
-const EventStore = require('node-event-store');
+const EventStore = require('event-storage');
 
 var eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
 eventstore.on('ready', () => {
