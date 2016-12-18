@@ -2,17 +2,11 @@ const fs = require('fs');
 const mkdirpSync = require('mkdirp').sync;
 const path = require('path');
 const EventEmitter = require('events');
+const Partition = require('./Partition');
 const Index = require('./Index');
-
-// node-event-storage V01
-const HEADER_MAGIC = "nestor01";
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
-
-const pad = (str, len, char = ' ') => {
-    return len > str.length ? char.repeat(len - str.length) + str : str;
-};
 
 /**
  * An append-only storage with highly performant positional range scans.
@@ -22,46 +16,70 @@ class Storage extends EventEmitter {
 
     /**
      * Config options:
-     *   - serializer: A serializer object with methods serialize(document) and deserialize(data).
+     *   - serializer: A serializer object with methods serialize(document) and deserialize(data). Default is JSON.stringify/parse.
      *   - dataDirectory: The path where the storage data should reside. Default '.'.
      *   - indexDirectory: The path where the indexes should be stored. Defaults to dataDirectory.
-     *   - indexFile: The name of the primary index. Default '{storageFile}.index'.
+     *   - indexFile: The name of the primary index. Default '{storageName}.index'.
      *   - readBufferSize: Size of the read buffer in bytes. Default 4096.
      *   - writeBufferSize: Size of the write buffer in bytes. Default 16384.
      *   - maxWriteBufferDocuments: How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      *   - syncOnFlush: If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
+     *   - partitioner: A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
+     *   - indexOptions: An options object that should be passed to all indexes on construction.
      *
-     * @param {string} [storageFile] The name of the storage.
+     * @param {string} [storageName] The name of the storage.
      * @param {Object} [config] An object with storage parameters.
      */
-    constructor(storageFile, config = {}) {
+    constructor(storageName = 'storage', config = {}) {
         super();
-        if (typeof storageFile === 'object') {
-            config = storageFile;
-            storageFile = undefined;
+        if (typeof storageName === 'object') {
+            config = storageName;
+            storageName = undefined;
         }
 
         this.serializer = config.serializer || { serialize: JSON.stringify, deserialize: JSON.parse };
-        this.storageFile = storageFile || 'storage';
+        this.storageFile = storageName || 'storage';
 
-        this.dataDirectory = config.dataDirectory || '.';
+        this.dataDirectory = path.resolve(config.dataDirectory || '.');
         if (!fs.existsSync(this.dataDirectory)) {
             mkdirpSync(this.dataDirectory);
         }
 
         this.indexDirectory = config.indexDirectory || this.dataDirectory;
-        if (!fs.existsSync(this.indexDirectory)) {
-            mkdirpSync(this.indexDirectory);
-        }
 
+        this.indexOptions = config.indexOptions || {};
+        this.indexOptions.dataDirectory = this.indexDirectory;
         let indexFile = config.indexFile || (this.storageFile + '.index');
-        this.index = new Index(path.join(this.indexDirectory, indexFile));
+        this.index = new Index(indexFile, this.indexOptions);
         this.secondaryIndexes = {};
 
-        this.readBufferSize = config.readBufferSize || DEFAULT_READ_BUFFER_SIZE;
-        this.writeBufferSize = config.writeBufferSize || DEFAULT_WRITE_BUFFER_SIZE;
-        this.maxWriteBufferDocuments = config.maxWriteBufferDocuments || 0;
-        this.syncOnFlush = !!config.syncOnFlush;
+        this.partitioner = config.partitioner || ((document, number) => '');
+        this.partitionConfig = {
+            dataDirectory: this.dataDirectory,
+            readBufferSize: config.readBufferSize || DEFAULT_READ_BUFFER_SIZE,
+            writeBufferSize: config.writeBufferSize || DEFAULT_WRITE_BUFFER_SIZE,
+            maxWriteBufferDocuments: config.maxWriteBufferDocuments || 0,
+            syncOnFlush: !!config.syncOnFlush
+        };
+        this.partitions = {};
+
+        let files = fs.readdirSync(this.dataDirectory);
+        for (let file of files) {
+            if (file.substr(-6) === '.index') continue;
+            if (file.substr(0, this.storageFile.length) === this.storageFile) {
+                //console.log('Found existing partition', file);
+                let partition = new Partition(file, this.partitionConfig);
+                this.partitions[partition.id] = partition;
+            }
+        }
+    }
+
+    /**
+     * The amount of documents in the storage.
+     * @returns {number}
+     */
+    get length() {
+        return this.index.length;
     }
 
     /**
@@ -72,37 +90,14 @@ class Storage extends EventEmitter {
      * @returns {boolean}
      */
     open() {
-        if (this.fd) {
-            return true;
-        }
-
         this.index.open();
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
             this.secondaryIndexes[indexName].index.open();
         }
-        this.size = this.index.lastEntry.position + this.index.lastEntry.size;
 
-        this.fd = fs.openSync(this.storageFile, 'a+');
-
-        this.readBuffer = Buffer.allocUnsafe(10 + this.readBufferSize);
-        this.readBufferPos = -1;
-
-        this.writeBuffer = Buffer.allocUnsafe(this.writeBufferSize);
-        this.writeBufferPos = 0;
-        this.writeBufferDocuments = 0;
-        this.flushCallbacks = [];
-
-        let stat = fs.statSync(this.storageFile);
-        if (this.size > stat.size) {
-            console.log('Corrupt index: storage is smaller than index');
-            // The index is corrupted, needs to be rebuilt
-            this.emit('index-corrupted');
-        } else if (this.size < stat.size) {
-            console.log('Outdated index: index is smaller than storage', this.size, stat.size);
-            // Index is not up to date, update from last position
-            this.emit('index-outdated');
+        for (let partition of Object.getOwnPropertyNames(this.partitions)) {
+            this.partitions[partition].open();
         }
-        this.size = stat.size;
 
         this.emit('opened');
         return true;
@@ -116,23 +111,12 @@ class Storage extends EventEmitter {
      * @returns void
      */
     close() {
-        if (this.fd) {
-            this.flush();
-            fs.closeSync(this.fd);
-            this.fd = undefined;
-        }
-        if (this.readBuffer) {
-            this.readBuffer = undefined;
-            this.readBufferPos = 0;
-        }
-        if (this.writeBuffer) {
-            this.writeBuffer = undefined;
-            this.writeBufferPos = 0;
-            this.writeBufferDocuments = 0;
-        }
         this.index.close();
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
             this.secondaryIndexes[indexName].index.close();
+        }
+        for (let partition of Object.getOwnPropertyNames(this.partitions)) {
+            this.partitions[partition].close();
         }
         this.emit('closed');
     }
@@ -146,19 +130,10 @@ class Storage extends EventEmitter {
      * @returns {boolean}
      */
     flush() {
-        if (!this.fd) {
-            console.log('File is already closed!');
-            return false;
+        for (let partition of Object.getOwnPropertyNames(this.partitions)) {
+            this.partitions[partition].flush();
         }
-        if (this.writeBufferPos === 0) return false;
-        fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferPos);
-        if (this.syncOnFlush) {
-            fs.fsyncSync(this.fd);
-        }
-        this.writeBufferPos = 0;
-        this.writeBufferDocuments = 0;
-        this.flushCallbacks.forEach(callback => callback());
-        this.flushCallbacks = [];
+
         this.emit('flush');
         return true;
     }
@@ -167,14 +142,21 @@ class Storage extends EventEmitter {
      * Add an index entry for the given document at the position and size.
      *
      * @private
-     * @param {int} position The file offset where the document is stored.
-     * @param {int} size The size of the stored document.
+     * @param {number} partitionId The partition where the document is stored.
+     * @param {number} position The file offset where the document is stored.
+     * @param {number} size The size of the stored document.
      * @param {Object} document The document to add to the index.
      * @param {function} [callback] The callback to call when the index is written to disk.
      * @returns {Index.Entry} The index entry item.
      */
-    addIndex(position, size, document, callback) {
-        let entry = new Index.Entry(this.index.length + 1, position, size);
+    addIndex(partitionId, position, size, document, callback) {
+
+        /*if (this.index.lastEntry.position + this.index.lastEntry.size !== position) {
+         this.emit('index-corrupted');
+         throw new Error('Corrupted index, needs to be rebuilt!');
+         }*/
+
+        let entry = new Index.Entry(this.index.length + 1, position, size, partitionId);
         this.index.add(entry, (indexPosition) => {
             if (typeof callback === 'function') callback(indexPosition);
             this.emit('wrote', document, entry, indexPosition);
@@ -183,30 +165,27 @@ class Storage extends EventEmitter {
     }
 
     /**
-     * Write the given data with given data size to disk.
+     * Get a partition either by name or by id.
+     * If a partition with the given name does not exist, a new one will be created.
+     * If a partition with the given id does not exist, an error is thrown.
      *
      * @private
-     * @param {string} data The data to write to disk.
-     * @param {number} dataSize The size of the data.
-     * @param {function} [callback] A callback that will be called when the data is flushed to disk.
-     * @returns void
+     * @param {string|number} partitionIdentifier The partition name or the partition Id
+     * @returns {Partition}
+     * @throws {Error} If an id is given and no such partition exists.
      */
-    _write(data, dataSize, callback) {
-        if (dataSize > this.writeBuffer.byteLength) {
-            this.flush();
-            console.log('Sync write!');
-            fs.write(this.fd, data, callback);
-        } else {
-            if (this.writeBufferPos === 0) {
-                process.nextTick(() => this.flush());
+    getPartition(partitionIdentifier) {
+        if (typeof partitionIdentifier === 'string') {
+            let partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
+            partitionIdentifier = Partition.id(partitionName);
+            if (!this.partitions[partitionIdentifier]) {
+                this.partitions[partitionIdentifier] = new Partition(partitionName, this.partitionConfig);
+                this.partitions[partitionIdentifier].open();
             }
-            this.writeBufferPos += this.writeBuffer.write(data, this.writeBufferPos, dataSize, 'utf8');
-            this.writeBufferDocuments++;
-            if (typeof callback === 'function') this.flushCallbacks.push(callback);
-            if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
-                this.flush();
-            }
+        } else if (!this.partitions[partitionIdentifier]) {
+            throw new Error('Partition #' + partitionIdentifier + ' does not exist.');
         }
+        return this.partitions[partitionIdentifier];
     }
 
     /**
@@ -217,44 +196,28 @@ class Storage extends EventEmitter {
      */
     write(document, callback) {
         let data = this.serializer.serialize(document).toString();
-
         let dataSize = Buffer.byteLength(data, 'utf8');
-        let dataToWrite = pad(dataSize.toString(), 10) + data + "\n";
-        dataSize += 11;
-        let position = this.size;
 
-        /*if (this.index.lastEntry.position + this.index.lastEntry.size !== position) {
-            this.emit('index-corrupted');
-            throw new Error('Corrupted index, needs to be rebuilt!');
-        }*/
-        // TODO: The index should never be running ahead of the storage.
-        //       Only if the write succeeded should the indexes be written.
-        //       However, we need to increase the in-memory index position before
-        //       the next write occurs in order to guarantee correct sequence numbering.
-        this._write(dataToWrite, dataSize, callback);
-        let indexEntry = this.addIndex(position, dataSize, document);
+        let partitionName = this.partitioner(document, this.index.length + 1);
+        let partition = this.getPartition(partitionName);
+        let position = partition.write(data, callback);
+
+        if (position === false) {
+            throw new Error('Error writing document.');
+        }
+        let indexEntry = this.addIndex(partition.id, position, dataSize, document);
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
             if (this.matches(document, this.secondaryIndexes[indexName].matcher)) {
                 this.secondaryIndexes[indexName].index.add(indexEntry);
             }
         }
-        this.size += dataSize;
+
         return this.index.length;
     }
 
     /**
-     * Fill the internal read buffer starting from the given position.
-     *
      * @private
-     * @param {number} [from] The file position to start filling the read buffer from.
-     */
-    fillBuffer(from = 0) {
-        fs.readSync(this.fd, this.readBuffer, 0, this.readBuffer.byteLength, from);
-        this.readBufferPos = from;
-    }
-
-    /**
-     * @private
+     * @param {number} partitionId The partition to read from.
      * @param {number} position The file position to read from.
      * @param {number} [size] The expected byte size of the document at the given position.
      * @returns {Object} The document stored at the given position.
@@ -262,40 +225,15 @@ class Storage extends EventEmitter {
      * @throws {Error} if the document size at the given position does not match the provided size.
      * @throws {Error} if the document at the given position can not be deserialized.
      */
-    readFrom(position, size) {
-        let bufferPosition = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || bufferPosition < 0 || bufferPosition + 10 > this.readBuffer.byteLength) {
-            this.fillBuffer(position);
-            bufferPosition = 0;
+    readFrom(partitionId, position, size) {
+        if (!this.partitions[partitionId]) {
+            throw new Error('Partition #' + partitionId + ' does not exist.');
         }
-        let dataPosition = bufferPosition + 10;
-        let dataLength = parseInt(this.readBuffer.toString('utf8', bufferPosition, dataPosition), 10);
-        if (!dataLength || isNaN(dataLength)) {
-            throw new Error('Error reading document size from ' + position + ', got ' + dataLength + '.');
-        }
-        if (size && dataLength + 11 !== size) {
-            throw new Error('Invalid document size ' + dataLength + ' at position ' + position + ', expected ' + size + '.');
-        }
-
-        let data;
-        if (dataLength + 10 > this.readBuffer.byteLength) {
-            //console.log('sync read for large document size', dataLength, 'at position', position);
-            let tempReadBuffer = Buffer.allocUnsafe(dataLength);
-            fs.readSync(this.fd, tempReadBuffer, 0, dataLength, position + 10);
-            data = tempReadBuffer.toString('utf8');
-        } else {
-            if (bufferPosition > 0 && dataPosition + dataLength > this.readBuffer.byteLength) {
-                this.fillBuffer(position);
-                dataPosition = 10;
-            }
-
-            data = this.readBuffer.toString('utf8', dataPosition, dataPosition + dataLength);
-        }
-
         try {
+            let data = this.partitions[partitionId].readFrom(position);
             return this.serializer.deserialize(data);
         } catch (e) {
-            console.log('Error parsing document:', this.readBufferPos, position, data, dataPosition, dataLength);
+            console.log('Error parsing document:', data, position);
             throw e;
         }
     }
@@ -314,7 +252,7 @@ class Storage extends EventEmitter {
         let entry = index.get(number);
         if (entry === false) return false;
 
-        return this.readFrom(entry.position, entry.size);
+        return this.readFrom(entry.partition, entry.position, entry.size);
     }
 
     /**
@@ -323,7 +261,7 @@ class Storage extends EventEmitter {
      *
      * @api
      * @param {number} from The 1-based document number (inclusive) to start reading from.
-     * @param {number} until The 1-based document number (inclusive) to read until.
+     * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
      * @param {Index} [index] The index to use for finding the documents in the range.
      * @returns {Generator} A generator that will read each document in the range one by one.
      */
@@ -335,7 +273,7 @@ class Storage extends EventEmitter {
             throw new Error('Range scan error.');
         }
         for (let entry of entries) {
-            let document = this.readFrom(entry.position, entry.size);
+            let document = this.readFrom(entry.partition, entry.position, entry.size);
             yield document;
         }
     }
@@ -374,18 +312,20 @@ class Storage extends EventEmitter {
      * @returns {Index} The index containing all documents that match the query.
      */
     ensureIndex(name, matcher) {
-        if (!this.fd) {
+        /*if (!this.isopen) {
             throw new Error('Storage is not open yet.');
-        }
+        }*/
         if (name in this.secondaryIndexes) {
             return this.secondaryIndexes[name].index;
         }
-        if (fs.existsSync(name + '.index')) {
+
+        let indexName = this.storageFile + '.' + name + '.index';
+        if (fs.existsSync(path.join(this.indexDirectory, indexName))) {
             let metadata;
             if (matcher) {
                 metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
             }
-            let index = new Index(this.EntryClass, name + '.index', metadata);
+            let index = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
             if (typeof index.metadata.matcher === 'object') {
                 matcher = index.metadata.matcher;
             } else {
@@ -404,9 +344,9 @@ class Storage extends EventEmitter {
             throw new Error('Need to specify a matcher.');
         }
         let serializedMatcher = typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString();
-        let newIndex = new Index(this.EntryClass, name + '.index', { metadata: { matcher: serializedMatcher } });
+        let newIndex = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, { metadata: { matcher: serializedMatcher } }));
         for (let entry of entries) {
-            let document = this.readFrom(entry.position);
+            let document = this.readFrom(entry.partition, entry.position);
             if (this.matches(document, matcher)) {
                 newIndex.add(entry);
             }
@@ -418,14 +358,44 @@ class Storage extends EventEmitter {
     }
 
     /**
-     * Rebuild the full index.
-     * TODO: Not implemented yet
+     * Truncate the storage after the given sequence number.
+     *
+     * @param {number} after The document sequence number to truncate after.
      */
-    rebuildIndex() {
+    truncate(after) {
+        if (this.truncating <= after) {
+            return;
+        }
+        this.truncating = after;
+        /*
+         To truncate the store following steps need to be done:
+
+         1) switch to read-only mode
+         2) find all partition positions after which their files should be truncated
+         3) truncate all partitions accordingly
+         4) truncate/rewrite all indexes
+         5) switch back to write mode
+         */
+        let entries = this.index.range(after + 1);
+        if (entries === false || entries.length === 0) {
+            this.truncating = undefined;
+            return;
+        }
+        let partitions = [];
+        for (let entry of entries) {
+            if (partitions.indexOf(entry.partition) >= 0) continue;
+            partitions.push(entry.partition);
+            this.getPartition(entry.partition).truncate(entry.position);
+        }
+        let entry = entries[0];
+        this.index.truncate(after);
+        for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
+            let truncateAfter = this.secondaryIndexes[indexName].find(entry.position);
+            this.secondaryIndexes[indexName].truncate(truncateAfter);
+        }
+        this.truncating = undefined;
     }
 
-    repairIndex() {
-    }
 }
 
 module.exports = Storage;
