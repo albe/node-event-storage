@@ -113,10 +113,13 @@ class Partition {
 
         // allocUnsafeSlow because we don't need buffer pooling for these relatively long-lived buffers
         this.readBuffer = Buffer.allocUnsafeSlow(10 + this.readBufferSize);
+        // Where inside the file the read buffer starts
         this.readBufferPos = -1;
 
         this.writeBuffer = Buffer.allocUnsafeSlow(this.writeBufferSize);
-        this.writeBufferPos = 0;
+        // Where inside the write buffer the next write is added
+        this.writeBufferCursor = 0;
+        // How many documents are currently in the write buffer
         this.writeBufferDocuments = 0;
         this.flushCallbacks = [];
 
@@ -130,7 +133,10 @@ class Partition {
             fs.readSync(this.fd, headerBuffer, 0, HEADER_MAGIC.length, 0);
             if (headerBuffer.toString() !== HEADER_MAGIC) {
                 this.close();
-                throw new Error('Invalid file header in partition ' + this.name);
+                if (headerBuffer.toString().substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
+                    throw new Error('Invalid file version. The partition ' + this.name + ' was created with a different library version.');
+                }
+                throw new Error('Invalid file header in partition ' + this.name + '.');
             }
             this.size = stat.size - this.headerSize;
         }
@@ -150,11 +156,12 @@ class Partition {
             this.fd = undefined;
         }
         if (this.readBuffer) {
-            this.readBuffer = 0;
+            this.readBuffer = undefined;
+            this.readBufferPos = -1;
         }
         if (this.writeBuffer) {
             this.writeBuffer = undefined;
-            this.writeBufferPos = 0;
+            this.writeBufferCursor = 0;
             this.writeBufferDocuments = 0;
         }
     }
@@ -170,16 +177,16 @@ class Partition {
         if (!this.fd) {
             return false;
         }
-        if (this.writeBufferPos === 0) {
+        if (this.writeBufferCursor === 0) {
             return false;
         }
 
-        fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferPos);
+        fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferCursor);
         if (this.syncOnFlush) {
             fs.fsyncSync(this.fd);
         }
 
-        this.writeBufferPos = 0;
+        this.writeBufferCursor = 0;
         this.writeBufferDocuments = 0;
         this.flushCallbacks.forEach(callback => callback());
         this.flushCallbacks = [];
@@ -201,10 +208,10 @@ class Partition {
         let dataToWrite = pad(dataSize.toString(), 10) + data.toString() + "\n";
         dataSize += 11;
 
-        if (this.writeBufferPos > 0 && dataSize + this.writeBufferPos > this.writeBuffer.byteLength) {
+        if (this.writeBufferCursor > 0 && dataSize + this.writeBufferCursor > this.writeBuffer.byteLength) {
             this.flush();
         }
-        if (this.writeBufferPos === 0) {
+        if (this.writeBufferCursor === 0) {
             process.nextTick(() => this.flush());
         }
 
@@ -215,7 +222,7 @@ class Partition {
         } else {
             // We can denote ascii encoding here because dataSize is the exact byte size and the buffer is guaranteed
             // to be big enough to contain all bytes anyway. 'utf8' only checks that no characters are split.
-            this.writeBufferPos += this.writeBuffer.write(dataToWrite, this.writeBufferPos, dataSize, 'ascii');
+            this.writeBufferCursor += this.writeBuffer.write(dataToWrite, this.writeBufferCursor, dataSize, 'ascii');
             this.writeBufferDocuments++;
             if (typeof callback === 'function') this.flushCallbacks.push(callback);
             if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
@@ -257,14 +264,22 @@ class Partition {
         if (position + 10 >= this.size) {
             return false;
         }
-        // TODO: Need to handle the case when data that is still in write buffer is supposed to be read.
-        let bufferPosition = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || bufferPosition < 0 || bufferPosition + 10 > this.readBuffer.byteLength) {
-            this.fillBuffer(position);
-            bufferPosition = 0;
+        let buffer = this.readBuffer;
+        let bufferPos = this.readBufferPos;
+
+        // Handle the case when data that is still in write buffer is supposed to be read
+        if (this.writeBufferCursor > 0 && position >= this.size - this.writeBufferCursor) {
+            buffer = this.writeBuffer;
+            bufferPos = this.size - this.writeBufferCursor;
         }
-        let dataPosition = bufferPosition + 10;
-        let dataLengthStr = this.readBuffer.toString('utf8', bufferPosition, dataPosition);
+
+        let bufferCursor = position - bufferPos;
+        if (bufferPos < 0 || bufferCursor < 0 || bufferCursor + 10 > buffer.byteLength) {
+            this.fillBuffer(position);
+            bufferCursor = 0;
+        }
+        let dataPosition = bufferCursor + 10;
+        let dataLengthStr = buffer.toString('utf8', bufferCursor, dataPosition);
         let dataLength = parseInt(dataLengthStr, 10);
         if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
             throw new Error('Error reading document size from ' + position + ', got ' + dataLength + '.');
@@ -277,19 +292,19 @@ class Partition {
             throw new CorruptFileError('Invalid document at position ' + position + '. This may be caused by an unfinished write.');
         }
 
-        if (dataLength + 10 > this.readBuffer.byteLength) {
+        if (dataLength + 10 > buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);
             let tempReadBuffer = Buffer.allocUnsafe(dataLength);
             fs.readSync(this.fd, tempReadBuffer, 0, dataLength, this.headerSize + position + 10);
             return tempReadBuffer.toString('utf8');
         }
 
-        if (bufferPosition > 0 && dataPosition + dataLength > this.readBuffer.byteLength) {
+        if (bufferCursor > 0 && dataPosition + dataLength > buffer.byteLength) {
             this.fillBuffer(position);
             dataPosition = 10;
         }
 
-        return this.readBuffer.toString('utf8', dataPosition, dataPosition + dataLength);
+        return buffer.toString('utf8', dataPosition, dataPosition + dataLength);
     }
 
     /**

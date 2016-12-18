@@ -90,6 +90,12 @@ describe('Partition', function() {
             expect(partition.readFrom(5000)).to.be(false);
         });
 
+        it('can read unflushed documents', function() {
+            partition.open();
+            let position = partition.write('foobar');
+            expect(partition.readFrom(position, 6)).to.be('foobar');
+        });
+
         it('validates document size', function() {
             partition.open();
             for (let i = 0; i < 10; i++) {

@@ -125,7 +125,7 @@ class Index {
         this.readBuffer = Buffer.allocUnsafe(entrySize);
         let writeBufferSize = options.writeBufferSize || 4096;
         this.writeBuffer = Buffer.allocUnsafe(writeBufferSize);
-        this.writeBufferPos = 0;
+        this.writeBufferCursor = 0;
         this.flushDelay = options.flushDelay || 100;
         this.flushCallbacks = [];
 
@@ -179,10 +179,11 @@ class Index {
      * This will open a file handle and either write the metadata if the file is empty or read back the metadata and verify
      * it against the metadata provided in the constructor options.
      * @api
+     * @returns {boolean} True if the index was opened or false if it was already open.
      */
     open() {
         if (this.fd) {
-            return;
+            return false;
         }
 
         if (!fs.existsSync(path.dirname(this.fileName))) {
@@ -225,6 +226,8 @@ class Index {
             this.read(length);
         }
         this.readUntil = -1;
+
+        return true;
     }
 
     /**
@@ -262,7 +265,7 @@ class Index {
         let headerMagic = headerBuffer.toString('utf8', 0, 8);
         if (headerMagic !== HEADER_MAGIC) {
             if (headerMagic.substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
-                throw new Error('Invalid index version. The index was created with a different library version.');
+                throw new Error('Invalid file version. The index ' + this.fileName + ' was created with a different library version.');
             }
             throw new Error('Invalid file header.');
         }
@@ -322,9 +325,9 @@ class Index {
             clearTimeout(this.flushTimeout);
             this.flushTimeout = null;
         }
-        if (this.writeBufferPos === 0) return false;
-        fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferPos);
-        this.writeBufferPos = 0;
+        if (this.writeBufferCursor === 0) return false;
+        fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferCursor);
+        this.writeBufferCursor = 0;
         this.flushCallbacks.forEach(callback => callback());
         this.flushCallbacks = [];
         return true;
@@ -362,13 +365,13 @@ class Index {
         }
         this.data[this.data.length] = entry;
 
-        if (this.writeBufferPos === 0) {
+        if (this.writeBufferCursor === 0) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
         }
 
-        this.writeBufferPos += entry.toBuffer(this.writeBuffer, this.writeBufferPos);
+        this.writeBufferCursor += entry.toBuffer(this.writeBuffer, this.writeBufferCursor);
         this.onFlush(callback, this.length);
-        if (this.writeBufferPos >= this.writeBuffer.byteLength) {
+        if (this.writeBufferCursor >= this.writeBuffer.byteLength) {
             this.flush();
         }
 
@@ -549,6 +552,7 @@ class Index {
 
         fs.truncateSync(this.fileName, this.headerSize + after * this.EntryClass.size);
         this.data.splice(after);
+        this.readUntil = Math.min(this.readUntil, after);
     }
 }
 
