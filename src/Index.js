@@ -89,19 +89,20 @@ class Index {
 
     /**
      * @param {EntryInterface} [EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
-     * @param {string} [fileName] The name of the file to use for storing the index.
+     * @param {string} [name] The name of the file to use for storing the index.
      * @param {Object} [options] An object with additional index options.
      *   Possible options are:
+     *    - dataDirectory: The directory to store the index file in. Default '.'.
      *    - writeBufferSize: The number of bytes to use for the write buffer. Default 4096.
      *    - flushDelay: How many ms to delay the write buffer flush to optimize throughput. Default 100.
      *    - metadata: An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
-    constructor(EntryClass = Entry, fileName = '.index', options = {}) {
+    constructor(EntryClass = Entry, name = '.index', options = {}) {
         if (typeof EntryClass === 'string') {
-            if (typeof fileName === 'object') {
-                options = fileName;
+            if (typeof name === 'object') {
+                options = name;
             }
-            fileName = EntryClass;
+            name = EntryClass;
             EntryClass = Entry;
         }
         if (typeof EntryClass === 'object') {
@@ -109,7 +110,13 @@ class Index {
             EntryClass = Entry;
         }
         this.data = [];
-        this.fileName = fileName || '.index';
+        this.name = name || '.index';
+
+        this.dataDirectory = options.dataDirectory || '.';
+        if (!fs.existsSync(this.dataDirectory)) {
+            mkdirpSync(this.dataDirectory);
+        }
+        this.fileName = path.resolve(this.dataDirectory, this.name);
 
         EntryClass = EntryClass || Entry;
         if (typeof EntryClass !== 'function'
@@ -186,9 +193,6 @@ class Index {
             return false;
         }
 
-        if (!fs.existsSync(path.dirname(this.fileName))) {
-            mkdirpSync(path.dirname(this.fileName));
-        }
         this.fd = fs.openSync(this.fileName, 'a+');
         if (!this.fd) {
             throw new Error('Error opening index file "' + this.fileName + '".');

@@ -19,38 +19,38 @@ class Storage extends EventEmitter {
      *   - serializer: A serializer object with methods serialize(document) and deserialize(data).
      *   - dataDirectory: The path where the storage data should reside. Default '.'.
      *   - indexDirectory: The path where the indexes should be stored. Defaults to dataDirectory.
-     *   - indexFile: The name of the primary index. Default '{storageFile}.index'.
+     *   - indexFile: The name of the primary index. Default '{storageName}.index'.
      *   - readBufferSize: Size of the read buffer in bytes. Default 4096.
      *   - writeBufferSize: Size of the write buffer in bytes. Default 16384.
      *   - maxWriteBufferDocuments: How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      *   - syncOnFlush: If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      *   - partitioner: A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
+     *   - indexOptions: An options object that should be passed to all indexes on construction.
      *
-     * @param {string} [storageFile] The name of the storage.
+     * @param {string} [storageName] The name of the storage.
      * @param {Object} [config] An object with storage parameters.
      */
-    constructor(storageFile, config = {}) {
+    constructor(storageName = 'storage', config = {}) {
         super();
-        if (typeof storageFile === 'object') {
-            config = storageFile;
-            storageFile = undefined;
+        if (typeof storageName === 'object') {
+            config = storageName;
+            storageName = undefined;
         }
 
         this.serializer = config.serializer || { serialize: JSON.stringify, deserialize: JSON.parse };
-        this.storageFile = storageFile || 'storage';
+        this.storageFile = storageName || 'storage';
 
-        this.dataDirectory = config.dataDirectory || '.';
+        this.dataDirectory = path.resolve(config.dataDirectory || '.');
         if (!fs.existsSync(this.dataDirectory)) {
             mkdirpSync(this.dataDirectory);
         }
 
         this.indexDirectory = config.indexDirectory || this.dataDirectory;
-        if (!fs.existsSync(this.indexDirectory)) {
-            mkdirpSync(this.indexDirectory);
-        }
 
+        this.indexOptions = config.indexOptions || {};
+        this.indexOptions.dataDirectory = this.indexDirectory;
         let indexFile = config.indexFile || (this.storageFile + '.index');
-        this.index = new Index(path.join(this.indexDirectory, indexFile));
+        this.index = new Index(indexFile, this.indexOptions);
         this.secondaryIndexes = {};
 
         this.partitioner = config.partitioner || ((document, number) => '');
@@ -82,10 +82,6 @@ class Storage extends EventEmitter {
      * @returns {boolean}
      */
     open() {
-        if (this.fd) {
-            return true;
-        }
-
         this.index.open();
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
             this.secondaryIndexes[indexName].index.open();
@@ -305,7 +301,7 @@ class Storage extends EventEmitter {
      * @returns {Index} The index containing all documents that match the query.
      */
     ensureIndex(name, matcher) {
-        if (!this.fd) {
+        if (!this.isopen) {
             throw new Error('Storage is not open yet.');
         }
         if (name in this.secondaryIndexes) {
@@ -317,7 +313,7 @@ class Storage extends EventEmitter {
             if (matcher) {
                 metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
             }
-            let index = new Index(this.EntryClass, name + '.index', metadata);
+            let index = new Index(this.EntryClass, name + '.index', Object.assign({}, this.indexOptions, metadata));
             if (typeof index.metadata.matcher === 'object') {
                 matcher = index.metadata.matcher;
             } else {
@@ -336,7 +332,7 @@ class Storage extends EventEmitter {
             throw new Error('Need to specify a matcher.');
         }
         let serializedMatcher = typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString();
-        let newIndex = new Index(this.EntryClass, name + '.index', { metadata: { matcher: serializedMatcher } });
+        let newIndex = new Index(this.EntryClass, name + '.index', Object.assign({}, this.indexOptions, { metadata: { matcher: serializedMatcher } }));
         for (let entry of entries) {
             let document = this.readFrom(entry.partition, entry.position);
             if (this.matches(document, matcher)) {
@@ -349,6 +345,11 @@ class Storage extends EventEmitter {
         return newIndex;
     }
 
+    /**
+     * Truncate the storage after the given sequence number.
+     *
+     * @param {number} after The document sequence number to truncate after.
+     */
     truncate(after) {
         if (this.truncating <= after) {
             return;
@@ -392,6 +393,7 @@ class Storage extends EventEmitter {
 
     repairIndex() {
     }
+
 }
 
 module.exports = Storage;

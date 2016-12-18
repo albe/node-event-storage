@@ -81,7 +81,7 @@ class Partition {
             mkdirpSync(this.dataDirectory);
         }
 
-        this.fileName = path.join(this.dataDirectory, this.name);
+        this.fileName = path.resolve(this.dataDirectory, this.name);
 
         this.readBufferSize = config.readBufferSize || DEFAULT_READ_BUFFER_SIZE;
         this.writeBufferSize = config.writeBufferSize || DEFAULT_WRITE_BUFFER_SIZE;
