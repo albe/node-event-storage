@@ -16,7 +16,7 @@ class Storage extends EventEmitter {
 
     /**
      * Config options:
-     *   - serializer: A serializer object with methods serialize(document) and deserialize(data).
+     *   - serializer: A serializer object with methods serialize(document) and deserialize(data). Default is JSON.stringify/parse.
      *   - dataDirectory: The path where the storage data should reside. Default '.'.
      *   - indexDirectory: The path where the indexes should be stored. Defaults to dataDirectory.
      *   - indexFile: The name of the primary index. Default '{storageName}.index'.
@@ -63,15 +63,23 @@ class Storage extends EventEmitter {
         };
         this.partitions = {};
 
-        fs.readdir(this.dataDirectory, (err, files) => {
-            if (err) return;
-            for (let file of files) {
-                if (file.substr(0, this.storageFile.length) === this.storageFile) {
-                    let partition = new Partition(file, this.partitionConfig);
-                    this.partitions[partition.id] = partition;
-                }
+        let files = fs.readdirSync(this.dataDirectory);
+        for (let file of files) {
+            if (file.substr(-6) === '.index') continue;
+            if (file.substr(0, this.storageFile.length) === this.storageFile) {
+                //console.log('Found existing partition', file);
+                let partition = new Partition(file, this.partitionConfig);
+                this.partitions[partition.id] = partition;
             }
-        });
+        }
+    }
+
+    /**
+     * The amount of documents in the storage.
+     * @returns {number}
+     */
+    get length() {
+        return this.index.length;
     }
 
     /**
@@ -110,7 +118,6 @@ class Storage extends EventEmitter {
         for (let partition of Object.getOwnPropertyNames(this.partitions)) {
             this.partitions[partition].close();
         }
-        this.partitions = {};
         this.emit('closed');
     }
 
@@ -143,6 +150,12 @@ class Storage extends EventEmitter {
      * @returns {Index.Entry} The index entry item.
      */
     addIndex(partitionId, position, size, document, callback) {
+
+        /*if (this.index.lastEntry.position + this.index.lastEntry.size !== position) {
+         this.emit('index-corrupted');
+         throw new Error('Corrupted index, needs to be rebuilt!');
+         }*/
+
         let entry = new Index.Entry(this.index.length + 1, position, size, partitionId);
         this.index.add(entry, (indexPosition) => {
             if (typeof callback === 'function') callback(indexPosition);
@@ -185,15 +198,13 @@ class Storage extends EventEmitter {
         let data = this.serializer.serialize(document).toString();
         let dataSize = Buffer.byteLength(data, 'utf8');
 
-        /*if (this.index.lastEntry.position + this.index.lastEntry.size !== position) {
-            this.emit('index-corrupted');
-            throw new Error('Corrupted index, needs to be rebuilt!');
-        }*/
-
         let partitionName = this.partitioner(document, this.index.length + 1);
         let partition = this.getPartition(partitionName);
         let position = partition.write(data, callback);
 
+        if (position === false) {
+            throw new Error('Error writing document.');
+        }
         let indexEntry = this.addIndex(partition.id, position, dataSize, document);
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
             if (this.matches(document, this.secondaryIndexes[indexName].matcher)) {
@@ -250,7 +261,7 @@ class Storage extends EventEmitter {
      *
      * @api
      * @param {number} from The 1-based document number (inclusive) to start reading from.
-     * @param {number} until The 1-based document number (inclusive) to read until.
+     * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
      * @param {Index} [index] The index to use for finding the documents in the range.
      * @returns {Generator} A generator that will read each document in the range one by one.
      */
@@ -301,19 +312,20 @@ class Storage extends EventEmitter {
      * @returns {Index} The index containing all documents that match the query.
      */
     ensureIndex(name, matcher) {
-        if (!this.isopen) {
+        /*if (!this.isopen) {
             throw new Error('Storage is not open yet.');
-        }
+        }*/
         if (name in this.secondaryIndexes) {
             return this.secondaryIndexes[name].index;
         }
 
-        if (fs.existsSync(name + '.index')) {
+        let indexName = this.storageFile + '.' + name + '.index';
+        if (fs.existsSync(path.join(this.indexDirectory, indexName))) {
             let metadata;
             if (matcher) {
                 metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
             }
-            let index = new Index(this.EntryClass, name + '.index', Object.assign({}, this.indexOptions, metadata));
+            let index = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
             if (typeof index.metadata.matcher === 'object') {
                 matcher = index.metadata.matcher;
             } else {
@@ -332,7 +344,7 @@ class Storage extends EventEmitter {
             throw new Error('Need to specify a matcher.');
         }
         let serializedMatcher = typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString();
-        let newIndex = new Index(this.EntryClass, name + '.index', Object.assign({}, this.indexOptions, { metadata: { matcher: serializedMatcher } }));
+        let newIndex = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, { metadata: { matcher: serializedMatcher } }));
         for (let entry of entries) {
             let document = this.readFrom(entry.partition, entry.position);
             if (this.matches(document, matcher)) {
@@ -382,16 +394,6 @@ class Storage extends EventEmitter {
             this.secondaryIndexes[indexName].truncate(truncateAfter);
         }
         this.truncating = undefined;
-    }
-
-    /**
-     * Rebuild the full index.
-     * TODO: Not implemented yet
-     */
-    rebuildIndex() {
-    }
-
-    repairIndex() {
     }
 
 }

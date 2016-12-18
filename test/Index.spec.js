@@ -40,6 +40,18 @@ describe('Index', function() {
         expect(function(){ new Index('test/data/.index', { metadata: { test: 'anotherValue' } }) }).to.throwError();
     });
 
+    describe('Entry', function() {
+
+        it('stores data correctly', function() {
+            let entry = new Index.Entry(1, 2, 3, 4);
+            expect(entry.number).to.be(1);
+            expect(entry.position).to.be(2);
+            expect(entry.size).to.be(3);
+            expect(entry.partition).to.be(4);
+        });
+
+    });
+
     describe('write', function() {
 
         it('appends entries sequentially', function() {

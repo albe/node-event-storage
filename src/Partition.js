@@ -76,7 +76,7 @@ class Partition {
         this.name = name;
         this.id = hash(name);
 
-        this.dataDirectory = config.dataDirectory || '.';
+        this.dataDirectory = path.resolve(config.dataDirectory || '.');
         if (!fs.existsSync(this.dataDirectory)) {
             mkdirpSync(this.dataDirectory);
         }

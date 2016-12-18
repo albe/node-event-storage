@@ -48,7 +48,7 @@ class Entry extends Array {
         buffer.writeUInt32LE(this[0], offset, true);
         buffer.writeUInt32LE(this[1], offset +  4, true);
         buffer.writeUInt32LE(this[2], offset +  8, true);
-        buffer.writeUInt32LE(this[2], offset + 12, true);
+        buffer.writeUInt32LE(this[3], offset + 12, true);
         return Entry.size;
     }
 
