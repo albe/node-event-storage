@@ -231,8 +231,9 @@ class Storage extends EventEmitter {
         if (!this.partitions[partitionId]) {
             throw new Error('Partition #' + partitionId + ' does not exist.');
         }
+        let data;
         try {
-            let data = this.partitions[partitionId].readFrom(position);
+            data = this.partitions[partitionId].readFrom(position);
             return this.serializer.deserialize(data);
         } catch (e) {
             console.log('Error parsing document:', data, position);
