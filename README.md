@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/albe/node-event-store.svg?branch=master)](https://travis-ci.org/albe/node-event-store)
+[![Build Status](https://travis-ci.org/albe/node-event-storage.svg?branch=master)](https://travis-ci.org/albe/node-event-storage) [![npm version](https://badge.fury.io/js/event-storage.svg)](https://badge.fury.io/js/event-storage)
 
 # node-event-storage
 
