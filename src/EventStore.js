@@ -19,8 +19,12 @@ class OptimisticConcurrencyError extends Error {}
 class EventStore extends EventEmitter {
 
     /**
-     * @param {string} storeName
-     * @param {Object} config
+     * Available config options:
+     *  - storageDirectory: The directory where the data should be stored
+     *  - storageConfig: Additional config options given to the storage backend. See `Storage`
+     *
+     * @param {string} [storeName] The name of the store which will be used as storage prefix. Default 'eventstore'.
+     * @param {Object} [config] An object with config options.
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
@@ -31,8 +35,9 @@ class EventStore extends EventEmitter {
         this.streams = {};
         this.storeName = storeName || 'eventstore';
         this.storageDirectory = config.storageDirectory || './data';
-        let storageConfig = Object.assign({ dataDirectory: this.storageDirectory, partitioner: (event) => event.stream }, config.storage);
+        let storageConfig = Object.assign({ dataDirectory: this.storageDirectory, partitioner: (event) => event.stream }, config.storageConfig);
         this.storage = new Storage(this.storeName, storageConfig);
+        this.storage.open();
 
         // Find existing streams by scanning dir for filenames starting with 'stream-'
         fs.readdir(this.storageDirectory, (err, files) => {
@@ -103,7 +108,7 @@ class EventStore extends EventEmitter {
             commitVersion++;
             this.storage.write(storedEvent, commitVersion === events.length ? callback : undefined);
         }
-        this.emit('commit', commitId);
+        this.emit('commit', commitId, streamName, events);
     }
 
     /**
@@ -119,7 +124,7 @@ class EventStore extends EventEmitter {
             return false;
         }
         let streamIndex = this.streams[streamName].index;
-        return new EventStream(this.storage.readRange(minRevision + 1, maxRevision + 1, streamIndex));
+        return new EventStream(streamName, this.storage.readRange(minRevision + 1, maxRevision + 1, streamIndex));
     }
 
     /**
@@ -168,7 +173,8 @@ class EventStore extends EventEmitter {
             throw new Error('Error creating stream index ' + streamName);
         }
         this.streams[streamName] = { index, matcher };
-        return new EventStream(this.storage.readRange(1, 0, index));
+        this.emit('stream-created', streamName);
+        return new EventStream(streamName, this.storage.readRange(1, 0, index));
     }
 
     /**
@@ -186,6 +192,7 @@ class EventStore extends EventEmitter {
         }
         this.streams[streamName].index.destroy();
         delete this.streams[streamName];
+        this.emit('stream-deleted', streamName);
     }
 }
 

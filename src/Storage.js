@@ -91,6 +91,8 @@ class Storage extends EventEmitter {
      */
     open() {
         this.index.open();
+
+        // TODO: Open secondary indexes and partitions lazily
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
             this.secondaryIndexes[indexName].index.open();
         }
