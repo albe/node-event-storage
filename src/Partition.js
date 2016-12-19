@@ -333,7 +333,22 @@ class Partition {
         }
         this.flush();
 
-        // TODO: copy all truncated documents to some delete log
+        let position = after, data;
+        try {
+            data = this.readFrom(position);
+        } catch (e) {
+            throw new Error('Can only truncate on valid document boundaries.');
+        }
+        // copy all truncated documents to some delete log
+        let deletedBranch = new Partition(this.name + '-' + after, { dataDirectory: this.dataDirectory });
+        deletedBranch.open();
+        while (data) {
+            deletedBranch.write(data);
+            position += Buffer.byteLength(data, 'utf8') + 11;
+            data = this.readFrom(position);
+        }
+        deletedBranch.close();
+
         fs.truncateSync(this.fileName, this.headerSize + after);
         this.size = after;
     }

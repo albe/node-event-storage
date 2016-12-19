@@ -165,6 +165,33 @@ describe('Partition', function() {
 
     describe('truncate', function() {
 
+        it('does nothing if truncating beyond filesize', function() {
+            partition.open();
+            let lastposition;
+            for (let i = 0; i < 10; i++) {
+                lastposition = partition.write('foobar');
+            }
+            let size = partition.size;
+            partition.truncate(lastposition + 1000);
+            expect(partition.size).to.be(size);
+
+            partition.close();
+            partition.open();
+            expect(partition.size).to.be(size);
+        });
+
+        it('throws when truncating outside document boundary', function() {
+            partition.open();
+            let lastposition;
+            for (let i = 0; i < 10; i++) {
+                lastposition = partition.write('foobar');
+            }
+            partition.close();
+            partition.open();
+
+            expect(() => partition.truncate(lastposition - 3)).to.throwError();
+        });
+
         it('truncates after the given position', function() {
             partition.open();
             let lastposition;
@@ -194,21 +221,6 @@ describe('Partition', function() {
             partition.close();
             partition.open();
             expect(partition.size).to.be(lastposition);
-        });
-
-        it('does nothing if truncating beyond filesize', function() {
-            partition.open();
-            let lastposition;
-            for (let i = 0; i < 10; i++) {
-                lastposition = partition.write('foobar');
-            }
-            let size = partition.size;
-            partition.truncate(lastposition + 1000);
-            expect(partition.size).to.be(size);
-
-            partition.close();
-            partition.open();
-            expect(partition.size).to.be(size);
         });
 
     });
