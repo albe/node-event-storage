@@ -66,7 +66,7 @@ class Partition {
      *   - maxWriteBufferDocuments: How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      *   - syncOnFlush: If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      *
-     * @param {string} [name] The name of the partition.
+     * @param {string} name The name of the partition.
      * @param {Object} [config] An object with storage parameters.
      */
     constructor(name, config = {}) {
