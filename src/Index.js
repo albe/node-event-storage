@@ -14,6 +14,24 @@ class EntryInterface {
 }
 
 /**
+ * Assert that the given class is a valid EntryInterface class.
+ *
+ * @param {function} EntryClass The constructor for the class
+ * @throws {Error} if the given class does not implement the EntryInterface methods or has non-positive size
+ */
+function assertValidEntryClass(EntryClass) {
+    if (typeof EntryClass !== 'function'
+        || typeof EntryClass.size === 'undefined'
+        || typeof EntryClass.fromBuffer !== 'function'
+        || typeof EntryClass.prototype.toBuffer !== 'function') {
+        throw new Error('Invalid index entry class. Must implement EntryInterface methods.');
+    }
+    if (EntryClass.size < 1) {
+        throw new Error('Entry class size must be positive.');
+    }
+}
+
+/**
  * Default Entry item contains information about the sequence number, the file position, the document size and the partition number.
  */
 class Entry extends Array {
@@ -88,14 +106,15 @@ const HEADER_MAGIC = "nesidx01";
 class Index {
 
     /**
+     * Config options:
+     *  - dataDirectory: The directory to store the index file in. Default '.'.
+     *  - writeBufferSize: The number of bytes to use for the write buffer. Default 4096.
+     *  - flushDelay: How many ms to delay the write buffer flush to optimize throughput. Default 100.
+     *  - metadata: An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
+     *
      * @param {EntryInterface} [EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [name] The name of the file to use for storing the index.
      * @param {Object} [options] An object with additional index options.
-     *   Possible options are:
-     *    - dataDirectory: The directory to store the index file in. Default '.'.
-     *    - writeBufferSize: The number of bytes to use for the write buffer. Default 4096.
-     *    - flushDelay: How many ms to delay the write buffer flush to optimize throughput. Default 100.
-     *    - metadata: An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
     constructor(EntryClass = Entry, name = '.index', options = {}) {
         if (typeof EntryClass === 'string') {
@@ -112,36 +131,23 @@ class Index {
         this.data = [];
         this.name = name || '.index';
 
-        this.dataDirectory = options.dataDirectory || '.';
-        if (!fs.existsSync(this.dataDirectory)) {
-            mkdirpSync(this.dataDirectory);
+        let dataDirectory = options.dataDirectory || '.';
+        if (!fs.existsSync(dataDirectory)) {
+            mkdirpSync(dataDirectory);
         }
-        this.fileName = path.resolve(this.dataDirectory, this.name);
+        this.fileName = path.resolve(dataDirectory, this.name);
 
         EntryClass = EntryClass || Entry;
-        if (typeof EntryClass !== 'function'
-            || typeof EntryClass.size === 'undefined'
-            || typeof EntryClass.fromBuffer !== 'function'
-            || typeof EntryClass.prototype.toBuffer !== 'function') {
-            throw new Error('Invalid index entry class. Must implement EntryInterface methods.');
-        }
-        if (EntryClass.size < 1) {
-            throw new Error('Entry class size is non-positive.');
-        }
-        let entrySize = EntryClass.size;
-        this.readBuffer = Buffer.allocUnsafe(entrySize);
-        let writeBufferSize = options.writeBufferSize || 4096;
-        this.writeBuffer = Buffer.allocUnsafe(writeBufferSize);
-        this.writeBufferCursor = 0;
+        assertValidEntryClass(EntryClass);
+
+        this.readBuffer = Buffer.allocUnsafe(EntryClass.size);
+        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize || 4096);
         this.flushDelay = options.flushDelay || 100;
-        this.flushCallbacks = [];
 
         this.EntryClass = EntryClass;
         if (options.metadata) {
-            this.metadata = Object.assign({entryClass: EntryClass.name, entrySize: entrySize}, options.metadata);
+            this.metadata = Object.assign({entryClass: EntryClass.name, entrySize: EntryClass.size}, options.metadata);
         }
-        this.headerSize = 8 + 4;
-        this.readUntil = -1;
 
         this.fd = null;
         this.open();
@@ -182,11 +188,44 @@ class Index {
     }
 
     /**
+     * Check if the index file is still intact.
+     *
+     * @private
+     * @returns {number} The amount of entries in the file.
+     * @throws {Error} If the file is corrupt or can not be read correctly.
+     */
+    checkFile() {
+        let stat = fs.fstatSync(this.fd);
+        if (!stat) {
+            throw new Error('Error stat\'ing index file "' + this.fileName + '".');
+        }
+        if (stat.size > 0 && stat.size <= 4) {
+            throw new Error('Invalid index file!');
+        }
+
+        if (stat.size === 0) {
+            // Freshly created index... write metadata initially.
+            this.writeMetadata();
+        } else {
+            stat.size -= this.readMetadata();
+        }
+
+        let length = Math.floor(stat.size / this.EntryClass.size);
+        if (stat.size > length * this.EntryClass.size) {
+            // Corrupt index file
+            throw new Error('Index file is corrupt!');
+        }
+        return length;
+    }
+
+    /**
      * Open the index if it is not already open.
      * This will open a file handle and either write the metadata if the file is empty or read back the metadata and verify
      * it against the metadata provided in the constructor options.
+     *
      * @api
      * @returns {boolean} True if the index was opened or false if it was already open.
+     * @throws {Error} if the file can not be opened.
      */
     open() {
         if (this.fd) {
@@ -197,38 +236,22 @@ class Index {
         if (!this.fd) {
             throw new Error('Error opening index file "' + this.fileName + '".');
         }
-        let stat = fs.fstatSync(this.fd);
-        try {
-            if (!stat) {
-                throw new Error('Error stat\'ing index file "' + this.fileName + '".');
-            }
-            if (stat.size > 0 && stat.size <= 4) {
-                throw new Error('Invalid index file!');
-            }
 
-            if (stat.size === 0) {
-                // Freshly created index... write metadata initially.
-                this.writeMetadata();
-            } else {
-                stat.size -= this.readMetadata();
-            }
+        let length;
+        try {
+            length = this.checkFile();
         } catch (e) {
             this.close();
             throw e;
         }
-        let length = Math.floor(stat.size / this.EntryClass.size);
-        if (stat.size > length * this.EntryClass.size) {
-            this.close();
-            // Corrupt index file
-            console.log('expected', length * this.EntryClass.size, 'got', stat.size);
-            throw new Error('Index file is corrupt!');
-        }
-
         if (length > 0) {
             this.data = new Array(length);
             // Read last item to get the index started
             this.read(length);
         }
+
+        this.writeBufferCursor = 0;
+        this.flushCallbacks = [];
         this.readUntil = -1;
 
         return true;
@@ -404,7 +427,9 @@ class Index {
         if (index === this.readUntil + 1) {
             this.readUntil++;
         }
-        return this.data[index] = this.EntryClass.fromBuffer(this.readBuffer);
+        this.data[index] = this.EntryClass.fromBuffer(this.readBuffer);
+
+        return this.data[index];
     }
 
     /**
@@ -484,6 +509,24 @@ class Index {
     }
 
     /**
+     * Check if the given range is within the bounds of the index.
+     *
+     * @api
+     * @param {Number} from The 1-based index position from where to get entries from (inclusive).
+     * @param {Number} until The 1-based index position until where to get entries to (inclusive).
+     * @returns {boolean}
+     */
+    validRange(from, until) {
+        if (from < 1 || from > this.length) {
+            return false;
+        }
+        if (until < from || until > this.length) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Get a range of index entries.
      *
      * @api
@@ -492,20 +535,18 @@ class Index {
      * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
     range(from, until) {
-        if (from < 0) from = this.length + from;
-        if (from < 1 || from > this.length) {
-            return false;
-        }
+        if (from < 0) from += this.length;
         until = until || this.length;
         if (until < 0) until += this.length;
-        if (until < from || until > this.length) {
+
+        if (!this.validRange(from, until)) {
             return false;
         }
 
         let readFrom = Math.max(this.readUntil + 1, from);
         let readUntil = until;
         while (readUntil >= readFrom && this.data[readUntil - 1]) readUntil--;
-        //while (readFrom <= until && this.data[readFrom - 1]) readFrom++;
+
         if (readFrom <= readUntil) {
             this.readRange(readFrom, readUntil);
         }
