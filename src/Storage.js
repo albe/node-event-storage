@@ -97,10 +97,6 @@ class Storage extends EventEmitter {
             this.secondaryIndexes[indexName].index.open();
         }
 
-        for (let partition of Object.getOwnPropertyNames(this.partitions)) {
-            this.partitions[partition].open();
-        }
-
         this.emit('opened');
         return true;
     }
@@ -182,11 +178,11 @@ class Storage extends EventEmitter {
             partitionIdentifier = Partition.id(partitionName);
             if (!this.partitions[partitionIdentifier]) {
                 this.partitions[partitionIdentifier] = new Partition(partitionName, this.partitionConfig);
-                this.partitions[partitionIdentifier].open();
             }
         } else if (!this.partitions[partitionIdentifier]) {
             throw new Error('Partition #' + partitionIdentifier + ' does not exist.');
         }
+        this.partitions[partitionIdentifier].open();
         return this.partitions[partitionIdentifier];
     }
 
@@ -223,17 +219,13 @@ class Storage extends EventEmitter {
      * @param {number} position The file position to read from.
      * @param {number} [size] The expected byte size of the document at the given position.
      * @returns {Object} The document stored at the given position.
-     * @throws {Error} if the storage entry at the given position is corrupted.
-     * @throws {Error} if the document size at the given position does not match the provided size.
      * @throws {Error} if the document at the given position can not be deserialized.
      */
     readFrom(partitionId, position, size) {
-        if (!this.partitions[partitionId]) {
-            throw new Error('Partition #' + partitionId + ' does not exist.');
-        }
+        let partition = this.getPartition(partitionId);
         let data;
         try {
-            data = this.partitions[partitionId].readFrom(position);
+            data = partition.readFrom(position);
             return this.serializer.deserialize(data);
         } catch (e) {
             console.log('Error parsing document:', data, position);
