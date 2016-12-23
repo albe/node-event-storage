@@ -237,6 +237,10 @@ class Index {
             throw new Error('Error opening index file "' + this.fileName + '".');
         }
 
+        this.writeBufferCursor = 0;
+        this.flushCallbacks = [];
+        this.readUntil = -1;
+
         let length;
         try {
             length = this.checkFile();
@@ -249,10 +253,6 @@ class Index {
             // Read last item to get the index started
             this.read(length);
         }
-
-        this.writeBufferCursor = 0;
-        this.flushCallbacks = [];
-        this.readUntil = -1;
 
         return true;
     }
