@@ -38,6 +38,7 @@ class EventStore extends EventEmitter {
         let storageConfig = Object.assign({ dataDirectory: this.storageDirectory, partitioner: (event) => event.stream }, config.storageConfig);
         this.storage = new Storage(this.storeName, storageConfig);
         this.storage.open();
+        this.streams['_all'] = { index: this.storage.index };
 
         // Find existing streams by scanning dir for filenames starting with 'stream-'
         fs.readdir(this.storageDirectory, (err, files) => {
@@ -137,6 +138,18 @@ class EventStore extends EventEmitter {
         }
         let streamIndex = this.streams[streamName].index;
         return new EventStream(streamName, this.storage.readRange(minRevision + 1, maxRevision + 1, streamIndex));
+    }
+
+    /**
+     * Get a stream for all events within the revision boundaries.
+     * This is the same as `getEventStream('_all', ...)`.
+     *
+     * @param {number} minRevision
+     * @param {number} maxRevision
+     * @returns {EventStream} The event stream.
+     */
+    getAllEvents(minRevision = 0, maxRevision = -1) {
+        return this.getEventStream('_all', minRevision, maxRevision);
     }
 
     /**
