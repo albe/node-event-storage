@@ -94,8 +94,8 @@ class EventStore extends EventEmitter {
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName });
         }
+        let streamVersion = this.streams[streamName].index.length;
         if (expectedVersion !== ExpectedVersion.Any) {
-            let streamVersion = this.streams[streamName].index.length;
             if (streamVersion !== expectedVersion) {
                 throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
             }
@@ -103,12 +103,24 @@ class EventStore extends EventEmitter {
 
         let commitId = uuid();
         let commitVersion = 0;
+        let committedAt = Date.now();
+        let commit = {
+            commitId,
+            committedAt,
+            streamName,
+            streamVersion,
+            events: []
+        };
         for (let event of events) {
-            let storedEvent = { id: uuid(), stream: streamName, payload: event, metadata: { committedAt: Date.now(), commitVersion, commitId } };
+            let storedEvent = { stream: streamName, payload: event, metadata: { committedAt, commitVersion, commitId, streamVersion } };
             commitVersion++;
-            this.storage.write(storedEvent, commitVersion === events.length ? callback : undefined);
+            streamVersion++;
+            commit.events.push(event);
+            this.storage.write(storedEvent, commitVersion !== events.length ? undefined : () => {
+                this.emit('commit', commit);
+                if (typeof callback === 'function') callback();
+            });
         }
-        this.emit('commit', commitId, streamName, events);
     }
 
     /**
