@@ -28,9 +28,22 @@ class EventStream extends Readable {
         this._events = [];
         let next;
         while ((next = this.next()) !== false) {
-            this._events.push(next);
+            this._events.push(next.payload);
         }
         return this._events;
+    }
+
+    /**
+     * Iterate over the events in this stream with a callback.
+     * This method is useful to gain access to the event metadata.
+     *
+     * @param {function(Object, Object, string)} callback A callback function that will receive the event, the storage metadata and the original stream name for every event in this stream.
+     */
+    forEach(callback) {
+        let next;
+        while ((next = this.next()) !== false) {
+            callback(next.payload, next.metadata, next.stream);
+        }
     }
 
     /**
@@ -39,7 +52,7 @@ class EventStream extends Readable {
     *[Symbol.iterator]() {
         let next;
         while ((next = this.next()) !== false) {
-            yield next;
+            yield next.payload;
         }
     }
 
@@ -54,7 +67,7 @@ class EventStream extends Readable {
         } catch(e) {
             return false;
         }
-        return next.done ? false : next.value.payload;
+        return next.done ? false : next.value;
     }
 
     /**
@@ -63,7 +76,7 @@ class EventStream extends Readable {
      */
     _read() {
         let next = this.next();
-        this.push(next ? next : null);
+        this.push(next ? next.payload : null);
     }
 }
 
