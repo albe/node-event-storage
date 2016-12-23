@@ -254,12 +254,42 @@ class Partition {
 
     /**
      * @private
+     * @param {Buffer} buffer The buffer to read the data length from.
+     * @param {number} bufferCursor The position inside the buffer to start reading from.
+     * @param {number} position The file position to start reading from.
+     * @param {number} [size] The expected byte size of the document at the given position.
+     * @returns {Number} The length of the document at the given position.
+     * @throws {Error} if the storage entry at the given position is corrupted.
+     * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
+     * @throws {CorruptFileError} if the document at the given position can not be read completely.
+     */
+    readDataLength(buffer, bufferCursor, position, size) {
+        let dataLengthStr = buffer.toString('utf8', bufferCursor, bufferCursor + 10);
+        let dataLength = parseInt(dataLengthStr, 10);
+        if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
+            throw new Error('Error reading document size from ' + position + ', got ' + dataLength + '.');
+        }
+        if (size && dataLength !== size) {
+            throw new InvalidDataSizeError('Invalid document size ' + dataLength + ' at position ' + position + ', expected ' + size + '.');
+        }
+
+        if (position + dataLength + 11 > this.size) {
+            throw new CorruptFileError('Invalid document at position ' + position + '. This may be caused by an unfinished write.');
+        }
+
+        return dataLength;
+    }
+
+    /**
+     * Read the data from the given position.
+     *
+     * @api
      * @param {number} position The file position to read from.
      * @param {number} [size] The expected byte size of the document at the given position.
      * @returns {string|boolean} The data stored at the given position or false if no data could be read.
      * @throws {Error} if the storage entry at the given position is corrupted.
-     * @throws {Error} if the document size at the given position does not match the provided size.
-     * @throws {Error} if the document at the given position can not be deserialized.
+     * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
+     * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readFrom(position, size) {
         if (!this.fd) {
@@ -285,18 +315,7 @@ class Partition {
             bufferCursor = 0;
         }
         let dataPosition = bufferCursor + 10;
-        let dataLengthStr = buffer.toString('utf8', bufferCursor, dataPosition);
-        let dataLength = parseInt(dataLengthStr, 10);
-        if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
-            throw new Error('Error reading document size from ' + position + ', got ' + dataLength + '.');
-        }
-        if (size && dataLength !== size) {
-            throw new InvalidDataSizeError('Invalid document size ' + dataLength + ' at position ' + position + ', expected ' + size + '.');
-        }
-
-        if (position + dataLength + 11 > this.size) {
-            throw new CorruptFileError('Invalid document at position ' + position + '. This may be caused by an unfinished write.');
-        }
+        let dataLength = this.readDataLength(buffer, bufferCursor, position, size);
 
         if (dataLength + 10 > buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);
@@ -314,6 +333,7 @@ class Partition {
     }
 
     /**
+     * @api
      * @return {Generator} A generator that returns all documents in this partition.
      */
     *readAll() {
