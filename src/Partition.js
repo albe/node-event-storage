@@ -115,6 +115,7 @@ class Partition {
         this.readBuffer = Buffer.allocUnsafeSlow(10 + this.readBufferSize);
         // Where inside the file the read buffer starts
         this.readBufferPos = -1;
+        this.readBufferLength = 0;
 
         this.writeBuffer = Buffer.allocUnsafeSlow(this.writeBufferSize);
         // Where inside the write buffer the next write is added
@@ -128,18 +129,20 @@ class Partition {
         if (stat.size === 0) {
             fs.writeSync(this.fd, HEADER_MAGIC + "\n");
             this.size = 0;
-        } else {
-            let headerBuffer = Buffer.allocUnsafe(HEADER_MAGIC.length);
-            fs.readSync(this.fd, headerBuffer, 0, HEADER_MAGIC.length, 0);
-            if (headerBuffer.toString() !== HEADER_MAGIC) {
-                this.close();
-                if (headerBuffer.toString().substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
-                    throw new Error('Invalid file version. The partition ' + this.name + ' was created with a different library version.');
-                }
-                throw new Error('Invalid file header in partition ' + this.name + '.');
-            }
-            this.size = stat.size - this.headerSize;
+            return true;
         }
+
+        let headerBuffer = Buffer.allocUnsafe(HEADER_MAGIC.length);
+        fs.readSync(this.fd, headerBuffer, 0, HEADER_MAGIC.length, 0);
+        if (headerBuffer.toString() !== HEADER_MAGIC) {
+            this.close();
+            if (headerBuffer.toString().substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
+                throw new Error('Invalid file version. The partition ' + this.name + ' was created with a different library version.');
+            }
+            throw new Error('Invalid file header in partition ' + this.name + '.');
+        }
+        this.size = stat.size - this.headerSize;
+
         return true;
     }
 
@@ -158,6 +161,7 @@ class Partition {
         if (this.readBuffer) {
             this.readBuffer = undefined;
             this.readBufferPos = -1;
+            this.readBufferLength = 0;
         }
         if (this.writeBuffer) {
             this.writeBuffer = undefined;
@@ -238,13 +242,13 @@ class Partition {
      * Fill the internal read buffer starting from the given position.
      *
      * @private
-     * @param {number} [from] The file position to start filling the read buffer from.
+     * @param {number} [from] The file position to start filling the read buffer from. Default 0.
      */
     fillBuffer(from = 0) {
         if (!this.fd) {
             return;
         }
-        fs.readSync(this.fd, this.readBuffer, 0, this.readBuffer.byteLength, this.headerSize + from);
+        this.readBufferLength = fs.readSync(this.fd, this.readBuffer, 0, this.readBuffer.byteLength, this.headerSize + from);
         this.readBufferPos = from;
     }
 
@@ -266,15 +270,17 @@ class Partition {
         }
         let buffer = this.readBuffer;
         let bufferPos = this.readBufferPos;
+        let bufferLength = this.readBufferLength;
 
         // Handle the case when data that is still in write buffer is supposed to be read
         if (this.writeBufferCursor > 0 && position >= this.size - this.writeBufferCursor) {
             buffer = this.writeBuffer;
             bufferPos = this.size - this.writeBufferCursor;
+            bufferLength = this.writeBufferCursor;
         }
 
         let bufferCursor = position - bufferPos;
-        if (bufferPos < 0 || bufferCursor < 0 || bufferCursor + 10 > buffer.byteLength) {
+        if (bufferPos < 0 || bufferCursor < 0 || bufferCursor + 10 > bufferLength) {
             this.fillBuffer(position);
             bufferCursor = 0;
         }
@@ -299,7 +305,7 @@ class Partition {
             return tempReadBuffer.toString('utf8');
         }
 
-        if (bufferCursor > 0 && dataPosition + dataLength > buffer.byteLength) {
+        if (bufferCursor > 0 && dataPosition + dataLength > bufferLength) {
             this.fillBuffer(position);
             dataPosition = 10;
         }
