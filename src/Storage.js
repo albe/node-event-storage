@@ -366,37 +366,31 @@ class Storage extends EventEmitter {
      * @param {number} after The document sequence number to truncate after.
      */
     truncate(after) {
-        if (this.truncating <= after) {
-            return;
-        }
-        this.truncating = after;
         /*
          To truncate the store following steps need to be done:
 
-         1) switch to read-only mode
-         2) find all partition positions after which their files should be truncated
-         3) truncate all partitions accordingly
-         4) truncate/rewrite all indexes
-         5) switch back to write mode
+         1) find all partition positions after which their files should be truncated
+         2) truncate all partitions accordingly
+         3) truncate/rewrite all indexes
          */
         let entries = this.index.range(after + 1);
         if (entries === false || entries.length === 0) {
-            this.truncating = undefined;
             return;
         }
+
         let partitions = [];
         for (let entry of entries) {
             if (partitions.indexOf(entry.partition) >= 0) continue;
             partitions.push(entry.partition);
             this.getPartition(entry.partition).truncate(entry.position);
         }
+
         let entry = entries[0];
         this.index.truncate(after);
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
             let truncateAfter = this.secondaryIndexes[indexName].find(entry.position);
             this.secondaryIndexes[indexName].truncate(truncateAfter);
         }
-        this.truncating = undefined;
     }
 
 }
