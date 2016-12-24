@@ -199,6 +199,19 @@ class Partition {
     }
 
     /**
+     * @private
+     * @param {number} dataSize The size of the data that needs to go into the write buffer next.
+     */
+    flushIfWriteBufferTooSmall(dataSize) {
+        if (this.writeBufferCursor > 0 && dataSize + this.writeBufferCursor > this.writeBuffer.byteLength) {
+            this.flush();
+        }
+        if (this.writeBufferCursor === 0) {
+            process.nextTick(() => this.flush());
+        }
+    }
+
+    /**
      * @api
      * @param {string} data The data to write to storage.
      * @param {function} [callback] A function that will be called when the document is written to disk.
@@ -212,13 +225,7 @@ class Partition {
         let dataToWrite = pad(dataSize.toString(), 10) + data.toString() + "\n";
         dataSize += 11;
 
-        if (this.writeBufferCursor > 0 && dataSize + this.writeBufferCursor > this.writeBuffer.byteLength) {
-            this.flush();
-        }
-        if (this.writeBufferCursor === 0) {
-            process.nextTick(() => this.flush());
-        }
-
+        this.flushIfWriteBufferTooSmall(dataSize);
         if (dataSize > this.writeBuffer.byteLength) {
             //console.log('unbuffered write!');
             fs.writeSync(this.fd, dataToWrite);
@@ -255,7 +262,7 @@ class Partition {
     /**
      * @private
      * @param {Buffer} buffer The buffer to read the data length from.
-     * @param {number} bufferCursor The position inside the buffer to start reading from.
+     * @param {number} offset The position inside the buffer to start reading from.
      * @param {number} position The file position to start reading from.
      * @param {number} [size] The expected byte size of the document at the given position.
      * @returns {Number} The length of the document at the given position.
@@ -263,8 +270,8 @@ class Partition {
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
-    readDataLength(buffer, bufferCursor, position, size) {
-        let dataLengthStr = buffer.toString('utf8', bufferCursor, bufferCursor + 10);
+    readDataLength(buffer, offset, position, size) {
+        let dataLengthStr = buffer.toString('utf8', offset, offset + 10);
         let dataLength = parseInt(dataLengthStr, 10);
         if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
             throw new Error('Error reading document size from ' + position + ', got ' + dataLength + '.');
@@ -278,6 +285,33 @@ class Partition {
         }
 
         return dataLength;
+    }
+
+    /**
+     * Prepare the read buffer for reading from the specified position.
+     *
+     * @private
+     * @param {number} position The position in the file to prepare the read buffer for reading from.
+     * @returns {Object} A reader object with properties `buffer`, `cursor` and `length`.
+     */
+    prepareReadBuffer(position) {
+        let buffer = this.readBuffer;
+        let bufferPos = this.readBufferPos;
+        let bufferLength = this.readBufferLength;
+
+        // Handle the case when data that is still in write buffer is supposed to be read
+        if (this.writeBufferCursor > 0 && position >= this.size - this.writeBufferCursor) {
+            buffer = this.writeBuffer;
+            bufferPos = this.size - this.writeBufferCursor;
+            bufferLength = this.writeBufferCursor;
+        }
+
+        let bufferCursor = position - bufferPos;
+        if (bufferPos < 0 || bufferCursor < 0 || bufferCursor + 10 > bufferLength) {
+            this.fillBuffer(position);
+            bufferCursor = 0;
+        }
+        return { buffer, cursor: bufferCursor, length: bufferLength };
     }
 
     /**
@@ -298,38 +332,24 @@ class Partition {
         if (position + 10 >= this.size) {
             return false;
         }
-        let buffer = this.readBuffer;
-        let bufferPos = this.readBufferPos;
-        let bufferLength = this.readBufferLength;
+        let reader = this.prepareReadBuffer(position);
 
-        // Handle the case when data that is still in write buffer is supposed to be read
-        if (this.writeBufferCursor > 0 && position >= this.size - this.writeBufferCursor) {
-            buffer = this.writeBuffer;
-            bufferPos = this.size - this.writeBufferCursor;
-            bufferLength = this.writeBufferCursor;
-        }
+        let dataPosition = reader.cursor + 10;
+        let dataLength = this.readDataLength(reader.buffer, reader.cursor, position, size);
 
-        let bufferCursor = position - bufferPos;
-        if (bufferPos < 0 || bufferCursor < 0 || bufferCursor + 10 > bufferLength) {
-            this.fillBuffer(position);
-            bufferCursor = 0;
-        }
-        let dataPosition = bufferCursor + 10;
-        let dataLength = this.readDataLength(buffer, bufferCursor, position, size);
-
-        if (dataLength + 10 > buffer.byteLength) {
+        if (dataLength + 10 > reader.buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);
             let tempReadBuffer = Buffer.allocUnsafe(dataLength);
             fs.readSync(this.fd, tempReadBuffer, 0, dataLength, this.headerSize + position + 10);
             return tempReadBuffer.toString('utf8');
         }
 
-        if (bufferCursor > 0 && dataPosition + dataLength > bufferLength) {
+        if (reader.cursor > 0 && dataPosition + dataLength > reader.length) {
             this.fillBuffer(position);
             dataPosition = 10;
         }
 
-        return buffer.toString('utf8', dataPosition, dataPosition + dataLength);
+        return reader.buffer.toString('utf8', dataPosition, dataPosition + dataLength);
     }
 
     /**
@@ -339,7 +359,7 @@ class Partition {
     *readAll() {
         let position = 0;
         let data;
-        while (data = this.readFrom(position)) {
+        while ((data = this.readFrom(position)) !== false) {
             yield data;
             position += Buffer.byteLength(data, 'utf8') + 11;
         }
