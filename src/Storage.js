@@ -92,7 +92,7 @@ class Storage extends EventEmitter {
     open() {
         this.index.open();
 
-        // TODO: Open secondary indexes and partitions lazily
+        // TODO: Open secondary indexes lazily
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
             this.secondaryIndexes[indexName].index.open();
         }
@@ -365,23 +365,34 @@ class Storage extends EventEmitter {
          2) truncate all partitions accordingly
          3) truncate/rewrite all indexes
          */
-        let entries = this.index.range(after + 1);
+        let entries = this.index.range(after + 1);  // We need the first entry that is cut off
         if (entries === false || entries.length === 0) {
             return;
         }
 
-        let partitions = [];
-        for (let entry of entries) {
-            if (partitions.indexOf(entry.partition) >= 0) continue;
-            partitions.push(entry.partition);
-            this.getPartition(entry.partition).truncate(entry.position);
+        if (after === 0) {
+            for (let partition in this.partitions) {
+                //noinspection JSUnfilteredForInLoop
+                this.partitions[partition].truncate(0);
+            }
+        } else {
+            let partitions = [];
+            let numPartitions = Object.keys(this.partitions).length;
+            for (let entry of entries) {
+                if (partitions.indexOf(entry.partition) >= 0) continue;
+                partitions.push(entry.partition);
+                this.getPartition(entry.partition).truncate(entry.position);
+
+                if (partitions.length === numPartitions) {
+                    break;
+                }
+            }
         }
 
-        let entry = entries[0];
         this.index.truncate(after);
         for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
-            let truncateAfter = this.secondaryIndexes[indexName].find(entry.position);
-            this.secondaryIndexes[indexName].truncate(truncateAfter);
+            let truncateAfter = this.secondaryIndexes[indexName].index.find(after);
+            this.secondaryIndexes[indexName].index.truncate(truncateAfter);
         }
     }
 
