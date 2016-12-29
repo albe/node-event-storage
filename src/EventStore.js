@@ -69,7 +69,7 @@ class EventStore extends EventEmitter {
             }
             let matches;
             for (let file of files) {
-                if (matches = file.match(/(stream-(.*))\.index$/)) {
+                if ((matches = file.match(/(stream-(.*))\.index$/)) !== null) {
                     let streamName = matches[2];
                     let index = this.storage.ensureIndex(matches[1]);
                     this.streams[streamName] = { index };
@@ -133,10 +133,8 @@ class EventStore extends EventEmitter {
             this.createEventStream(streamName, { stream: streamName });
         }
         let streamVersion = this.streams[streamName].index.length;
-        if (expectedVersion !== ExpectedVersion.Any) {
-            if (streamVersion !== expectedVersion) {
-                throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
-            }
+        if (expectedVersion !== ExpectedVersion.Any && streamVersion !== expectedVersion) {
+            throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
         }
 
         let commitId = uuid();
@@ -149,15 +147,16 @@ class EventStore extends EventEmitter {
             streamVersion,
             events: []
         };
+        let commitCallback = () => {
+            this.emit('commit', commit);
+            if (typeof callback === 'function') callback(commit);
+        };
         for (let event of events) {
             let storedEvent = { stream: streamName, payload: event, metadata: { commitId, committedAt, commitVersion, streamVersion } };
             commitVersion++;
             streamVersion++;
             commit.events.push(event);
-            this.storage.write(storedEvent, commitVersion !== events.length ? undefined : () => {
-                this.emit('commit', commit);
-                if (typeof callback === 'function') callback(commit);
-            });
+            this.storage.write(storedEvent, commitVersion !== events.length ? undefined : commitCallback);
         }
     }
 
@@ -199,6 +198,7 @@ class EventStore extends EventEmitter {
      * @param {number} maxRevision
      * @return {EventStream}
      */
+/*
     fromStreams(streamNames, minRevision = 0, maxRevision = -1) {
         if (!(streamNames instanceof Array)) {
             throw new Error('Must specify an array of stream names.');
@@ -209,14 +209,13 @@ class EventStore extends EventEmitter {
                 continue;
             }
             let streamIndex = this.streams[streamName].index;
-            joinStream = joinStream.concat(streamIndex.all());
+            let from = minRevision > 0 ? streamIndex.find(minRevision) : 0;
+            let until = maxRevision > 0 ? streamIndex.find(maxRevision) : -1;
+            joinStream = joinStream.concat(streamIndex.range(from, until));
         }
         joinStream.sort((a, b) => b.number - a.number);
-        if (minRevision > 0 || maxRevision > -1) {
-            joinStream = joinStream.slice(minRevision, maxRevision > -1 ? maxRevision : undefined);
-        }
-        // TODO: Create iterator over joinStream
     }
+*/
 
     /**
      * Create a new stream with the given matcher.
