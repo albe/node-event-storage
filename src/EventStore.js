@@ -58,9 +58,21 @@ class EventStore extends EventEmitter {
 
     /**
      * Close the event store and free up all resources.
+     *
+     * @api
      */
     close() {
         this.storage.close();
+    }
+
+    /**
+     * Get the number of events stored.
+     *
+     * @api
+     * @returns {number}
+     */
+    get length() {
+        return this.storage.index.length;
     }
 
     /**
@@ -68,6 +80,7 @@ class EventStore extends EventEmitter {
      * Note that the events committed may still appear in other streams too - the given stream name is only
      * relevant for optimistic concurrency checks with the given expected version.
      *
+     * @api
      * @param {string} streamName The name of the stream to commit the events to.
      * @param {Array<Object>|Object} events The events to commit or a single event.
      * @param {number} [expectedVersion] One of ExpectedVersion constants or a positive version number that the stream is supposed to be at before commit.
@@ -113,13 +126,13 @@ class EventStore extends EventEmitter {
             events: []
         };
         for (let event of events) {
-            let storedEvent = { stream: streamName, payload: event, metadata: { committedAt, commitVersion, commitId, streamVersion } };
+            let storedEvent = { stream: streamName, payload: event, metadata: { commitId, committedAt, commitVersion, streamVersion } };
             commitVersion++;
             streamVersion++;
             commit.events.push(event);
             this.storage.write(storedEvent, commitVersion !== events.length ? undefined : () => {
                 this.emit('commit', commit);
-                if (typeof callback === 'function') callback();
+                if (typeof callback === 'function') callback(commit);
             });
         }
     }
@@ -127,6 +140,7 @@ class EventStore extends EventEmitter {
     /**
      * Get an event stream for the given stream name within the revision boundaries.
      *
+     * @api
      * @param {string} streamName The name of the stream to get.
      * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
@@ -144,8 +158,9 @@ class EventStore extends EventEmitter {
      * Get a stream for all events within the revision boundaries.
      * This is the same as `getEventStream('_all', ...)`.
      *
-     * @param {number} minRevision
-     * @param {number} maxRevision
+     * @api
+     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
      * @returns {EventStream} The event stream.
      */
     getAllEvents(minRevision = 0, maxRevision = -1) {
@@ -182,6 +197,7 @@ class EventStore extends EventEmitter {
     /**
      * Create a new stream with the given matcher.
      *
+     * @api
      * @param {string} streamName The name of the stream to create.
      * @param {Object|function(event)} matcher A matcher object, denoting the properties that need to match on an event a function that takes the event and returns true if the event should be added.
      * @returns {EventStream} The EventStream with all existing events matching the matcher.
@@ -208,6 +224,7 @@ class EventStore extends EventEmitter {
      * Note that you can delete a write stream, but that will not delete the events written to it.
      * Also, on next write, that stream will be rebuilt from all existing events, which might take some time.
      *
+     * @api
      * @param {string} streamName The name of the stream to delete.
      * @returns void
      */
@@ -219,7 +236,45 @@ class EventStore extends EventEmitter {
         delete this.streams[streamName];
         this.emit('stream-deleted', streamName);
     }
+
+    /**
+     * Get all commits that happened since the given store revision.
+     *
+     * @param {number} [since] The event revision since when to return commits (inclusive). If since is within a commit, the full commit will be returned.
+     * @returns {Generator<Object>} A generator of commit objects, each containing the commit metadata and the array of events.
+     */
+    *getCommits(since = 0) {
+        let commit;
+        let eventStream = this.getAllEvents(since);
+        let storedEvent;
+        while ((storedEvent = eventStream.next()) !== false) {
+            let { metadata, stream, payload } = storedEvent;
+
+            if (!commit && metadata.commitVersion > 0) {
+                eventStream = this.getAllEvents(since - metadata.commitVersion);
+                continue;
+            }
+
+            if (!commit || commit.commitId !== metadata.commitId) {
+                if (commit) {
+                    yield commit;
+                }
+                commit = {
+                    commitId: metadata.commitId,
+                    committedAt: metadata.committedAt,
+                    streamName: stream,
+                    streamVersion: metadata.streamVersion,
+                    events: []
+                };
+            }
+            commit.events.push(payload);
+        }
+        if (commit) {
+            yield commit;
+        }
+    }
 }
 
 module.exports = EventStore;
 module.exports.ExpectedVersion = ExpectedVersion;
+module.exports.OptimisticConcurrencyError = OptimisticConcurrencyError;
