@@ -1,6 +1,7 @@
 const EventStream = require('./EventStream');
 const uuid = require('uuid').v4;
 const fs = require('fs');
+const path = require('path');
 const EventEmitter = require('events');
 const Storage = require('./Storage');
 
@@ -20,7 +21,8 @@ class EventStore extends EventEmitter {
 
     /**
      * Available config options:
-     *  - storageDirectory: The directory where the data should be stored
+     *  - storageDirectory: The directory where the data should be stored.
+     *  - streamsDirectory: The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      *  - storageConfig: Additional config options given to the storage backend. See `Storage`
      *
      * @param {string} [storeName] The name of the store which will be used as storage prefix. Default 'eventstore'.
@@ -34,15 +36,37 @@ class EventStore extends EventEmitter {
         }
         this.streams = {};
         this.storeName = storeName || 'eventstore';
-        this.storageDirectory = config.storageDirectory || './data';
-        let storageConfig = Object.assign({ dataDirectory: this.storageDirectory, partitioner: (event) => event.stream }, config.storageConfig);
+
+        this.storageDirectory = path.resolve(config.storageDirectory || './data');
+        let defaultConfig = {
+            dataDirectory: this.storageDirectory,
+            indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
+            partitioner: (event) => event.stream
+        };
+        let storageConfig = Object.assign(defaultConfig, config.storageConfig);
+        this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
+
         this.storage = new Storage(this.storeName, storageConfig);
         this.storage.open();
         this.streams['_all'] = { index: this.storage.index };
 
+        this.scanStreams(() => this.emit('ready'));
+    }
+
+    /**
+     * Scan the streams directory for existing streams so they are ready for `getEventStream()`.
+     *
+     * @param {function} callback A callback that will be called when all existing streams are found.
+     */
+    scanStreams(callback) {
         // Find existing streams by scanning dir for filenames starting with 'stream-'
-        fs.readdir(this.storageDirectory, (err, files) => {
-            if (err) throw err;
+        fs.readdir(this.streamsDirectory, (err, files) => {
+            if (err) {
+                if (typeof callback === 'function') {
+                    return callback(err);
+                }
+                throw err;
+            }
             let matches;
             for (let file of files) {
                 if (matches = file.match(/(stream-(.*))\.index$/)) {
@@ -52,7 +76,7 @@ class EventStore extends EventEmitter {
                     this.emit('stream-available', streamName);
                 }
             }
-            this.emit('ready');
+            if (typeof callback === 'function') callback();
         });
     }
 
