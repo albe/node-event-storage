@@ -146,8 +146,8 @@ class Index {
         this.name = name || '.index';
         this.fileName = path.resolve(options.dataDirectory, this.name);
         this.readBuffer = Buffer.allocUnsafe(EntryClass.size);
-        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize);
-        this.flushDelay = options.flushDelay;
+        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0);
+        this.flushDelay = options.flushDelay >>> 0;
 
         this.EntryClass = EntryClass;
         if (options.metadata) {

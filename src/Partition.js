@@ -91,9 +91,9 @@ class Partition {
         this.id = hash(name);
         this.fileName = path.resolve(this.dataDirectory, this.name);
 
-        this.readBufferSize = config.readBufferSize;
-        this.writeBufferSize = config.writeBufferSize;
-        this.maxWriteBufferDocuments = config.maxWriteBufferDocuments;
+        this.readBufferSize = config.readBufferSize >>> 0;
+        this.writeBufferSize = config.writeBufferSize >>> 0;
+        this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0;
         this.syncOnFlush = !!config.syncOnFlush;
     }
 
@@ -125,6 +125,9 @@ class Partition {
         this.readBufferPos = -1;
         this.readBufferLength = 0;
 
+        if (typeof this.writeBufferSize !== 'number') {
+            console.log(typeof this.writeBufferSize, this.writeBufferSize);
+        }
         this.writeBuffer = Buffer.allocUnsafeSlow(this.writeBufferSize);
         // Where inside the write buffer the next write is added
         this.writeBufferCursor = 0;
