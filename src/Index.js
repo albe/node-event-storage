@@ -135,7 +135,7 @@ class Index {
         let defaults = {
             dataDirectory: '.',
             writeBufferSize: 4096,
-            flushDelay: 100,
+            flushDelay: 100
         };
         options = Object.assign(defaults, options);
         if (!fs.existsSync(options.dataDirectory)) {
