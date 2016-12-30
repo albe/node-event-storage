@@ -364,22 +364,17 @@ class Storage extends EventEmitter {
             return this.openIndex(name, matcher);
         }
 
-        let entries = this.index.all();
-        if (entries === false) {
-            throw new Error('Range scan error.');
-        }
         if (!matcher) {
             throw new Error('Need to specify a matcher.');
         }
 
         let metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
         let newIndex = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
-        for (let entry of entries) {
-            let document = this.readFrom(entry.partition, entry.position);
+        this.forEachDocument((document, indexEntry) => {
             if (this.matches(document, matcher)) {
-                newIndex.add(entry);
+                newIndex.add(indexEntry);
             }
-        }
+        });
 
         this.secondaryIndexes[name] = { index: newIndex, matcher };
         this.emit('index-created', name);
@@ -422,6 +417,26 @@ class Storage extends EventEmitter {
 
         this.index.truncate(after);
         this.forEachSecondaryIndex(index => index.truncate(index.find(after)));
+    }
+
+    /**
+     * Helper method to iterate over all documents.
+     *
+     * @private
+     * @param {function(Object, Index.Entry)} iterationHandler
+     */
+    forEachDocument(iterationHandler) {
+        if (typeof iterationHandler !== 'function') return;
+
+        let entries = this.index.all();
+        if (entries === false) {
+            return;
+        }
+
+        for (let entry of entries) {
+            let document = this.readFrom(entry.partition, entry.position, entry.size);
+            iterationHandler(document, entry);
+        }
     }
 
     /**
