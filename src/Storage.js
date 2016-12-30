@@ -87,13 +87,7 @@ class Storage extends EventEmitter {
             maxWriteBufferDocuments: 0,
             syncOnFlush: false
         };
-        this.partitionConfig = Object.assign(defaults, {
-            dataDirectory: this.dataDirectory,
-            readBufferSize: config.readBufferSize,
-            writeBufferSize: config.writeBufferSize,
-            maxWriteBufferDocuments: config.maxWriteBufferDocuments,
-            syncOnFlush: !!config.syncOnFlush
-        });
+        this.partitionConfig = Object.assign(defaults, config);
         this.partitions = {};
 
         let files = fs.readdirSync(this.dataDirectory);
