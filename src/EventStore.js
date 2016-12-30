@@ -108,10 +108,11 @@ class EventStore extends EventEmitter {
      * @param {string} streamName The name of the stream to commit the events to.
      * @param {Array<Object>|Object} events The events to commit or a single event.
      * @param {number} [expectedVersion] One of ExpectedVersion constants or a positive version number that the stream is supposed to be at before commit.
+     * @param {Object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
      * @param {function} [callback] A function that will be executed when all events have been committed.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version.
      */
-    commit(streamName, events, expectedVersion = ExpectedVersion.Any, callback) {
+    commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata, callback) {
         if (!streamName) {
             throw new Error('Must specify a stream name for commit.');
         }
@@ -119,14 +120,20 @@ class EventStore extends EventEmitter {
             throw new Error('No events specified for commit.');
         }
         if (!(events instanceof Array)) {
-            if (typeof events !== 'object') {
-                throw new Error('Event must be an object.');
-            }
             events = [events];
         }
-        if (typeof expectedVersion === 'function' && typeof callback === 'undefined') {
-            callback = expectedVersion;
+        if (typeof expectedVersion === 'object') {
+            callback = metadata;
+            metadata = expectedVersion;
             expectedVersion = ExpectedVersion.Any;
+        }
+        if (typeof expectedVersion === 'function') {
+            callback = expectedVersion;
+            metadata = undefined;
+            expectedVersion = ExpectedVersion.Any;
+        } else if (typeof metadata === 'function') {
+            callback = metadata;
+            metadata = undefined;
         }
 
         if (!(streamName in this.streams)) {
@@ -140,19 +147,21 @@ class EventStore extends EventEmitter {
         let commitId = uuid();
         let commitVersion = 0;
         let committedAt = Date.now();
-        let commit = {
+        let commit = Object.assign({
             commitId,
-            committedAt,
+            committedAt
+        }, metadata, {
             streamName,
             streamVersion,
             events: []
-        };
+        });
         let commitCallback = () => {
             this.emit('commit', commit);
             if (typeof callback === 'function') return callback(commit);
         };
         for (let event of events) {
-            let storedEvent = { stream: streamName, payload: event, metadata: { commitId, committedAt, commitVersion, streamVersion } };
+            let eventMetadata = Object.assign({ commitId, committedAt }, metadata, { commitVersion, streamVersion });
+            let storedEvent = { stream: streamName, payload: event, metadata: eventMetadata };
             commitVersion++;
             streamVersion++;
             commit.events.push(event);

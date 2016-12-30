@@ -116,6 +116,25 @@ describe('EventStore', function() {
             });
         });
 
+        it('uses metadata from argument for commit', function() {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], { commitId: 1, committedAt: 12345, quux: 'quux' }, (commit) => {
+                expect(commit.commitId).to.be(1);
+                expect(commit.committedAt).to.be(12345);
+                expect(commit.quux).to.be('quux');
+
+                let stream = eventstore.getEventStream('foo-bar');
+                let storedEvent = stream.next().value;
+                expect(storedEvent.metadata.commitId).to.be(1);
+                expect(storedEvent.metadata.committedAt).to.be(12345);
+                expect(storedEvent.metadata.quux).to.be('quux');
+                done();
+            });
+        });
+
     });
 
     describe('getCommits', function() {
