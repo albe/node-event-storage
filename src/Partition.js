@@ -73,19 +73,27 @@ class Partition {
         if (!name) {
             throw new Error('Must specify a partition name.');
         }
-        this.name = name;
-        this.id = hash(name);
 
-        this.dataDirectory = path.resolve(config.dataDirectory || '.');
+        let defaults = {
+            dataDirectory: '.',
+            readBufferSize: DEFAULT_READ_BUFFER_SIZE,
+            writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
+            maxWriteBufferDocuments: 0,
+            syncOnFlush: false
+        };
+        config = Object.assign(defaults, config);
+        this.dataDirectory = path.resolve(config.dataDirectory);
         if (!fs.existsSync(this.dataDirectory)) {
             mkdirpSync(this.dataDirectory);
         }
 
+        this.name = name;
+        this.id = hash(name);
         this.fileName = path.resolve(this.dataDirectory, this.name);
 
-        this.readBufferSize = config.readBufferSize || DEFAULT_READ_BUFFER_SIZE;
-        this.writeBufferSize = config.writeBufferSize || DEFAULT_WRITE_BUFFER_SIZE;
-        this.maxWriteBufferDocuments = config.maxWriteBufferDocuments || 0;
+        this.readBufferSize = config.readBufferSize;
+        this.writeBufferSize = config.writeBufferSize;
+        this.maxWriteBufferDocuments = config.maxWriteBufferDocuments;
         this.syncOnFlush = !!config.syncOnFlush;
     }
 

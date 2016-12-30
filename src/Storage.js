@@ -37,20 +37,28 @@ class Storage extends EventEmitter {
             storageName = undefined;
         }
 
-        this.serializer = config.serializer || { serialize: JSON.stringify, deserialize: JSON.parse };
         this.storageFile = storageName || 'storage';
+        let defaults = {
+            serializer: { serialize: JSON.stringify, deserialize: JSON.parse },
+            partitioner: (document, number) => '',
+            dataDirectory: '.',
+            indexFile: this.storageFile + '.index',
+            indexOptions: {},
+        };
+        config = Object.assign(defaults, config);
+        this.serializer = config.serializer;
+        this.partitioner = config.partitioner;
 
-        this.dataDirectory = path.resolve(config.dataDirectory || '.');
+        this.dataDirectory = path.resolve(config.dataDirectory);
         if (!fs.existsSync(this.dataDirectory)) {
             mkdirpSync(this.dataDirectory);
         }
 
-        this.indexDirectory = config.indexDirectory || this.dataDirectory;
+        this.indexDirectory = path.resolve(config.indexDirectory || this.dataDirectory);
 
-        this.indexOptions = config.indexOptions || {};
+        this.indexOptions = config.indexOptions;
         this.indexOptions.dataDirectory = this.indexDirectory;
-        let indexFile = config.indexFile || (this.storageFile + '.index');
-        this.index = new Index(indexFile, this.indexOptions);
+        this.index = new Index(config.indexFile, this.indexOptions);
         this.secondaryIndexes = {};
 
         this.scanPartitions(config);
@@ -73,14 +81,19 @@ class Storage extends EventEmitter {
      * @returns void
      */
     scanPartitions(config) {
-        this.partitioner = config.partitioner || ((document, number) => '');
-        this.partitionConfig = {
-            dataDirectory: this.dataDirectory,
-            readBufferSize: config.readBufferSize || DEFAULT_READ_BUFFER_SIZE,
-            writeBufferSize: config.writeBufferSize || DEFAULT_WRITE_BUFFER_SIZE,
-            maxWriteBufferDocuments: config.maxWriteBufferDocuments || 0,
-            syncOnFlush: !!config.syncOnFlush
+        let defaults = {
+            readBufferSize: DEFAULT_READ_BUFFER_SIZE,
+            writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
+            maxWriteBufferDocuments: 0,
+            syncOnFlush: false
         };
+        this.partitionConfig = Object.assign(defaults, {
+            dataDirectory: this.dataDirectory,
+            readBufferSize: config.readBufferSize,
+            writeBufferSize: config.writeBufferSize,
+            maxWriteBufferDocuments: config.maxWriteBufferDocuments,
+            syncOnFlush: !!config.syncOnFlush
+        });
         this.partitions = {};
 
         let files = fs.readdirSync(this.dataDirectory);

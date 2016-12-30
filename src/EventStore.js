@@ -34,18 +34,18 @@ class EventStore extends EventEmitter {
             config = storeName;
             storeName = undefined;
         }
-        this.streams = {};
-        this.storeName = storeName || 'eventstore';
 
         this.storageDirectory = path.resolve(config.storageDirectory || './data');
-        let defaultConfig = {
+        let defaults = {
             dataDirectory: this.storageDirectory,
             indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
             partitioner: (event) => event.stream
         };
-        let storageConfig = Object.assign(defaultConfig, config.storageConfig);
+        let storageConfig = Object.assign(defaults, config.storageConfig);
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
 
+        this.streams = {};
+        this.storeName = storeName || 'eventstore';
         this.storage = new Storage(this.storeName, storageConfig);
         this.storage.open();
         this.streams['_all'] = { index: this.storage.index };

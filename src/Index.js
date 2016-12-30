@@ -128,21 +128,26 @@ class Index {
             options = EntryClass;
             EntryClass = Entry;
         }
-        this.data = [];
-        this.name = name || '.index';
-
-        let dataDirectory = options.dataDirectory || '.';
-        if (!fs.existsSync(dataDirectory)) {
-            mkdirpSync(dataDirectory);
-        }
-        this.fileName = path.resolve(dataDirectory, this.name);
 
         EntryClass = EntryClass || Entry;
         assertValidEntryClass(EntryClass);
 
+        let defaults = {
+            dataDirectory: '.',
+            writeBufferSize: 4096,
+            flushDelay: 100,
+        };
+        options = Object.assign(defaults, options);
+        if (!fs.existsSync(options.dataDirectory)) {
+            mkdirpSync(options.dataDirectory);
+        }
+
+        this.data = [];
+        this.name = name || '.index';
+        this.fileName = path.resolve(options.dataDirectory, this.name);
         this.readBuffer = Buffer.allocUnsafe(EntryClass.size);
-        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize || 4096);
-        this.flushDelay = options.flushDelay || 100;
+        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize);
+        this.flushDelay = options.flushDelay;
 
         this.EntryClass = EntryClass;
         if (options.metadata) {
