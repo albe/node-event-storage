@@ -174,7 +174,6 @@ class Partition {
      * Flush the write buffer to disk.
      * This is a sync method and will invoke all previously registered flush callbacks.
      *
-     * @private
      * @returns {boolean}
      */
     flush() {
@@ -386,7 +385,7 @@ class Partition {
             throw new Error('Can only truncate on valid document boundaries.');
         }
         // copy all truncated documents to some delete log
-        let deletedBranch = new Partition(this.name + '-' + after, { dataDirectory: this.dataDirectory });
+        let deletedBranch = new Partition(this.name + '-' + after + '.branch', { dataDirectory: this.dataDirectory });
         deletedBranch.open();
         while (data) {
             deletedBranch.write(data);

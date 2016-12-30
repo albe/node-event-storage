@@ -53,6 +53,26 @@ class Storage extends EventEmitter {
         this.index = new Index(indexFile, this.indexOptions);
         this.secondaryIndexes = {};
 
+        this.scanPartitions(config);
+    }
+
+    /**
+     * The amount of documents in the storage.
+     * @returns {number}
+     */
+    get length() {
+        return this.index.length;
+    }
+
+    /**
+     * Scan the data directory for all existing partitions.
+     * Every file beginning with the storageFile name is considered a partition.
+     *
+     * @private
+     * @param {Object} config The configuration object containing options for the partitions.
+     * @returns void
+     */
+    scanPartitions(config) {
         this.partitioner = config.partitioner || ((document, number) => '');
         this.partitionConfig = {
             dataDirectory: this.dataDirectory,
@@ -66,20 +86,13 @@ class Storage extends EventEmitter {
         let files = fs.readdirSync(this.dataDirectory);
         for (let file of files) {
             if (file.substr(-6) === '.index') continue;
+            if (file.substr(-7) === '.branch') continue;
             if (file.substr(0, this.storageFile.length) === this.storageFile) {
                 //console.log('Found existing partition', file);
                 let partition = new Partition(file, this.partitionConfig);
                 this.partitions[partition.id] = partition;
             }
         }
-    }
-
-    /**
-     * The amount of documents in the storage.
-     * @returns {number}
-     */
-    get length() {
-        return this.index.length;
     }
 
     /**
@@ -93,9 +106,7 @@ class Storage extends EventEmitter {
         this.index.open();
 
         // TODO: Open secondary indexes lazily
-        for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
-            this.secondaryIndexes[indexName].index.open();
-        }
+        this.forEachSecondaryIndex(index => index.open());
 
         this.emit('opened');
         return true;
@@ -110,12 +121,8 @@ class Storage extends EventEmitter {
      */
     close() {
         this.index.close();
-        for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
-            this.secondaryIndexes[indexName].index.close();
-        }
-        for (let partition of Object.getOwnPropertyNames(this.partitions)) {
-            this.partitions[partition].close();
-        }
+        this.forEachSecondaryIndex(index => index.close());
+        this.forEachPartition(partition => partition.close());
         this.emit('closed');
     }
 
@@ -128,9 +135,7 @@ class Storage extends EventEmitter {
      * @returns {boolean}
      */
     flush() {
-        for (let partition of Object.getOwnPropertyNames(this.partitions)) {
-            this.partitions[partition].flush();
-        }
+        this.forEachPartition(partition => partition.flush());
 
         this.emit('flush');
         return true;
@@ -156,8 +161,8 @@ class Storage extends EventEmitter {
 
         let entry = new Index.Entry(this.index.length + 1, position, size, partitionId);
         this.index.add(entry, (indexPosition) => {
-            if (typeof callback === 'function') callback(indexPosition);
             this.emit('wrote', document, entry, indexPosition);
+            if (typeof callback === 'function') return callback(indexPosition);
         });
         return entry;
     }
@@ -182,6 +187,7 @@ class Storage extends EventEmitter {
         } else if (!this.partitions[partitionIdentifier]) {
             throw new Error('Partition #' + partitionIdentifier + ' does not exist.');
         }
+
         this.partitions[partitionIdentifier].open();
         return this.partitions[partitionIdentifier];
     }
@@ -204,11 +210,7 @@ class Storage extends EventEmitter {
             throw new Error('Error writing document.');
         }
         let indexEntry = this.addIndex(partition.id, position, dataSize, document);
-        for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
-            if (this.matches(document, this.secondaryIndexes[indexName].matcher)) {
-                this.secondaryIndexes[indexName].index.add(indexEntry);
-            }
-        }
+        this.forEachSecondaryIndex(index => index.add(indexEntry), document);
 
         return this.index.length;
     }
@@ -298,6 +300,36 @@ class Storage extends EventEmitter {
     }
 
     /**
+     * Open an existing index.
+     *
+     * @api
+     * @param {string} name The index name.
+     * @param {Object|function} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
+     * @returns {Index}
+     */
+    openIndex(name, matcher) {
+        if (name in this.secondaryIndexes) {
+            return this.secondaryIndexes[name].index;
+        }
+
+        let indexName = this.storageFile + '.' + name + '.index';
+        let metadata;
+        if (matcher) {
+            metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
+        }
+
+        let index = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
+        if (typeof index.metadata.matcher === 'object') {
+            matcher = index.metadata.matcher;
+        } else {
+            matcher = eval('(' + index.metadata.matcher + ')');
+        }
+        this.secondaryIndexes[name] = { index, matcher };
+        index.open();
+        return index;
+    }
+
+    /**
      * Ensure that an index with the given name and document matcher exists.
      * Will create the index if it doesn't exist, otherwise return the existing index.
      *
@@ -316,19 +348,7 @@ class Storage extends EventEmitter {
 
         let indexName = this.storageFile + '.' + name + '.index';
         if (fs.existsSync(path.join(this.indexDirectory, indexName))) {
-            let metadata;
-            if (matcher) {
-                metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
-            }
-            let index = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
-            if (typeof index.metadata.matcher === 'object') {
-                matcher = index.metadata.matcher;
-            } else {
-                matcher = eval('(' + index.metadata.matcher + ')');
-            }
-            this.secondaryIndexes[name] = { index, matcher };
-            index.open();
-            return index;
+            return this.openIndex(name, matcher);
         }
 
         let entries = this.index.all();
@@ -338,8 +358,9 @@ class Storage extends EventEmitter {
         if (!matcher) {
             throw new Error('Need to specify a matcher.');
         }
-        let serializedMatcher = typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString();
-        let newIndex = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, { metadata: { matcher: serializedMatcher } }));
+
+        let metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
+        let newIndex = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
         for (let entry of entries) {
             let document = this.readFrom(entry.partition, entry.position);
             if (this.matches(document, matcher)) {
@@ -371,10 +392,7 @@ class Storage extends EventEmitter {
         }
 
         if (after === 0) {
-            for (let partition in this.partitions) {
-                //noinspection JSUnfilteredForInLoop
-                this.partitions[partition].truncate(0);
-            }
+            this.forEachPartition(partition => partition.truncate(0));
         } else {
             let partitions = [];
             let numPartitions = Object.keys(this.partitions).length;
@@ -390,9 +408,37 @@ class Storage extends EventEmitter {
         }
 
         this.index.truncate(after);
-        for (let indexName of Object.getOwnPropertyNames(this.secondaryIndexes)) {
-            let truncateAfter = this.secondaryIndexes[indexName].index.find(after);
-            this.secondaryIndexes[indexName].index.truncate(truncateAfter);
+        this.forEachSecondaryIndex(index => index.truncate(index.find(after)));
+    }
+
+    /**
+     * Helper method to iterate over all secondary indexes.
+     *
+     * @private
+     * @param {function(Index)} callback
+     * @param {Object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
+     */
+    forEachSecondaryIndex(callback, matchDocument) {
+        if (typeof callback !== 'function') return;
+
+        for (let indexName of Object.keys(this.secondaryIndexes)) {
+            if (!matchDocument || this.matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
+                callback(this.secondaryIndexes[indexName].index);
+            }
+        }
+    }
+
+    /**
+     * Helper method to iterate over all partitions.
+     *
+     * @private
+     * @param {function(Partition)} callback
+     */
+    forEachPartition(callback) {
+        if (typeof callback !== 'function') return;
+
+        for (let partition of Object.keys(this.partitions)) {
+            callback(this.partitions[partition]);
         }
     }
 
