@@ -76,7 +76,7 @@ class EventStore extends EventEmitter {
                     this.emit('stream-available', streamName);
                 }
             }
-            if (typeof callback === 'function') callback();
+            if (typeof callback === 'function') return callback();
         });
     }
 
@@ -149,7 +149,7 @@ class EventStore extends EventEmitter {
         };
         let commitCallback = () => {
             this.emit('commit', commit);
-            if (typeof callback === 'function') callback(commit);
+            if (typeof callback === 'function') return callback(commit);
         };
         for (let event of events) {
             let storedEvent = { stream: streamName, payload: event, metadata: { commitId, committedAt, commitVersion, streamVersion } };
