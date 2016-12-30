@@ -415,15 +415,15 @@ class Storage extends EventEmitter {
      * Helper method to iterate over all secondary indexes.
      *
      * @private
-     * @param {function(Index)} callback
+     * @param {function(Index)} iterationHandler
      * @param {Object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
      */
-    forEachSecondaryIndex(callback, matchDocument) {
-        if (typeof callback !== 'function') return;
+    forEachSecondaryIndex(iterationHandler, matchDocument) {
+        if (typeof iterationHandler !== 'function') return;
 
         for (let indexName of Object.keys(this.secondaryIndexes)) {
             if (!matchDocument || this.matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
-                callback(this.secondaryIndexes[indexName].index);
+                iterationHandler(this.secondaryIndexes[indexName].index);
             }
         }
     }
@@ -432,13 +432,13 @@ class Storage extends EventEmitter {
      * Helper method to iterate over all partitions.
      *
      * @private
-     * @param {function(Partition)} callback
+     * @param {function(Partition)} iterationHandler
      */
-    forEachPartition(callback) {
-        if (typeof callback !== 'function') return;
+    forEachPartition(iterationHandler) {
+        if (typeof iterationHandler !== 'function') return;
 
         for (let partition of Object.keys(this.partitions)) {
-            callback(this.partitions[partition]);
+            iterationHandler(this.partitions[partition]);
         }
     }
 
