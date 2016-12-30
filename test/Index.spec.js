@@ -56,20 +56,20 @@ describe('Index', function() {
 
         it('appends entries sequentially', function() {
             index = new Index('test/data/.index');
-            for (let i = 1; i <= 100; i++) {
+            for (let i = 1; i <= 25; i++) {
                 index.add(new Index.Entry(i, i));
             }
             index.close();
             index.open();
             let entries = index.all();
-            expect(entries.length).to.be(100);
+            expect(entries.length).to.be(25);
             for (let i = 1; i <= entries.length; i++) {
                 expect(entries[i - 1].number).to.be(i);
             }
         });
 
         it('calls callback eventually', function(done) {
-            index = new Index('test/data/.index');
+            index = new Index('test/data/.index', { flushDelay: 1 });
             let position = index.add(new Index.Entry(1, 0), (number) => {
                 expect(number).to.be(position);
                 done();
