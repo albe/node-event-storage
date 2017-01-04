@@ -217,7 +217,10 @@ class Storage extends EventEmitter {
             throw new Error('Error writing document.');
         }
         let indexEntry = this.addIndex(partition.id, position, dataSize, document);
-        this.forEachSecondaryIndex(index => index.add(indexEntry), document);
+        this.forEachSecondaryIndex(index => {
+            index.add(indexEntry);
+            this.emit('index-add', index.name, index.length, document);
+        }, document);
 
         return this.index.length;
     }
@@ -313,6 +316,7 @@ class Storage extends EventEmitter {
      * @param {string} name The index name.
      * @param {Object|function} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
      * @returns {Index}
+     * @throws {Error} if the index with that name does not exist.
      */
     openIndex(name, matcher) {
         if (name in this.secondaryIndexes) {
@@ -320,6 +324,9 @@ class Storage extends EventEmitter {
         }
 
         let indexName = this.storageFile + '.' + name + '.index';
+        if (!fs.existsSync(path.join(this.indexDirectory, indexName))) {
+            throw new Error('Index "' + name + '" does not exist.');
+        }
         let metadata;
         if (matcher) {
             metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
@@ -344,6 +351,7 @@ class Storage extends EventEmitter {
      * @param {string} name The index name.
      * @param {Object|function} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
      * @returns {Index} The index containing all documents that match the query.
+     * @throws {Error} if the index doesn't exist yet and no matcher was specified.
      */
     ensureIndex(name, matcher) {
         /*if (!this.isopen) {
