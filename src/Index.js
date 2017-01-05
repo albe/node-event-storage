@@ -6,6 +6,7 @@ Buffer.poolSize = 64 * 1024;
 
 /**
  * This is the interface that an Entry class needs to implement.
+ * @interface
  */
 class EntryInterface {
     static get size() {}
@@ -106,15 +107,13 @@ const HEADER_MAGIC = "nesidx01";
 class Index {
 
     /**
-     * Config options:
-     *  - dataDirectory: The directory to store the index file in. Default '.'.
-     *  - writeBufferSize: The number of bytes to use for the write buffer. Default 4096.
-     *  - flushDelay: How many ms to delay the write buffer flush to optimize throughput. Default 100.
-     *  - metadata: An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
-     *
      * @param {EntryInterface} [EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [name] The name of the file to use for storing the index.
      * @param {Object} [options] An object with additional index options.
+     * @param {string} [options.dataDirectory] The directory to store the index file in. Default '.'.
+     * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
+     * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
+     * @param {Object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
     constructor(EntryClass = Entry, name = '.index', options = {}) {
         if (typeof EntryClass === 'string') {

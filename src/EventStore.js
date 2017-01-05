@@ -20,13 +20,11 @@ class OptimisticConcurrencyError extends Error {}
 class EventStore extends EventEmitter {
 
     /**
-     * Available config options:
-     *  - storageDirectory: The directory where the data should be stored.
-     *  - streamsDirectory: The directory where the streams should be stored. Default '{storageDirectory}/streams'.
-     *  - storageConfig: Additional config options given to the storage backend. See `Storage`
-     *
      * @param {string} [storeName] The name of the store which will be used as storage prefix. Default 'eventstore'.
      * @param {Object} [config] An object with config options.
+     * @param {string} [config.storageDirectory] The directory where the data should be stored. Default './data'.
+     * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
+     * @param {Object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
@@ -56,6 +54,7 @@ class EventStore extends EventEmitter {
     /**
      * Scan the streams directory for existing streams so they are ready for `getEventStream()`.
      *
+     * @private
      * @param {function} callback A callback that will be called when all existing streams are found.
      */
     scanStreams(callback) {

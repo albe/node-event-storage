@@ -15,20 +15,20 @@ const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 class Storage extends EventEmitter {
 
     /**
-     * Config options:
-     *   - serializer: A serializer object with methods serialize(document) and deserialize(data). Default is JSON.stringify/parse.
-     *   - dataDirectory: The path where the storage data should reside. Default '.'.
-     *   - indexDirectory: The path where the indexes should be stored. Defaults to dataDirectory.
-     *   - indexFile: The name of the primary index. Default '{storageName}.index'.
-     *   - readBufferSize: Size of the read buffer in bytes. Default 4096.
-     *   - writeBufferSize: Size of the write buffer in bytes. Default 16384.
-     *   - maxWriteBufferDocuments: How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
-     *   - syncOnFlush: If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
-     *   - partitioner: A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
-     *   - indexOptions: An options object that should be passed to all indexes on construction.
-     *
      * @param {string} [storageName] The name of the storage.
      * @param {Object} [config] An object with storage parameters.
+     * @param {Object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
+     * @param {function(Object): string} config.serializer.serialize Default is JSON.stringify.
+     * @param {function(string): Object} config.serializer.deserialize Default is JSON.parse.
+     * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
+     * @param {string} [config.indexDirectory] The path where the indexes should be stored. Defaults to dataDirectory.
+     * @param {string} [config.indexFile] The name of the primary index. Default '{storageName}.index'.
+     * @param {number} [config.readBufferSize] Size of the read buffer in bytes. Default 4096.
+     * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
+     * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
+     * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
+     * @param {function(Object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
+     * @param {Object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      */
     constructor(storageName = 'storage', config = {}) {
         super();

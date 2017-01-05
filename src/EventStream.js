@@ -8,7 +8,7 @@ class EventStream extends Readable {
 
     /**
      * @param {string} name The name of the stream.
-     * @param {Iterable<Object>} iterator The iterator to use for iterating over events.
+     * @param {Iterator<Object>|Generator<Object>} iterator The iterator to use for iterating over events.
      */
     constructor(name, iterator) {
         super({ objectMode: true });
@@ -22,7 +22,7 @@ class EventStream extends Readable {
      * @returns {Array<Object>}
      */
     get events() {
-        if (this._events) {
+        if (this._events instanceof Array) {
             return this._events;
         }
         this._events = [];
