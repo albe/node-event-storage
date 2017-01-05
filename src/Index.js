@@ -271,8 +271,11 @@ class Index {
         if (!this.metadata) {
             this.metadata = {entryClass: this.EntryClass.name, entrySize: this.EntryClass.size};
         }
-        let metadata = JSON.stringify(this.metadata) + "\n";
+        let metadata = JSON.stringify(this.metadata);
         let metadataSize = Buffer.byteLength(metadata, 'utf8');
+        let pad = (16 - ((8 + 4 + metadataSize + 1) % 16)) % 16;
+        metadata += ' '.repeat(pad) + "\n";
+        metadataSize += pad + 1;
         let metadataBuffer = Buffer.allocUnsafe(8 + 4 + metadataSize);
         metadataBuffer.write(HEADER_MAGIC, 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(metadataSize, 8, true);
@@ -307,7 +310,7 @@ class Index {
 
         let metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
         fs.readSync(this.fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
-        let metadata = metadataBuffer.toString('utf8');
+        let metadata = metadataBuffer.toString('utf8').trim();
 
         // Verify metadata if it was set in constructor
         if (this.metadata && JSON.stringify(this.metadata) !== metadata) {
