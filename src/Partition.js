@@ -125,9 +125,6 @@ class Partition {
         this.readBufferPos = -1;
         this.readBufferLength = 0;
 
-        if (typeof this.writeBufferSize !== 'number') {
-            console.log(typeof this.writeBufferSize, this.writeBufferSize);
-        }
         this.writeBuffer = Buffer.allocUnsafeSlow(this.writeBufferSize);
         // Where inside the write buffer the next write is added
         this.writeBufferCursor = 0;
