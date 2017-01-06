@@ -3,7 +3,7 @@
 
 # node-event-storage
 
-An optimized embedded event store for node.js
+An optimized embedded event store for modern node.js, written in ES6.
 
 Disclaimer: This is currently under heavy development and not production ready.
 
@@ -16,6 +16,7 @@ It is a nice project, but has a few drawbacks though:
   - its API is fully based around Event Streams, so in order to commit a new event the full existing Event Stream needs to be
       retrieved first. This makes it unfit for client application scenarios that frequently restart the application.
   - it has backends for quite a few existing databases (TingoDB, NeDB, MongoDB, ...), but none of them are optimized for event storage needs
+  - the embeddable storage backends (TingoDB, NeDB) do not persist indexes and hence are very slow on initial load
   - it stores event publishing meta information in the events, so it does updates to event data
   - events are fixed onto one stream and it's not possible to create multiple streams that partially contain
       the same events. This makes creating projections hard and/or slow.
@@ -24,7 +25,7 @@ It is a nice project, but has a few drawbacks though:
 
 The thing that makes event storages stand out (and also makes them simpler and more performant), is that they
 have no concept of overwriting or deleting data. They are purely append-only storages and the only querying is
-sequential reading (possibly with some filtering applied): 
+sequential (range) reading (possibly with some filtering applied): 
 
 This means a couple of things:
 
@@ -43,6 +44,7 @@ top which is simply not needed. Write and read performance suffer.
 
 Event sourced client applications running on node.js (electron, node-webkit, etc.).
 Small event sourced single-server applications that want to get near-optimal write performance.
+Using it as queryable log storage.
 
 ## Installation
 
