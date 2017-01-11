@@ -372,11 +372,16 @@ class Storage extends EventEmitter {
 
         let metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
         let newIndex = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
-        this.forEachDocument((document, indexEntry) => {
-            if (this.matches(document, matcher)) {
-                newIndex.add(indexEntry);
-            }
-        });
+        try {
+            this.forEachDocument((document, indexEntry) => {
+                if (this.matches(document, matcher)) {
+                    newIndex.add(indexEntry);
+                }
+            });
+        } catch (e) {
+            newIndex.destroy();
+            throw e;
+        }
 
         this.secondaryIndexes[name] = { index: newIndex, matcher };
         this.emit('index-created', name);
