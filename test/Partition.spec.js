@@ -53,6 +53,16 @@ describe('Partition', function() {
             }
         });
 
+        it('writes utf-8 data correctly', function() {
+            partition.open();
+            let doc1 = partition.write('foo-üöälß');
+            let doc2 = partition.write('bar-日本語');
+            partition.close();
+            partition.open();
+            expect(partition.readFrom(doc1)).to.be('foo-üöälß');
+            expect(partition.readFrom(doc2)).to.be('bar-日本語');
+        });
+
         it('returns file position of written document', function() {
             partition.open();
             let positions = [];
