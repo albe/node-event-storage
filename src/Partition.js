@@ -236,9 +236,7 @@ class Partition {
             fs.writeSync(this.fd, dataToWrite);
             if (typeof callback === 'function') process.nextTick(callback);
         } else {
-            // We can denote ascii encoding here because dataSize is the exact byte size and the buffer is guaranteed
-            // to be big enough to contain all bytes anyway. 'utf8' only checks that no characters are split.
-            this.writeBufferCursor += this.writeBuffer.write(dataToWrite, this.writeBufferCursor, dataSize, 'ascii');
+            this.writeBufferCursor += this.writeBuffer.write(dataToWrite, this.writeBufferCursor, dataSize, 'utf8');
             this.writeBufferDocuments++;
             if (typeof callback === 'function') this.flushCallbacks.push(callback);
             if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
