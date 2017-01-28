@@ -217,9 +217,9 @@ class Storage extends EventEmitter {
             throw new Error('Error writing document.');
         }
         let indexEntry = this.addIndex(partition.id, position, dataSize, document);
-        this.forEachSecondaryIndex(index => {
+        this.forEachSecondaryIndex((index, name) => {
             index.add(indexEntry);
-            this.emit('index-add', index.name, index.length, document);
+            this.emit('index-add', name, index.length, document);
         }, document);
 
         return this.index.length;
@@ -458,7 +458,7 @@ class Storage extends EventEmitter {
 
         for (let indexName of Object.keys(this.secondaryIndexes)) {
             if (!matchDocument || this.matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
-                iterationHandler(this.secondaryIndexes[indexName].index);
+                iterationHandler(this.secondaryIndexes[indexName].index, indexName);
             }
         }
     }
