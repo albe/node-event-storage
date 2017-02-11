@@ -1,14 +1,15 @@
-const EventEmitter = require('events');
+const stream = require('stream');
 const fs = require('fs');
 const path = require('path');
 const mkdirpSync = require('mkdirp').sync;
 
 const Storage = require('./Storage');
+const MAX_CATCHUP_BATCH = 10;
 
 /**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics.
  */
-class Consumer extends EventEmitter {
+class Consumer extends stream.Readable {
 
     /**
      * @param {Storage} storage The storage to create the consumer for.
@@ -16,7 +17,7 @@ class Consumer extends EventEmitter {
      * @param {string} identifier The unique name to identify this consumer.
      */
     constructor(storage, indexName, identifier) {
-        super();
+        super({ objectMode: true });
 
         if (!(storage instanceof Storage)) {
             throw new Error('Must provide a storage for the consumer.');
@@ -36,20 +37,21 @@ class Consumer extends EventEmitter {
             mkdirpSync(consumerDirectory);
         }
 
-        this.fileName = path.join(consumerDirectory, identifier);
+        this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
         try {
             this.position = fs.readFileSync(this.fileName);
         } catch (e) {
             this.position = 0;
         }
 
+        this.consuming = false;
         this.handler = this.handleNewDocument.bind(this);
-        this.start();
     }
 
     /**
      * Handler method that is supposed to be triggered for each new document in the storage.
      *
+     * @private
      * @param {string} name The name of the index the document was added for.
      * @param {number} position The 1-based position inside the index that the document was added to.
      * @param {Object} document The document that was added.
@@ -60,7 +62,9 @@ class Consumer extends EventEmitter {
         }
 
         if (this.position === position - 1) {
-            this.emit('data', document);
+            if (!this.push(document)) {
+                this.stop();
+            }
             this.position = position;
             fs.writeFileSync(this.fileName, this.position);
         }
@@ -70,29 +74,58 @@ class Consumer extends EventEmitter {
      * Start consuming documents.
      *
      * This will also catch up from the last position in case new documents were added.
+     * @api
      */
     start() {
-        this.storage.on('index-add', this.handler);
+        if (this.consuming) {
+            return;
+        }
+        this.consuming = true;
 
         // Catch up to current index position
-        while (this.index.length > this.position) {
-            let documents = this.storage.readRange(this.position + 1, this.index.length, this.index);
-            for (let document of documents) {
-                this.emit('data', document);
-                ++this.position;
-            }
-            fs.writeFileSync(this.fileName, this.position);
-        }
+        const catchUpBatch = () => {
+            setImmediate(() => {
+                if (this.index.length <= this.position) {
+                    this.storage.on('index-add', this.handler);
+                    this.emit('caught-up');
+                    return;
+                }
+                if (this.consuming === false) {
+                    return;
+                }
+
+                let maxBatchPosition = Math.min(this.position + MAX_CATCHUP_BATCH + 1, this.index.length);
+                let documents = this.storage.readRange(this.position + 1, maxBatchPosition, this.index);
+                for (let document of documents) {
+                    ++this.position;
+                    if (!this.push(document)) {
+                        this.stop();
+                        break;
+                    }
+                }
+                fs.writeFileSync(this.fileName, this.position);
+                catchUpBatch();
+            });
+        };
+        catchUpBatch();
     }
 
     /**
      * Stop consuming new documents. Consuming can be started again at any time.
-     * Note: This will NOT interrupt a catch up that is already in process.
+     * @api
      */
     stop() {
         this.storage.removeListener('index-add', this.handler);
+        this.consuming = false;
     }
 
+    /**
+     * Readable stream implementation.
+     * @private
+     */
+    _read() {
+        this.start();
+    }
 }
 
 module.exports = Consumer;
