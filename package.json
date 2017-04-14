@@ -1,8 +1,17 @@
 {
   "name": "event-storage",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "An optimized embedded event store for node.js",
-  "keywords": ["event-storage", "event-sourcing", "eventstore", "domain events", "embedded", "append-only", "cqrs", "log storage"],
+  "keywords": [
+    "event-storage",
+    "event-sourcing",
+    "eventstore",
+    "domain events",
+    "embedded",
+    "append-only",
+    "cqrs",
+    "log storage"
+  ],
   "homepage": "https://github.com/albe/node-event-storage",
   "repository": {
     "type": "git",
@@ -21,7 +30,9 @@
       "email": "a.berl@outlook.com"
     }
   ],
-  "engines": { "node" : ">=6.0" },
+  "engines": {
+    "node": ">=6.0"
+  },
   "dependencies": {
     "mkdirp": "^0.5.1",
     "uuid": "^3.0.1"
