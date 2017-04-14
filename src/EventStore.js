@@ -1,4 +1,5 @@
 const EventStream = require('./EventStream');
+const JoinEventStream = require('./JoinEventStream');
 const uuid = require('uuid').v4;
 const fs = require('fs');
 const path = require('path');
@@ -200,8 +201,7 @@ class EventStore extends EventEmitter {
         if (!(streamName in this.streams)) {
             return false;
         }
-        let streamIndex = this.streams[streamName].index;
-        return new EventStream(streamName, this.storage.readRange(minRevision + 1, maxRevision + 1, streamIndex));
+        return new EventStream(streamName, this, minRevision, maxRevision);
     }
 
     /**
@@ -220,29 +220,21 @@ class EventStore extends EventEmitter {
     /**
      * Create a new event stream from existing streams by joining them.
      *
-     * @param {Array<string>} streamNames
-     * @param {number} minRevision
-     * @param {number} maxRevision
-     * @return {EventStream}
+     * @param {string} streamName The (transient) name of the joined stream.
+     * @param {Array<string>} streamNames An array of the stream names to join.
+     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @return {EventStream|boolean} The joined event stream or false if any of the streams doesn't exist.
      */
-/*
-    fromStreams(streamNames, minRevision = 0, maxRevision = -1) {
+    fromStreams(streamName, streamNames, minRevision = 0, maxRevision = -1) {
         if (!(streamNames instanceof Array)) {
             throw new Error('Must specify an array of stream names.');
         }
-        let joinStream = [];
-        for (let streamName of streamNames) {
-            if (!(streamName in this.streams)) {
-                continue;
-            }
-            let streamIndex = this.streams[streamName].index;
-            let from = minRevision > 0 ? streamIndex.find(minRevision) : 0;
-            let until = maxRevision > 0 ? streamIndex.find(maxRevision) : -1;
-            joinStream = joinStream.concat(streamIndex.range(from, until));
+        if (!streamNames.every(stream => stream in this.streams)) {
+            return false;
         }
-        joinStream.sort((a, b) => b.number - a.number);
+        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision);
     }
-*/
 
     /**
      * Create a new stream with the given matcher.
@@ -265,7 +257,7 @@ class EventStore extends EventEmitter {
         }
         this.streams[streamName] = { index, matcher };
         this.emit('stream-created', streamName);
-        return new EventStream(streamName, this.storage.readRange(1, 0, index));
+        return new EventStream(streamName, this);
     }
 
     /**

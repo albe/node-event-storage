@@ -1,19 +1,34 @@
-const Readable = require('stream').Readable;
+const stream = require('stream');
 
 /**
  * An event stream is a simple wrapper around an iterator over storage documents.
  * It implements a node readable stream interface.
  */
-class EventStream extends Readable {
+class EventStream extends stream.Readable {
 
     /**
      * @param {string} name The name of the stream.
-     * @param {Iterator<Object>|Generator<Object>} iterator The iterator to use for iterating over events.
+     * @param {EventStore} eventStore The event store to get the stream from.
+     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
      */
-    constructor(name, iterator) {
+    constructor(name, eventStore, minRevision = 0, maxRevision = -1) {
         super({ objectMode: true });
+        if (!name) {
+            throw new Error('Need to specify a stream name.');
+        }
+        if (!eventStore) {
+            throw new Error(`Need to provide EventStore instance to create EventStream ${name}.`);
+        }
+
         this.name = name;
-        this.iterator = iterator || { next() { return { done: true } } };
+        this.eventStore = eventStore;
+        if (this.eventStore.streams[name]) {
+            let streamIndex = this.eventStore.streams[name].index;
+            this.iterator = this.eventStore.storage.readRange(minRevision + 1, maxRevision + 1, streamIndex);
+        } else {
+            this.iterator = { next() { return { done: true } } };
+        }
     }
 
     /**
@@ -78,6 +93,7 @@ class EventStream extends Readable {
         let next = this.next();
         this.push(next ? next.payload : null);
     }
+
 }
 
 module.exports = EventStream;
