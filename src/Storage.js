@@ -203,7 +203,7 @@ class Storage extends EventEmitter {
      * @api
      * @param {Object} document The document to write to storage.
      * @param {function} [callback] A function that will be called when the document is written to disk.
-     * @returns {Number} The 1-based document sequence number in the storage.
+     * @returns {number} The 1-based document sequence number in the storage.
      */
     write(document, callback) {
         let data = this.serializer.serialize(document).toString();

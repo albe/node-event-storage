@@ -372,7 +372,7 @@ class Index {
      *
      * @private
      * @param {function} callback The callback function to execute on the next flush.
-     * @param {Number} position The index position that will be provided as parameter to the callback.
+     * @param {number} position The index position that will be provided as parameter to the callback.
      */
     onFlush(callback, position) {
         if (typeof callback !== 'function') return;
@@ -385,7 +385,7 @@ class Index {
      * @api
      * @param {Entry} entry The index entry to append.
      * @param {function} [callback] A callback function to execute when the index entry is flushed to disk.
-     * @returns {Number} The index position for the entry. It matches the index size after the insertion.
+     * @returns {number} The index position for the entry. It matches the index size after the insertion.
      */
     add(entry, callback) {
         if (entry.constructor.name !== this.EntryClass.name) {
@@ -417,7 +417,7 @@ class Index {
      * Will prevent reading if the entry has already been read sequentially from the start.
      *
      * @private
-     * @param {Number} index
+     * @param {number} index
      * @returns {Entry|boolean} The index entry at the given position or false on error.
      */
     read(index) {
@@ -444,8 +444,8 @@ class Index {
      * It will however optimize to prevent reading entries that have already been read sequentially from start.
      *
      * @private
-     * @param {Number} from The 1-based index position from where to read from (inclusive).
-     * @param {Number} until The 1-based index position until which to read to (inclusive).
+     * @param {number} from The 1-based index position from where to read from (inclusive).
+     * @param {number} until The 1-based index position until which to read to (inclusive).
      * @returns {Array<Entry>|boolean} An array of the index entries in the given range or false on error.
      */
     readRange(from, until) {
@@ -500,7 +500,7 @@ class Index {
      * Get a single index entry at given position, checking the boundaries.
      *
      * @api
-     * @param {Number} index The 1-based index position to get the entry for.
+     * @param {number} index The 1-based index position to get the entry for.
      * @returns {Entry|boolean} The entry at the given index position or false if out of bounds.
      */
     get(index) {
@@ -519,8 +519,8 @@ class Index {
      * Check if the given range is within the bounds of the index.
      *
      * @api
-     * @param {Number} from The 1-based index position from where to get entries from (inclusive).
-     * @param {Number} until The 1-based index position until where to get entries to (inclusive).
+     * @param {number} from The 1-based index position from where to get entries from (inclusive).
+     * @param {number} until The 1-based index position until where to get entries to (inclusive).
      * @returns {boolean}
      */
     validRange(from, until) {
@@ -537,8 +537,8 @@ class Index {
      * Get a range of index entries.
      *
      * @api
-     * @param {Number} from The 1-based index position from where to get entries from (inclusive). If < 0 will start at that position from end.
-     * @param {Number} [until] The 1-based index position until where to get entries to (inclusive). If < 0 will get until that position from the end. Defaults to this.length.
+     * @param {number} from The 1-based index position from where to get entries from (inclusive). If < 0 will start at that position from end.
+     * @param {number} [until] The 1-based index position until where to get entries to (inclusive). If < 0 will get until that position from the end. Defaults to this.length.
      * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
     range(from, until) {

@@ -268,7 +268,7 @@ class Partition {
      * @param {number} offset The position inside the buffer to start reading from.
      * @param {number} position The file position to start reading from.
      * @param {number} [size] The expected byte size of the document at the given position.
-     * @returns {Number} The length of the document at the given position.
+     * @returns {number} The length of the document at the given position.
      * @throws {Error} if the storage entry at the given position is corrupted.
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
