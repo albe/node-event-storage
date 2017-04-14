@@ -466,7 +466,6 @@ class Index {
         let readFrom = Math.max(this.readUntil + 1, from);
         let amount = (until - readFrom + 1);
 
-        // TODO: rewrite this to make use of a fixed read buffer
         let readBuffer = Buffer.allocUnsafe(amount * this.EntryClass.size);
         let readSize = fs.readSync(this.fd, readBuffer, 0, readBuffer.byteLength, this.headerSize + readFrom * this.EntryClass.size);
         let index = 0;
