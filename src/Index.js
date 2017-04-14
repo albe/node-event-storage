@@ -32,7 +32,7 @@ class Index {
      * @param {Object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
     constructor(name = '.index', options = {}) {
-        EntryClass = options.EntryClass || Entry;
+        const EntryClass = options.EntryClass || Entry;
         Entry.assertValidEntryClass(EntryClass);
 
         let defaults = {
