@@ -192,7 +192,7 @@ class Storage extends EventEmitter {
                 this.partitions[partitionIdentifier] = new Partition(partitionName, this.partitionConfig);
             }
         } else if (!this.partitions[partitionIdentifier]) {
-            throw new Error('Partition #' + partitionIdentifier + ' does not exist.');
+            throw new Error(`Partition #${partitionIdentifier} does not exist.`);
         }
 
         this.partitions[partitionIdentifier].open();
@@ -325,7 +325,7 @@ class Storage extends EventEmitter {
 
         let indexName = this.storageFile + '.' + name + '.index';
         if (!fs.existsSync(path.join(this.indexDirectory, indexName))) {
-            throw new Error('Index "' + name + '" does not exist.');
+            throw new Error(`Index "${name}" does not exist.`);
         }
         let metadata;
         if (matcher) {

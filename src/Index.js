@@ -201,7 +201,7 @@ class Index {
     checkFile() {
         let stat = fs.fstatSync(this.fd);
         if (!stat) {
-            throw new Error('Error stat\'ing index file "' + this.fileName + '".');
+            throw new Error(`Error stat'ing index file "${this.fileName}".`);
         }
         if (stat.size > 0 && stat.size <= 4) {
             throw new Error('Invalid index file!');
@@ -238,7 +238,7 @@ class Index {
 
         this.fd = fs.openSync(this.fileName, 'a+');
         if (!this.fd) {
-            throw new Error('Error opening index file "' + this.fileName + '".');
+            throw new Error(`Error opening index file "${this.fileName}".`);
         }
 
         this.writeBufferCursor = 0;
@@ -299,7 +299,7 @@ class Index {
         let headerMagic = headerBuffer.toString('utf8', 0, 8);
         if (headerMagic !== HEADER_MAGIC) {
             if (headerMagic.substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
-                throw new Error('Invalid file version. The index ' + this.fileName + ' was created with a different library version.');
+                throw new Error(`Invalid file version. The index ${this.fileName} was created with a different library version.`);
             }
             throw new Error('Invalid file header.');
         }
@@ -389,10 +389,10 @@ class Index {
      */
     add(entry, callback) {
         if (entry.constructor.name !== this.EntryClass.name) {
-            throw new Error('Wrong entry object, got ' + entry.constructor.name + ', expected ' + this.EntryClass.name);
+            throw new Error(`Wrong entry object, got ${entry.constructor.name}, expected ${this.EntryClass.name}.`);
         }
         if (entry.constructor.size !== this.EntryClass.size) {
-            throw new Error('Invalid entry size, got ' + entry.constructor.size + ', expected ' + this.EntryClass.size);
+            throw new Error(`Invalid entry size, got ${entry.constructor.size}, expected ${this.EntryClass.size}.`);
         }
         if (this.readUntil === this.data.length - 1) {
             this.readUntil++;

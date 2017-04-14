@@ -143,9 +143,9 @@ class Partition {
         if (headerBuffer.toString() !== HEADER_MAGIC) {
             this.close();
             if (headerBuffer.toString().substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
-                throw new Error('Invalid file version. The partition ' + this.name + ' was created with a different library version.');
+                throw new Error(`Invalid file version. The partition ${this.name} was created with a different library version.`);
             }
-            throw new Error('Invalid file header in partition ' + this.name + '.');
+            throw new Error(`Invalid file header in partition ${this.name}.`);
         }
         this.size = stat.size - this.headerSize;
 
@@ -277,14 +277,14 @@ class Partition {
         let dataLengthStr = buffer.toString('utf8', offset, offset + 10);
         let dataLength = parseInt(dataLengthStr, 10);
         if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
-            throw new Error('Error reading document size from ' + position + ', got ' + dataLength + '.');
+            throw new Error(`Error reading document size from ${position}, got ${dataLength}.`);
         }
         if (size && dataLength !== size) {
-            throw new InvalidDataSizeError('Invalid document size ' + dataLength + ' at position ' + position + ', expected ' + size + '.');
+            throw new InvalidDataSizeError(`Invalid document size ${dataLength} at position ${position}, expected ${size}.`);
         }
 
         if (position + dataLength + 11 > this.size) {
-            throw new CorruptFileError('Invalid document at position ' + position + '. This may be caused by an unfinished write.');
+            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
         }
 
         return dataLength;

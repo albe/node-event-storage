@@ -253,7 +253,7 @@ class EventStore extends EventEmitter {
         let streamIndexName = 'stream-' + streamName;
         let index = this.storage.ensureIndex(streamIndexName, matcher);
         if (!index) {
-            throw new Error('Error creating stream index ' + streamName);
+            throw new Error(`Error creating stream index ${streamName}.`);
         }
         this.streams[streamName] = { index, matcher };
         this.emit('stream-created', streamName);
