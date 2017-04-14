@@ -56,7 +56,7 @@ Using it as queryable log storage.
 
 ## Usage
 
-```
+```javascript
 const EventStore = require('event-storage');
 
 var eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
@@ -75,7 +75,7 @@ eventstore.on('ready', () => {
 
 ### Creating additional streams
 
-```
+```javascript
 ...
 let myProjectionStream = eventstore.createStream('my-projection-stream', (event) => ['FooHappened', 'BarHappened'].includes(event.type));
 
@@ -86,22 +86,41 @@ for (let event of myProjectionStream) {
 
 ### Optimistic concurrency
 
-```
-    try {
-        eventstore.commit('my-stream', [{ foo: 'bar' }], expectedVersion, () => {
-            ...
-        });
-    } catch (e) {
-        if (e instanceof EventStore.OptimisticConcurrencyError) {
-            ...
-            // Reattempt command / resolve conflict
-        }
+```javascript
+try {
+    eventstore.commit('my-stream', [{ foo: 'bar' }], expectedVersion, () => {
+        ...
+    });
+} catch (e) {
+    if (e instanceof EventStore.OptimisticConcurrencyError) {
+        ...
+        // Reattempt command / resolve conflict
     }
+}
 ```
 
 Where `expectedVersion` is either `EventStore.ExpectedVersion.Any` (no optimistic concurrency check),
 `EventStore.ExpectedVersion.EmptyStream` or any version number > 0 that the 'my-stream' is expected to be at.
 It will throw an OptimisticConcurrencyError if the given stream version does not match the expected.
+
+### Consumers
+
+Consumers are durable event-driven listeners on event streams. They provide at-least-once delivery guarantees,
+meaning that they receive each event in the stream at least once. An event can possibly be delivered twice if
+the program crashed during the handling of an event, since the current position will only be persisted *afterwards*.
+
+```javascript
+let myConsumer = eventstore.getConsumer('my-stream', 'my-stream-consumer1');
+myConsumer.on('data', event => {
+    // do something with event, but be sure to de-duplicate or have idempotent handling
+});
+```
+
+Note
+> The consuming of events will start as soon as a handler for the `data` event is registered and suspended
+> when the last listener is removed.
+
+As soon as the consumer has caught up the stream, it will emit a `caught-up` event.
 
 ## Implementation details
 

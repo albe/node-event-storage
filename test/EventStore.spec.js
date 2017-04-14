@@ -228,6 +228,25 @@ describe('EventStore', function() {
 
     });
 
+    describe('getConsumer', function() {
+
+        it('returns a consumer for the given stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+
+            let consumer = eventstore.getConsumer('foo-bar', 'consumer1');
+            consumer.on('data', event => {
+                expect(event.id).to.be(2);
+                done();
+            });
+            eventstore.commit('foo', { foo: 'baz', id: 1 });
+            eventstore.commit('foo', { foo: 'bar', id: 2 });
+        });
+
+    });
+
     it('needs to be tested.');
 
 });

@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
 const Storage = require('./Storage');
+const Consumer = require('./Consumer');
+const stream = require('stream');
 
 const ExpectedVersion = {
     Any: -1,
@@ -12,6 +14,23 @@ const ExpectedVersion = {
 };
 
 class OptimisticConcurrencyError extends Error {}
+
+class EventUnwrapper extends stream.Transform {
+
+    constructor() {
+        super({ objectMode: true });
+    }
+
+    _transform(data, encoding, callback) {
+        if (data.stream && data.payload) {
+            this.push(data.payload);
+        } else {
+            this.push(data);
+        }
+        callback();
+    }
+
+}
 
 /**
  * An event store optimized for working with many streams.
@@ -258,6 +277,18 @@ class EventStore extends EventEmitter {
         this.streams[streamName].index.destroy();
         delete this.streams[streamName];
         this.emit('stream-deleted', streamName);
+    }
+
+    /**
+     * Get a durable consumer for the given stream that will keep receiving events from the last position.
+     *
+     * @param {string} streamName The name of the stream to consume.
+     * @param {string} identifier The unique identifying name of this consumer.
+     * @returns {Consumer} A durable consumer for the given stream.
+     */
+    getConsumer(streamName, identifier) {
+        let consumer = new Consumer(this.storage, 'stream-' + streamName, identifier);
+        return consumer.pipe(new EventUnwrapper());
     }
 
     /**
