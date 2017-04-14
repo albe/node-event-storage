@@ -332,7 +332,7 @@ class Storage extends EventEmitter {
             metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
         }
 
-        let index = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
+        let index = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
         if (typeof index.metadata.matcher === 'object') {
             matcher = index.metadata.matcher;
         } else {
@@ -371,7 +371,7 @@ class Storage extends EventEmitter {
         }
 
         let metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
-        let newIndex = new Index(this.EntryClass, indexName, Object.assign({}, this.indexOptions, metadata));
+        let newIndex = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
         try {
             this.forEachDocument((document, indexEntry) => {
                 if (this.matches(document, matcher)) {
