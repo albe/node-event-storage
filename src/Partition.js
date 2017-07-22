@@ -29,7 +29,7 @@ function pad(str, len, char = ' ') {
  */
 function hash(str) {
     if (str.length === 0) return 0;
-    var hash = 5381,
+    let hash = 5381,
         i    = str.length;
 
     while(i) {
