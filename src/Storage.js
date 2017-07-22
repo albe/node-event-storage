@@ -1,4 +1,5 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const mkdirpSync = require('mkdirp').sync;
 const path = require('path');
 const EventEmitter = require('events');
@@ -29,6 +30,7 @@ class Storage extends EventEmitter {
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      * @param {function(Object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
      * @param {Object} [config.indexOptions] An options object that should be passed to all indexes on construction.
+     * @param {string} [config.privateKey] A private key that is used to verify matchers retrieved from indexes.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -44,10 +46,17 @@ class Storage extends EventEmitter {
             dataDirectory: '.',
             indexFile: this.storageFile + '.index',
             indexOptions: {},
+            privateKey: ''
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
         this.partitioner = config.partitioner;
+
+        this.hmac = string => {
+            const hmac = crypto.createHmac('sha256', config.privateKey);
+            hmac.update(string);
+            return hmac.digest('hex');
+        };
 
         this.dataDirectory = path.resolve(config.dataDirectory);
         if (!fs.existsSync(this.dataDirectory)) {
@@ -58,6 +67,8 @@ class Storage extends EventEmitter {
 
         this.indexOptions = config.indexOptions;
         this.indexOptions.dataDirectory = this.indexDirectory;
+        // Safety precaution to prevent accidentially restricting main index
+        delete this.indexOptions.matcher;
         this.index = new Index(config.indexFile, this.indexOptions);
         this.secondaryIndexes = {};
 
@@ -310,6 +321,16 @@ class Storage extends EventEmitter {
     }
 
     /**
+     * @private
+     * @param {Object|function} matcher The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
+     * @returns {{metadata: {matcher: string, hmac: string}}}
+     */
+    buildMetadataForMatcher(matcher) {
+        const matcherString = typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString();
+        return { metadata: { matcher: matcherString, hmac: this.hmac(matcherString) } };
+    }
+
+    /**
      * Open an existing index.
      *
      * @api
@@ -317,6 +338,7 @@ class Storage extends EventEmitter {
      * @param {Object|function} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
      * @returns {Index}
      * @throws {Error} if the index with that name does not exist.
+     * @throws {Error} if the HMAC for the matcher does not match.
      */
     openIndex(name, matcher) {
         if (name in this.secondaryIndexes) {
@@ -329,14 +351,17 @@ class Storage extends EventEmitter {
         }
         let metadata;
         if (matcher) {
-            metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
+            metadata = this.buildMetadataForMatcher(matcher);
         }
 
         let index = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
         if (typeof index.metadata.matcher === 'object') {
             matcher = index.metadata.matcher;
         } else {
-            matcher = eval('(' + index.metadata.matcher + ')');
+            if (index.metadata.hmac !== this.hmac(index.metadata.matcher)) {
+                throw new Error('Invalid HMAC for matcher.');
+            }
+            matcher = eval('(' + index.metadata.matcher + ')').bind({});
         }
         this.secondaryIndexes[name] = { index, matcher };
         index.open();
@@ -370,8 +395,8 @@ class Storage extends EventEmitter {
             throw new Error('Need to specify a matcher.');
         }
 
-        let metadata = { metadata: { matcher: typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString() } };
-        let newIndex = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
+        const metadata = this.buildMetadataForMatcher(matcher);
+        const newIndex = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
         try {
             this.forEachDocument((document, indexEntry) => {
                 if (this.matches(document, matcher)) {
