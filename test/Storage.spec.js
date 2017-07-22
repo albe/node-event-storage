@@ -334,6 +334,20 @@ describe('Storage', function() {
             expect(index.length).to.be(2);
         });
 
+        it('throws when hmac does not validate matcher from existing index', function() {
+            storage = new Storage({ dataDirectory: dataDir, privateKey: 'foo' });
+            storage.open();
+            let index = storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
+            storage.write({type: 'Foo'});
+            expect(index.length).to.be(1);
+            storage.close();
+
+            storage = new Storage({ dataDirectory: dataDir, privateKey: 'bar' });
+            storage.open();
+
+            expect(() => storage.ensureIndex('foo', (doc) => doc.type === 'Foo')).to.throwError();
+        });
+
         it('throws when reopening with different matcher', function() {
             storage = new Storage({ dataDirectory: dataDir });
             storage.open();
