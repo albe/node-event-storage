@@ -59,7 +59,7 @@ Using it as queryable log storage.
 ```javascript
 const EventStore = require('event-storage');
 
-var eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
+const eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
 eventstore.on('ready', () => {
     ...
     eventstore.commit('my-stream', [{ foo: 'bar' }], () => {
