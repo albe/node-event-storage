@@ -210,7 +210,7 @@ describe('Storage', function() {
             storage.open();
 
             let documents = storage.readRange(-4);
-            let i = 6;
+            let i = 7;
             for (let doc of documents) {
                 expect(doc).to.eql({ foo: i++ });
             }
@@ -227,12 +227,12 @@ describe('Storage', function() {
             storage.close();
             storage.open();
 
-            let documents = storage.readRange(1, -4);
+            let documents = storage.readRange(1, -4);   // readRange(1, 7)
             let i = 1;
             for (let doc of documents) {
                 expect(doc).to.eql({ foo: i++ });
             }
-            expect(i).to.be(7);
+            expect(i).to.be(8);
         });
 
         it('can read a range from secondary index', function() {

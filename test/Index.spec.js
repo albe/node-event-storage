@@ -91,6 +91,17 @@ describe('Index', function() {
             expect(index.get(51)).to.be(false);
         });
 
+        it('can read entry from the end', function() {
+            index = new Index('test/data/.index');
+            for (let i = 1; i <= 50; i++) {
+                index.add(new Index.Entry(i, i));
+            }
+            index.close();
+            index.open();
+            let entry = index.get(-1);
+            expect(entry.number).to.be(50);
+        });
+
         it('returns false on closed index', function() {
             index = new Index('test/data/.index');
             index.add(new Index.Entry(1, 1));
@@ -154,8 +165,9 @@ describe('Index', function() {
             index.close();
             index.open();
             let entries = index.range(-15);
+            expect(entries.length).to.be(15);
             for (let i = 0; i < entries.length; i++) {
-                expect(entries[i].number).to.be(50 - 15 + i);
+                expect(entries[i].number).to.be(36 + i);
             }
         });
 
@@ -167,7 +179,7 @@ describe('Index', function() {
             index.close();
             index.open();
             let entries = index.range(1, -15);
-            expect(entries.length).to.be(35);
+            expect(entries.length).to.be(36);   // 36 because end is inclusive
             for (let i = 0; i < entries.length; i++) {
                 expect(entries[i].number).to.be(1 + i);
             }

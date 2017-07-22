@@ -407,6 +407,7 @@ class Index {
      * @returns {Entry|boolean} The entry at the given index position or false if out of bounds.
      */
     get(index) {
+        if (index < 0) index += this.length + 1;
         if (index < 1 || index > this.length) {
             return false;
         }
@@ -445,9 +446,9 @@ class Index {
      * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
     range(from, until) {
-        if (from < 0) from += this.length;
+        if (from < 0) from += this.length + 1;
         until = until || this.length;
-        if (until < 0) until += this.length;
+        if (until < 0) until += this.length + 1;
 
         if (!this.validRange(from, until)) {
             return false;
