@@ -149,6 +149,8 @@ writer is not yet guaranteed by the storage itself however.
 Reads are guaranteed to be isolated due to the append-only nature and a read only ever seeing writes that have finished
 (not necessarily flushed - i.e. Dirty Reads) at the point of the read. Multiple reads can happen without blocking writes.
 
+If Dirty Reads are not wanted, they can be disabled with the storage configuration option `dirtyReads` set to false.
+
 t.b.d. Dirty Reads, Lost Updates, Non-Repeatable Reads, Phantom Read
 
 #### Durability
