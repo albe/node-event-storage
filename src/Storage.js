@@ -28,6 +28,7 @@ class Storage extends EventEmitter {
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
+     * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {function(Object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
      * @param {Object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.privateKey] A private key that is used to verify matchers retrieved from indexes.
@@ -96,7 +97,8 @@ class Storage extends EventEmitter {
             readBufferSize: DEFAULT_READ_BUFFER_SIZE,
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
-            syncOnFlush: false
+            syncOnFlush: false,
+            dirtyReads: true
         };
         this.partitionConfig = Object.assign(defaults, config);
         this.partitions = {};

@@ -66,6 +66,7 @@ class Partition {
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
+     * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      */
     constructor(name, config = {}) {
         if (!name) {
@@ -77,7 +78,8 @@ class Partition {
             readBufferSize: DEFAULT_READ_BUFFER_SIZE,
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
-            syncOnFlush: false
+            syncOnFlush: false,
+            dirtyReads: true
         };
         config = Object.assign(defaults, config);
         this.dataDirectory = path.resolve(config.dataDirectory);
@@ -93,6 +95,7 @@ class Partition {
         this.writeBufferSize = config.writeBufferSize >>> 0;
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0;
         this.syncOnFlush = !!config.syncOnFlush;
+        this.dirtyReads = !!config.dirtyReads;
     }
 
     /**
@@ -303,7 +306,7 @@ class Partition {
         let bufferLength = this.readBufferLength;
 
         // Handle the case when data that is still in write buffer is supposed to be read
-        if (this.writeBufferCursor > 0 && position >= this.size - this.writeBufferCursor) {
+        if (this.dirtyReads && this.writeBufferCursor > 0 && position >= this.size - this.writeBufferCursor) {
             buffer = this.writeBuffer;
             bufferPos = this.size - this.writeBufferCursor;
             bufferLength = this.writeBufferCursor;
@@ -313,6 +316,8 @@ class Partition {
         if (bufferPos < 0 || bufferCursor < 0 || bufferCursor + 10 > bufferLength) {
             this.fillBuffer(position);
             bufferCursor = 0;
+            buffer = this.readBuffer;
+            bufferLength = this.readBufferLength;
         }
         return { buffer, cursor: bufferCursor, length: bufferLength };
     }
@@ -336,6 +341,10 @@ class Partition {
             return false;
         }
         let reader = this.prepareReadBuffer(position);
+
+        if (reader.length < (size || 1) + 10) {
+            return false;
+        }
 
         let dataPosition = reader.cursor + 10;
         let dataLength = this.readDataLength(reader.buffer, reader.cursor, position, size);

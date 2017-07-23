@@ -106,6 +106,13 @@ describe('Partition', function() {
             expect(partition.readFrom(position, 6)).to.be('foobar');
         });
 
+        it('can disable dirty reads', function() {
+            partition = new Partition('.part', { dataDirectory: 'test/data', dirtyReads: false });
+            partition.open();
+            let position = partition.write('foobar');
+            expect(partition.readFrom(position, 6)).to.be(false);
+        });
+
         it('validates document size', function() {
             partition.open();
             for (let i = 0; i < 10; i++) {
