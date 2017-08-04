@@ -18,7 +18,7 @@ describe('Partition', function() {
 
     function fillPartition(num, documentBuilder) {
         let lastposition;
-        for (let i = 0; i < num; i++) {
+        for (let i = 1; i <= num; i++) {
             lastposition = partition.write(documentBuilder && documentBuilder(i) || 'foobar');
         }
         return lastposition;
