@@ -333,7 +333,7 @@ class Partition {
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
-    readFrom(position, size) {
+    readFrom(position, size = 0) {
         if (!this.fd) {
             return false;
         }
@@ -342,7 +342,7 @@ class Partition {
         }
         let reader = this.prepareReadBuffer(position);
 
-        if (reader.length < (size || 1) + 10) {
+        if (reader.length < size + 10) {
             return false;
         }
 
