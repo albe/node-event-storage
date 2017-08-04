@@ -444,7 +444,7 @@ describe('Storage', function() {
             expect(storage.length).to.be(6);
             expect(index.length).to.be(3);
 
-            let documents = storage.readRange(1, 0, index);
+            let documents = storage.readRange(1, -1, index);
             let i = 2;
             for (let doc of documents) {
                 expect(doc).to.eql({ foo: i });
