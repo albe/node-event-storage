@@ -353,15 +353,15 @@ class Index {
      * @returns {Array<Entry>|boolean} An array of the index entries in the given range or false on error.
      */
     readRange(from, until) {
+        if (!this.fd) {
+            return false;
+        }
+
         if (until < from) {
             return false;
         }
         if (until === from) {
             return this.read(from);
-        }
-
-        if (!this.fd) {
-            return false;
         }
 
         from--;
@@ -400,6 +400,19 @@ class Index {
     }
 
     /**
+     * @private
+     * @param {number} index The 1-based index position to wrap around if < 0 and check against the bounds.
+     * @returns {number|boolean} The wrapped index or false if index out of bounds.
+     */
+    wrapAndCheck(index) {
+        if (index < 0) index += this.length + 1;
+        if (index < 1 || index > this.length) {
+            return false;
+        }
+        return index;
+    }
+
+    /**
      * Get a single index entry at given position, checking the boundaries.
      *
      * @api
@@ -407,8 +420,8 @@ class Index {
      * @returns {Entry|boolean} The entry at the given index position or false if out of bounds.
      */
     get(index) {
-        if (index < 0) index += this.length + 1;
-        if (index < 1 || index > this.length) {
+        index = this.wrapAndCheck(index);
+        if (index === false) {
             return false;
         }
 
@@ -445,12 +458,11 @@ class Index {
      * @param {number} [until] The 1-based index position until where to get entries to (inclusive). If < 0 will get until that position from the end. Defaults to this.length.
      * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
-    range(from, until) {
-        if (from < 0) from += this.length + 1;
-        until = until || this.length;
-        if (until < 0) until += this.length + 1;
+    range(from, until = -1) {
+        from = this.wrapAndCheck(from);
+        until = this.wrapAndCheck(until);
 
-        if (!this.validRange(from, until)) {
+        if (from === false || until < from) {
             return false;
         }
 
