@@ -6,3 +6,5 @@ node_js:
 
 install:
   - npm install
+
+after_success: npm run coverage
