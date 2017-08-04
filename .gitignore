@@ -6,3 +6,5 @@ node_modules
 /bench
 /*test.*
 /.flowconfig
+/coverage
+/.nyc_output
