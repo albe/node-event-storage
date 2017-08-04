@@ -43,6 +43,10 @@ describe('EventStream', function() {
         expect(stream.events).to.eql(events);
     });
 
+    it('returns all events consistently', function(){
+        expect(stream.events).to.eql(stream.events);
+    });
+
     it('can be iterated with for .. of', function(){
         let i = 0;
         for (let event of stream) {
