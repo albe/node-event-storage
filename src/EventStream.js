@@ -29,7 +29,7 @@ class EventStream extends stream.Readable {
             if (maxRevision >= 0) maxRevision++;
             this.iterator = this.eventStore.storage.readRange(minRevision, maxRevision, streamIndex);
         } else {
-            this.iterator = { next() { return { done: true } } };
+            this.iterator = { next() { return { done: true }; } };
         }
     }
 

@@ -7,6 +7,7 @@ describe('EventStream', function() {
     const events = ['foo', 'bar', 'baz'];
 
     beforeEach(function () {
+        // This is pretty ugly testing internals, but that's only because we extracted this ugliness out of the EventStore
         mockEventStore = {
             streams: {
                 'foo': {
@@ -14,7 +15,9 @@ describe('EventStream', function() {
                 }
             },
             storage: {
-                *readRange() {
+                *readRange(from, until = -1) {
+                    mockEventStore.storage.from = from;
+                    mockEventStore.storage.until = until;
                     for (let event of events) {
                         yield { stream: 'foo', payload: event, metadata: { occuredAt: 12345 } };
                     }
@@ -52,6 +55,27 @@ describe('EventStream', function() {
         stream.on('data', (event) => {
             expect(event).to.be(events[i++]);
         });
+    });
+
+    it('adjusts revisions to 1-based index', function(){
+        stream = new EventStream('foo', mockEventStore, 0, 1);
+        const events = stream.events;
+
+        expect(mockEventStore.storage.from).to.be(1);
+        expect(mockEventStore.storage.until).to.be(2);
+    });
+
+    it('leaves negative revisions untouched', function(){
+        stream = new EventStream('foo', mockEventStore, -1, -1);
+        const events = stream.events;
+
+        expect(mockEventStore.storage.from).to.be(-1);
+        expect(mockEventStore.storage.until).to.be(-1);
+    });
+
+    it('is empty when stream does not exist', function(){
+        stream = new EventStream('bar', mockEventStore);
+        expect(stream.events).to.be.eql([]);
     });
 
     describe('forEach', function(){
