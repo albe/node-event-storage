@@ -69,7 +69,7 @@ class Partition {
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      */
     constructor(name, config = {}) {
-        if (!name) {
+        if (!name || typeof name !== 'string') {
             throw new Error('Must specify a partition name.');
         }
 
