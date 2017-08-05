@@ -22,7 +22,7 @@ class EventStream extends stream.Readable {
         }
 
         this.name = name;
-        if (this.eventStore.streams[name]) {
+        if (eventStore.streams[name]) {
             let streamIndex = eventStore.streams[name].index;
             if (minRevision >= 0) minRevision++;
             if (maxRevision >= 0) maxRevision++;
