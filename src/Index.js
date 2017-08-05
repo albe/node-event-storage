@@ -405,6 +405,7 @@ class Index {
      * @returns {number|boolean} The wrapped index or false if index out of bounds.
      */
     wrapAndCheck(index) {
+        if (typeof index !== 'number') return false;
         if (index < 0) index += this.length + 1;
         if (index < 1 || index > this.length) {
             return false;
