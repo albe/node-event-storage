@@ -15,6 +15,14 @@ describe('Index', function() {
         index = undefined;
     });
 
+    function setupIndexWithEntries(num, indexMapper) {
+        index = new Index('test/data/.index');
+        for (let i = 1; i <= num; i++) {
+            index.add(new Index.Entry(indexMapper && indexMapper(i) || i, i));
+        }
+        return index;
+    }
+
     it('is opened on instanciation', function() {
         index = new Index('test/data/.index');
         expect(index.isOpen()).to.be(true);
@@ -55,10 +63,7 @@ describe('Index', function() {
     describe('write', function() {
 
         it('appends entries sequentially', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 25; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(25);
             index.close();
             index.open();
             let entries = index.all();
@@ -81,39 +86,29 @@ describe('Index', function() {
     describe('get', function() {
 
         it('returns false on out of bounds position', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(5);
             index.close();
             index.open();
             expect(index.get(0)).to.be(false);
-            expect(index.get(51)).to.be(false);
+            expect(index.get(index.length+1)).to.be(false);
         });
 
         it('can read entry from the end', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            setupIndexWithEntries(5);
             index.close();
             index.open();
             let entry = index.get(-1);
-            expect(entry.number).to.be(50);
+            expect(entry.number).to.be(index.length);
         });
 
         it('returns false on closed index', function() {
-            index = new Index('test/data/.index');
-            index.add(new Index.Entry(1, 1));
+            index = setupIndexWithEntries(1);
             index.close();
             expect(index.get(1)).to.be(false);
         });
 
         it('can random read entries', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 10; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(10);
             index.close();
             index.open();
             let entry = index.get(5);
@@ -125,10 +120,7 @@ describe('Index', function() {
     describe('range', function() {
 
         it('returns false on out of bounds range position', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(50);
             index.close();
             index.open();
             expect(index.range(0)).to.be(false);
@@ -138,17 +130,13 @@ describe('Index', function() {
         });
 
         it('returns false on closed index', function() {
-            index = new Index('test/data/.index');
-            index.add(new Index.Entry(1, 1));
+            index = setupIndexWithEntries(1);
             index.close();
             expect(index.range(1)).to.be(false);
         });
 
         it('can read an arbitrary range of entries', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(50);
             index.close();
             index.open();
             let entries = index.range(21, 37);
@@ -158,10 +146,7 @@ describe('Index', function() {
         });
 
         it('can read a range of entries from the end', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(50);
             index.close();
             index.open();
             let entries = index.range(-15);
@@ -172,10 +157,7 @@ describe('Index', function() {
         });
 
         it('can read a range of entries until a distance from the end', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(50);
             index.close();
             index.open();
             let entries = index.range(1, -15);
@@ -190,34 +172,22 @@ describe('Index', function() {
     describe('find', function() {
 
         it('returns 0 if no entry is lower or equal searched number', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(50 + i, i));
-            }
-            expect(index.find(50)).to.be(0);
+            index = setupIndexWithEntries(5, i => 5 + i);
+            expect(index.find(index.length)).to.be(0);
         });
 
         it('returns last entry if all entries are higher searched number', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
-            expect(index.find(51)).to.be(50);
+            index = setupIndexWithEntries(5);
+            expect(index.find(index.length+1)).to.be(index.length);
         });
 
         it('returns the entry number on exact match', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
-            expect(index.find(25)).to.be(25);
+            index = setupIndexWithEntries(5);
+            expect(index.find(2)).to.be(2);
         });
 
         it('returns the highest entry number lower than the searched number', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i*2, i));
-            }
+            index = setupIndexWithEntries(50, i => 2*i);
             expect(index.find(25)).to.be(12);
         });
 
@@ -226,49 +196,83 @@ describe('Index', function() {
     describe('truncate', function() {
 
         it('truncates after the given index position', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(5);
             index.close();
             index.open();
 
-            index.truncate(25);
-            expect(index.length).to.be(25);
+            index.truncate(2);
+            expect(index.length).to.be(2);
 
             index.close();
             index.open();
-            expect(index.length).to.be(25);
+            expect(index.length).to.be(2);
         });
 
         it('correctly truncates after unflushed entries', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(5);
 
-            index.truncate(25);
-            expect(index.length).to.be(25);
+            index.truncate(2);
+            expect(index.length).to.be(2);
 
             index.close();
             index.open();
-            expect(index.length).to.be(25);
+            expect(index.length).to.be(2);
         });
 
         it('does nothing if truncating after index length', function() {
-            index = new Index('test/data/.index');
-            for (let i = 1; i <= 50; i++) {
-                index.add(new Index.Entry(i, i));
-            }
+            index = setupIndexWithEntries(5);
             index.close();
             index.open();
 
-            index.truncate(60);
-            expect(index.length).to.be(50);
+            index.truncate(6);
+            expect(index.length).to.be(5);
 
             index.close();
             index.open();
-            expect(index.length).to.be(50);
+            expect(index.length).to.be(5);
+        });
+
+        it('truncates whole index if given negative position', function() {
+            index = setupIndexWithEntries(5);
+            index.close();
+            index.open();
+
+            index.truncate(-5);
+            expect(index.length).to.be(0);
+
+            index.close();
+            index.open();
+            expect(index.length).to.be(0);
+        });
+
+    });
+
+    describe('validRange', function(){
+
+        it('returns false for out of range from positions', function(){
+            index = setupIndexWithEntries(5);
+            expect(index.validRange(0, 1)).to.be(false);
+            expect(index.validRange(-1, 1)).to.be(false);
+            expect(index.validRange(index.length + 1, index.length + 2)).to.be(false);
+        });
+
+        it('returns false when from greater until', function(){
+            index = setupIndexWithEntries(5);
+            expect(index.validRange(2, 1)).to.be(false);
+            expect(index.validRange(1, 0)).to.be(false);
+        });
+
+        it('returns false for out of range until positions', function(){
+            index = setupIndexWithEntries(5);
+            expect(index.validRange(1, -1)).to.be(false);
+            expect(index.validRange(1, index.length +1)).to.be(false);
+        });
+
+        it('returns true for valid range positions', function(){
+            index = setupIndexWithEntries(5);
+            expect(index.validRange(1, 1)).to.be(true);
+            expect(index.validRange(1, index.length)).to.be(true);
+            expect(index.validRange(index.length, index.length)).to.be(true);
         });
 
     });

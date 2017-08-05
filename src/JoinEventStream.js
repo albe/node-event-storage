@@ -17,10 +17,10 @@ class JoinEventStream extends EventStream {
         super(name, eventStore, minRevision = 0, maxRevision = -1);
         this._next = new Array(streams.length);
         this.iterator = streams.map(streamName => {
-            let streamIndex = this.eventStore.streams[streamName].index;
+            let streamIndex = eventStore.streams[streamName].index;
             let from = minRevision > 0 ? streamIndex.find(minRevision) : 1;
             let until = maxRevision > 0 ? streamIndex.find(maxRevision) : 0;
-            return this.eventStore.storage.readRange(from, until, streamIndex);
+            return eventStore.storage.readRange(from, until, streamIndex);
         });
     }
 

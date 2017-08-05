@@ -22,12 +22,13 @@ class EventStream extends stream.Readable {
         }
 
         this.name = name;
-        this.eventStore = eventStore;
-        if (this.eventStore.streams[name]) {
-            let streamIndex = this.eventStore.streams[name].index;
-            this.iterator = this.eventStore.storage.readRange(minRevision + 1, maxRevision + 1, streamIndex);
+        if (eventStore.streams[name]) {
+            let streamIndex = eventStore.streams[name].index;
+            if (minRevision >= 0) minRevision++;
+            if (maxRevision >= 0) maxRevision++;
+            this.iterator = eventStore.storage.readRange(minRevision, maxRevision, streamIndex);
         } else {
-            this.iterator = { next() { return { done: true } } };
+            this.iterator = { next() { return { done: true }; } };
         }
     }
 
