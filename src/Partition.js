@@ -133,7 +133,7 @@ class Partition {
         this.writeBufferDocuments = 0;
         this.flushCallbacks = [];
 
-        let stat = fs.statSync(this.fileName);
+        const stat = fs.statSync(this.fileName);
         this.headerSize = HEADER_MAGIC.length + 1;
         if (stat.size === 0) {
             fs.writeSync(this.fd, HEADER_MAGIC + "\n");
@@ -141,7 +141,7 @@ class Partition {
             return true;
         }
 
-        let headerBuffer = Buffer.allocUnsafe(HEADER_MAGIC.length);
+        const headerBuffer = Buffer.allocUnsafe(HEADER_MAGIC.length);
         fs.readSync(this.fd, headerBuffer, 0, HEADER_MAGIC.length, 0);
         if (headerBuffer.toString() !== HEADER_MAGIC) {
             this.close();
@@ -229,9 +229,8 @@ class Partition {
         if (!this.fd) {
             return false;
         }
-        let dataSize = Buffer.byteLength(data, 'utf8');
-        let dataToWrite = pad(dataSize.toString(), 10) + data.toString() + "\n";
-        dataSize += 11;
+        const dataSize = Buffer.byteLength(data, 'utf8') + 11;
+        const dataToWrite = pad(dataSize.toString(), 10) + data.toString() + "\n";
 
         this.flushIfWriteBufferTooSmall(dataSize);
         if (dataSize > this.writeBuffer.byteLength) {
@@ -246,7 +245,7 @@ class Partition {
                 this.flush();
             }
         }
-        let dataPosition = this.size;
+        const dataPosition = this.size;
         this.size += dataSize;
         return dataPosition;
     }
@@ -277,8 +276,8 @@ class Partition {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readDataLength(buffer, offset, position, size) {
-        let dataLengthStr = buffer.toString('utf8', offset, offset + 10);
-        let dataLength = parseInt(dataLengthStr, 10);
+        const dataLengthStr = buffer.toString('utf8', offset, offset + 10);
+        const dataLength = parseInt(dataLengthStr, 10);
         if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
             throw new Error(`Error reading document size from ${position}, got ${dataLength}.`);
         }
@@ -340,18 +339,18 @@ class Partition {
         if (position + 10 >= this.size) {
             return false;
         }
-        let reader = this.prepareReadBuffer(position);
+        const reader = this.prepareReadBuffer(position);
 
         if (reader.length < size + 10) {
             return false;
         }
 
         let dataPosition = reader.cursor + 10;
-        let dataLength = this.readDataLength(reader.buffer, reader.cursor, position, size);
+        const dataLength = this.readDataLength(reader.buffer, reader.cursor, position, size);
 
         if (dataLength + 10 > reader.buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);
-            let tempReadBuffer = Buffer.allocUnsafe(dataLength);
+            const tempReadBuffer = Buffer.allocUnsafe(dataLength);
             fs.readSync(this.fd, tempReadBuffer, 0, dataLength, this.headerSize + position + 10);
             return tempReadBuffer.toString('utf8');
         }
@@ -398,7 +397,7 @@ class Partition {
             throw new Error('Can only truncate on valid document boundaries.');
         }
         // copy all truncated documents to some delete log
-        let deletedBranch = new Partition(this.name + '-' + after + '.branch', { dataDirectory: this.dataDirectory });
+        const deletedBranch = new Partition(this.name + '-' + after + '.branch', { dataDirectory: this.dataDirectory });
         deletedBranch.open();
         while (data) {
             deletedBranch.write(data);

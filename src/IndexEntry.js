@@ -51,10 +51,10 @@ class Entry extends Array {
     }
 
     static fromBuffer(buffer, offset = 0) {
-        let number     = buffer.readUInt32LE(offset, true);
-        let position   = buffer.readUInt32LE(offset +  4, true);
-        let size       = buffer.readUInt32LE(offset +  8, true);
-        let partition  = buffer.readUInt32LE(offset + 12, true);
+        const number     = buffer.readUInt32LE(offset, true);
+        const position   = buffer.readUInt32LE(offset +  4, true);
+        const size       = buffer.readUInt32LE(offset +  8, true);
+        const partition  = buffer.readUInt32LE(offset + 12, true);
         return new this(number, position, size, partition);
     }
 

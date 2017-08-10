@@ -17,9 +17,9 @@ class JoinEventStream extends EventStream {
         super(name, eventStore, minRevision = 0, maxRevision = -1);
         this._next = new Array(streams.length);
         this.iterator = streams.map(streamName => {
-            let streamIndex = eventStore.streams[streamName].index;
-            let from = minRevision > 0 ? streamIndex.find(minRevision) : 1;
-            let until = maxRevision > 0 ? streamIndex.find(maxRevision) : 0;
+            const streamIndex = eventStore.streams[streamName].index;
+            const from = minRevision > 0 ? streamIndex.find(minRevision) : 1;
+            const until = maxRevision > 0 ? streamIndex.find(maxRevision) : 0;
             return eventStore.storage.readRange(from, until, streamIndex);
         });
     }
@@ -32,7 +32,7 @@ class JoinEventStream extends EventStream {
         let nextIndex = -1;
         this._next.forEach((value, index) => {
             if (typeof value === 'undefined') {
-                let next = this.iterator[index].next();
+                const next = this.iterator[index].next();
                 value = this._next[index] = next.done ? false : next.value;
             }
             if (value === false) {
@@ -45,7 +45,7 @@ class JoinEventStream extends EventStream {
         if (nextIndex === -1) {
             return false;
         }
-        let next = this._next[nextIndex];
+        const next = this._next[nextIndex];
         delete this._next[nextIndex];
         return next;
     }
