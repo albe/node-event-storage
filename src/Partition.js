@@ -229,8 +229,9 @@ class Partition {
         if (!this.fd) {
             return false;
         }
-        const dataSize = Buffer.byteLength(data, 'utf8') + 11;
+        let dataSize = Buffer.byteLength(data, 'utf8');
         const dataToWrite = pad(dataSize.toString(), 10) + data.toString() + "\n";
+        dataSize += 11;
 
         this.flushIfWriteBufferTooSmall(dataSize);
         if (dataSize > this.writeBuffer.byteLength) {
