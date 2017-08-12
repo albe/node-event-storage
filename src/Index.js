@@ -502,13 +502,13 @@ class Index {
      */
     find(number, min = false) {
         let low = 1;
-        // We only need to search until the searched number because entry.number is always >= number
+        // We only need to search until the searched number because entry.number is always >= position
         let high = Math.min(this.length, number);
 
-        if (this.get(low).number >= number) {
+        if (this.get(low).number > number) {
             return min ? low : 0;
         }
-        if (this.get(high).number <= number) {
+        if (this.get(high).number < number) {
             return min ? 0 : high;
         }
 

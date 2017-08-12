@@ -293,7 +293,9 @@ describe('Index', function() {
 
         it('returns the entry number on exact match', function() {
             index = setupIndexWithEntries(5);
-            expect(index.find(2)).to.be(2);
+            for (let i = 1; i <= 5; i++) {
+                expect(index.find(i)).to.be(i);
+            }
         });
 
         it('returns the highest entry number lower than the searched number', function() {
