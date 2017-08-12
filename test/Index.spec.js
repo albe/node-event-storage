@@ -291,6 +291,11 @@ describe('Index', function() {
             expect(index.find(index.length+1)).to.be(index.length);
         });
 
+        it('returns 0 if all entries are lower searched number with min=true', function() {
+            index = setupIndexWithEntries(5);
+            expect(index.find(index.length+1, true)).to.be(0);
+        });
+
         it('returns the entry number on exact match', function() {
             index = setupIndexWithEntries(5);
             for (let i = 1; i <= 5; i++) {
