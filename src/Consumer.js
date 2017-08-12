@@ -32,7 +32,7 @@ class Consumer extends stream.Readable {
         this.storage = storage;
         this.index = this.storage.openIndex(indexName);
         this.indexName = indexName;
-        let consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
+        const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
         if (!fs.existsSync(consumerDirectory)) {
             mkdirpSync(consumerDirectory);
         }
@@ -94,8 +94,8 @@ class Consumer extends stream.Readable {
                     return;
                 }
 
-                let maxBatchPosition = Math.min(this.position + MAX_CATCHUP_BATCH + 1, this.index.length);
-                let documents = this.storage.readRange(this.position + 1, maxBatchPosition, this.index);
+                const maxBatchPosition = Math.min(this.position + MAX_CATCHUP_BATCH + 1, this.index.length);
+                const documents = this.storage.readRange(this.position + 1, maxBatchPosition, this.index);
                 for (let document of documents) {
                     ++this.position;
                     if (!this.push(document)) {

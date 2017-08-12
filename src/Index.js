@@ -103,7 +103,7 @@ class Index {
      * @throws {Error} If the file is corrupt or can not be read correctly.
      */
     checkFile() {
-        let stat = fs.fstatSync(this.fd);
+        const stat = fs.fstatSync(this.fd);
         if (!stat) {
             throw new Error(`Error stat'ing index file "${this.fileName}".`);
         }
@@ -118,7 +118,7 @@ class Index {
             stat.size -= this.readMetadata();
         }
 
-        let length = Math.floor(stat.size / this.EntryClass.size);
+        const length = Math.floor(stat.size / this.EntryClass.size);
         if (stat.size > length * this.EntryClass.size) {
             // Corrupt index file
             throw new Error('Index file is corrupt!');
@@ -177,10 +177,10 @@ class Index {
         }
         let metadata = JSON.stringify(this.metadata);
         let metadataSize = Buffer.byteLength(metadata, 'utf8');
-        let pad = (16 - ((8 + 4 + metadataSize + 1) % 16)) % 16;
+        const pad = (16 - ((8 + 4 + metadataSize + 1) % 16)) % 16;
         metadata += ' '.repeat(pad) + "\n";
         metadataSize += pad + 1;
-        let metadataBuffer = Buffer.allocUnsafe(8 + 4 + metadataSize);
+        const metadataBuffer = Buffer.allocUnsafe(8 + 4 + metadataSize);
         metadataBuffer.write(HEADER_MAGIC, 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(metadataSize, 8, true);
         metadataBuffer.write(metadata, 8 + 4, metadataSize, 'utf8');
@@ -198,23 +198,23 @@ class Index {
      * @throws {Error} if metadata is set and the read metadata does not match.
      */
     readMetadata() {
-        let headerBuffer = Buffer.allocUnsafe(8 + 4);
+        const headerBuffer = Buffer.allocUnsafe(8 + 4);
         fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
-        let headerMagic = headerBuffer.toString('utf8', 0, 8);
+        const headerMagic = headerBuffer.toString('utf8', 0, 8);
         if (headerMagic !== HEADER_MAGIC) {
             if (headerMagic.substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
                 throw new Error(`Invalid file version. The index ${this.fileName} was created with a different library version.`);
             }
             throw new Error('Invalid file header.');
         }
-        let metadataSize = headerBuffer.readUInt32BE(8, true);
+        const metadataSize = headerBuffer.readUInt32BE(8, true);
         if (metadataSize < 3) {
             throw new Error('Invalid metadata size.');
         }
 
-        let metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
+        const metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
         fs.readSync(this.fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
-        let metadata = metadataBuffer.toString('utf8').trim();
+        const metadata = metadataBuffer.toString('utf8').trim();
 
         // Verify metadata if it was set in constructor
         if (this.metadata && JSON.stringify(this.metadata) !== metadata) {
@@ -367,10 +367,10 @@ class Index {
         from--;
         until--;
 
-        let readFrom = Math.max(this.readUntil + 1, from);
-        let amount = (until - readFrom + 1);
+        const readFrom = Math.max(this.readUntil + 1, from);
+        const amount = (until - readFrom + 1);
 
-        let readBuffer = Buffer.allocUnsafe(amount * this.EntryClass.size);
+        const readBuffer = Buffer.allocUnsafe(amount * this.EntryClass.size);
         let readSize = fs.readSync(this.fd, readBuffer, 0, readBuffer.byteLength, this.headerSize + readFrom * this.EntryClass.size);
         let index = 0;
         while (index < amount && readSize > 0) {
@@ -405,6 +405,7 @@ class Index {
      * @returns {number|boolean} The wrapped index or false if index out of bounds.
      */
     wrapAndCheck(index) {
+        if (typeof index !== 'number') return false;
         if (index < 0) index += this.length + 1;
         if (index < 1 || index > this.length) {
             return false;
@@ -466,7 +467,7 @@ class Index {
             return false;
         }
 
-        let readFrom = Math.max(this.readUntil + 1, from);
+        const readFrom = Math.max(this.readUntil + 1, from);
         let readUntil = until;
         while (readUntil >= readFrom && this.data[readUntil - 1]) readUntil--;
 
@@ -488,8 +489,8 @@ class Index {
         let low = 1;
         let high = this.data.length;
         while (low <= high) {
-            let mid = low + ((high - low) >> 1);
-            let entry = this.get(mid);
+            const mid = low + ((high - low) >> 1);
+            const entry = this.get(mid);
             if (entry.number === number) {
                 return mid;
             }

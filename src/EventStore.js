@@ -59,7 +59,7 @@ class EventStore extends EventEmitter {
             indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
             partitioner: (event) => event.stream
         };
-        let storageConfig = Object.assign(defaults, config.storageConfig);
+        const storageConfig = Object.assign(defaults, config.storageConfig);
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
 
         this.streams = {};
@@ -89,8 +89,8 @@ class EventStore extends EventEmitter {
             let matches;
             for (let file of files) {
                 if ((matches = file.match(/(stream-(.*))\.index$/)) !== null) {
-                    let streamName = matches[2];
-                    let index = this.storage.ensureIndex(matches[1]);
+                    const streamName = matches[2];
+                    const index = this.storage.ensureIndex(matches[1]);
                     this.streams[streamName] = { index };
                     this.emit('stream-available', streamName);
                 }
@@ -131,7 +131,7 @@ class EventStore extends EventEmitter {
      * @param {function} [callback] A function that will be executed when all events have been committed.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version.
      */
-    commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata, callback) {
+    commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
         if (!streamName) {
             throw new Error('Must specify a stream name for commit.');
         }
@@ -163,10 +163,10 @@ class EventStore extends EventEmitter {
             throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
         }
 
-        let commitId = uuid();
+        const commitId = uuid();
         let commitVersion = 0;
-        let committedAt = Date.now();
-        let commit = Object.assign({
+        const committedAt = Date.now();
+        const commit = Object.assign({
             commitId,
             committedAt
         }, metadata, {
@@ -250,8 +250,8 @@ class EventStore extends EventEmitter {
         if (streamName in this.streams) {
             throw new Error('Can not recreate stream!');
         }
-        let streamIndexName = 'stream-' + streamName;
-        let index = this.storage.ensureIndex(streamIndexName, matcher);
+        const streamIndexName = 'stream-' + streamName;
+        const index = this.storage.ensureIndex(streamIndexName, matcher);
         if (!index) {
             throw new Error(`Error creating stream index ${streamName}.`);
         }
@@ -287,7 +287,7 @@ class EventStore extends EventEmitter {
      * @returns {Consumer} A durable consumer for the given stream.
      */
     getConsumer(streamName, identifier) {
-        let consumer = new Consumer(this.storage, 'stream-' + streamName, identifier);
+        const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier);
         return consumer.pipe(new EventUnwrapper());
     }
 
@@ -302,7 +302,7 @@ class EventStore extends EventEmitter {
         let eventStream = this.getAllEvents(since);
         let storedEvent;
         while ((storedEvent = eventStream.next()) !== false) {
-            let { metadata, stream, payload } = storedEvent;
+            const { metadata, stream, payload } = storedEvent;
 
             if (!commit && metadata.commitVersion > 0) {
                 eventStream = this.getAllEvents(since - metadata.commitVersion);

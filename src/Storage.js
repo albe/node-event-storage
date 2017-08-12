@@ -103,13 +103,13 @@ class Storage extends EventEmitter {
         this.partitionConfig = Object.assign(defaults, config);
         this.partitions = {};
 
-        let files = fs.readdirSync(this.dataDirectory);
+        const files = fs.readdirSync(this.dataDirectory);
         for (let file of files) {
             if (file.substr(-6) === '.index') continue;
             if (file.substr(-7) === '.branch') continue;
             if (file.substr(0, this.storageFile.length) === this.storageFile) {
                 //console.log('Found existing partition', file);
-                let partition = new Partition(file, this.partitionConfig);
+                const partition = new Partition(file, this.partitionConfig);
                 this.partitions[partition.id] = partition;
             }
         }
@@ -179,7 +179,7 @@ class Storage extends EventEmitter {
          throw new Error('Corrupted index, needs to be rebuilt!');
          }*/
 
-        let entry = new Index.Entry(this.index.length + 1, position, size, partitionId);
+        const entry = new Index.Entry(this.index.length + 1, position, size, partitionId);
         this.index.add(entry, (indexPosition) => {
             this.emit('wrote', document, entry, indexPosition);
             if (typeof callback === 'function') return callback(indexPosition);
@@ -199,7 +199,7 @@ class Storage extends EventEmitter {
      */
     getPartition(partitionIdentifier) {
         if (typeof partitionIdentifier === 'string') {
-            let partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
+            const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
             partitionIdentifier = Partition.id(partitionName);
             if (!this.partitions[partitionIdentifier]) {
                 this.partitions[partitionIdentifier] = new Partition(partitionName, this.partitionConfig);
@@ -219,17 +219,17 @@ class Storage extends EventEmitter {
      * @returns {number} The 1-based document sequence number in the storage.
      */
     write(document, callback) {
-        let data = this.serializer.serialize(document).toString();
-        let dataSize = Buffer.byteLength(data, 'utf8');
+        const data = this.serializer.serialize(document).toString();
+        const dataSize = Buffer.byteLength(data, 'utf8');
 
-        let partitionName = this.partitioner(document, this.index.length + 1);
-        let partition = this.getPartition(partitionName);
-        let position = partition.write(data, callback);
+        const partitionName = this.partitioner(document, this.index.length + 1);
+        const partition = this.getPartition(partitionName);
+        const position = partition.write(data, callback);
 
         if (position === false) {
             throw new Error('Error writing document.');
         }
-        let indexEntry = this.addIndex(partition.id, position, dataSize, document);
+        const indexEntry = this.addIndex(partition.id, position, dataSize, document);
         this.forEachSecondaryIndex((index, name) => {
             index.add(indexEntry);
             this.emit('index-add', name, index.length, document);
@@ -247,7 +247,7 @@ class Storage extends EventEmitter {
      * @throws {Error} if the document at the given position can not be deserialized.
      */
     readFrom(partitionId, position, size) {
-        let partition = this.getPartition(partitionId);
+        const partition = this.getPartition(partitionId);
         let data;
         try {
             data = partition.readFrom(position);
@@ -269,7 +269,7 @@ class Storage extends EventEmitter {
     read(number, index) {
         index = index || this.index;
 
-        let entry = index.get(number);
+        const entry = index.get(number);
         if (entry === false) return false;
 
         return this.readFrom(entry.partition, entry.position, entry.size);
@@ -288,12 +288,12 @@ class Storage extends EventEmitter {
     *readRange(from, until, index) {
         index = index || this.index;
 
-        let entries = index.range(from, until);
+        const entries = index.range(from, until);
         if (entries === false) {
-            throw new Error('Range scan error.');
+            throw new Error(`Range scan error for range ${from} - ${until}.`);
         }
         for (let entry of entries) {
-            let document = this.readFrom(entry.partition, entry.position, entry.size);
+            const document = this.readFrom(entry.partition, entry.position, entry.size);
             yield document;
         }
     }
@@ -347,7 +347,7 @@ class Storage extends EventEmitter {
             return this.secondaryIndexes[name].index;
         }
 
-        let indexName = this.storageFile + '.' + name + '.index';
+        const indexName = this.storageFile + '.' + name + '.index';
         if (!fs.existsSync(path.join(this.indexDirectory, indexName))) {
             throw new Error(`Index "${name}" does not exist.`);
         }
@@ -356,7 +356,7 @@ class Storage extends EventEmitter {
             metadata = this.buildMetadataForMatcher(matcher);
         }
 
-        let index = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
+        const index = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
         if (typeof index.metadata.matcher === 'object') {
             matcher = index.metadata.matcher;
         } else {
@@ -388,7 +388,7 @@ class Storage extends EventEmitter {
             return this.secondaryIndexes[name].index;
         }
 
-        let indexName = this.storageFile + '.' + name + '.index';
+        const indexName = this.storageFile + '.' + name + '.index';
         if (fs.existsSync(path.join(this.indexDirectory, indexName))) {
             return this.openIndex(name, matcher);
         }
@@ -428,7 +428,7 @@ class Storage extends EventEmitter {
          2) truncate all partitions accordingly
          3) truncate/rewrite all indexes
          */
-        let entries = this.index.range(after + 1);  // We need the first entry that is cut off
+        const entries = this.index.range(after + 1);  // We need the first entry that is cut off
         if (entries === false || entries.length === 0) {
             return;
         }
@@ -436,8 +436,8 @@ class Storage extends EventEmitter {
         if (after === 0) {
             this.forEachPartition(partition => partition.truncate(0));
         } else {
-            let partitions = [];
-            let numPartitions = Object.keys(this.partitions).length;
+            const partitions = [];
+            const numPartitions = Object.keys(this.partitions).length;
             for (let entry of entries) {
                 if (partitions.indexOf(entry.partition) >= 0) continue;
                 partitions.push(entry.partition);
@@ -462,13 +462,13 @@ class Storage extends EventEmitter {
     forEachDocument(iterationHandler) {
         if (typeof iterationHandler !== 'function') return;
 
-        let entries = this.index.all();
+        const entries = this.index.all();
         if (entries === false) {
             return;
         }
 
         for (let entry of entries) {
-            let document = this.readFrom(entry.partition, entry.position, entry.size);
+            const document = this.readFrom(entry.partition, entry.position, entry.size);
             iterationHandler(document, entry);
         }
     }

@@ -23,7 +23,7 @@ class EventStream extends stream.Readable {
 
         this.name = name;
         if (eventStore.streams[name]) {
-            let streamIndex = eventStore.streams[name].index;
+            const streamIndex = eventStore.streams[name].index;
             if (minRevision >= 0) minRevision++;
             if (maxRevision >= 0) maxRevision++;
             this.iterator = eventStore.storage.readRange(minRevision, maxRevision, streamIndex);
@@ -91,7 +91,7 @@ class EventStream extends stream.Readable {
      * @private
      */
     _read() {
-        let next = this.next();
+        const next = this.next();
         this.push(next ? next.payload : null);
     }
 
