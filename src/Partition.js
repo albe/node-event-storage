@@ -145,7 +145,7 @@ class Partition {
         fs.readSync(this.fd, headerBuffer, 0, HEADER_MAGIC.length, 0);
         if (headerBuffer.toString() !== HEADER_MAGIC) {
             this.close();
-            if (headerBuffer.toString().substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
+            if (headerBuffer.toString().substr(0, 6) === HEADER_MAGIC.substr(0, 6)) {
                 throw new Error(`Invalid file version. The partition ${this.name} was created with a different library version.`);
             }
             throw new Error(`Invalid file header in partition ${this.name}.`);

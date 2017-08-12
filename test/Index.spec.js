@@ -15,8 +15,12 @@ describe('Index', function() {
         index = undefined;
     });
 
-    function setupIndexWithEntries(num, indexMapper) {
-        index = new Index('test/data/.index');
+    function setupIndexWithEntries(num, indexMapper, options) {
+        if (typeof indexMapper === 'object') {
+            options = indexMapper;
+            indexMapper = undefined;
+        }
+        index = new Index('test.index', Object.assign({ dataDirectory: 'test/data' }, options));
         for (let i = 1; i <= num; i++) {
             index.add(new Index.Entry(indexMapper && indexMapper(i) || i, i));
         }
@@ -24,8 +28,13 @@ describe('Index', function() {
     }
 
     it('is opened on instanciation', function() {
-        index = new Index('test/data/.index');
+        index = setupIndexWithEntries();
         expect(index.isOpen()).to.be(true);
+    });
+
+    it('defaults name to ".index"', function() {
+        index = new Index({ dataDirectory: 'test/data' });
+        expect(index.name).to.be('.index');
     });
 
     it('recovers metadata on reopening', function() {
@@ -37,15 +46,54 @@ describe('Index', function() {
     });
 
     it('throws on opening an non-index file', function() {
-        let fd = fs.openSync('test/data/.index', 'a+');
-        fs.writeSync(fd, 'foo');
-        fs.closeSync(fd);
-        expect(function(){ new Index('test/data/.index') }).to.throwError();
+        fs.writeFileSync('test/data/.index', 'foo');
+        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid file header/);
+    });
+
+    it('throws on opening an index file with different version', function() {
+        fs.writeFileSync('test/data/.index', 'nesidx00');
+        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid file version/);
+    });
+
+    it('throws on opening an index file with wrong metadata size', function() {
+        const metadataBuffer = Buffer.allocUnsafe(8 + 4);
+        metadataBuffer.write("nesidx01", 0, 8, 'utf8');
+        metadataBuffer.writeUInt32BE(0, 8, true);
+        fs.writeFileSync('test/data/.index', metadataBuffer);
+
+        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata size/);
+    });
+
+    it('throws on opening an index file with too large metadata size', function() {
+        const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
+        metadataBuffer.write("nesidx01", 0, 8, 'utf8');
+        metadataBuffer.writeUInt32BE(255, 8, true);
+        metadataBuffer.write("{}\n", 12, 3, 'utf8');
+        fs.writeFileSync('test/data/.index', metadataBuffer);
+
+        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid index file/);
+    });
+
+    it('throws on opening an index file with invalid metadata', function() {
+        const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
+        metadataBuffer.write("nesidx01", 0, 8, 'utf8');
+        metadataBuffer.writeUInt32BE(255, 8, true);
+        metadataBuffer.write("{x$", 12, 3, 'utf8');
+        fs.writeFileSync('test/data/.index', metadataBuffer);
+
+        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata/);
     });
 
     it('throws on reopening with altered metadata', function() {
         index = new Index('test/data/.index', { metadata: { test: 'valueStays' } });
-        expect(function(){ new Index('test/data/.index', { metadata: { test: 'anotherValue' } }) }).to.throwError();
+        expect(() => index = new Index('test/data/.index', { metadata: { test: 'anotherValue' } })).to.throwError(/Index metadata mismatch/);
+    });
+
+    it('throws on opening with altered file', function() {
+        index = setupIndexWithEntries(5);
+        index.close();
+        fs.appendFileSync('test/data/test.index', 'foo');
+        expect(() => index = new Index('test/data/test.index')).to.throwError(/Index file is corrupt/);
     });
 
     describe('Entry', function() {
@@ -60,7 +108,7 @@ describe('Index', function() {
 
     });
 
-    describe('write', function() {
+    describe('add', function() {
 
         it('appends entries sequentially', function() {
             index = setupIndexWithEntries(25);
@@ -79,6 +127,21 @@ describe('Index', function() {
                 expect(number).to.be(position);
                 done();
             });
+        });
+
+        it('throws with invalid entry object', function() {
+            index = new Index('test/data/.index');
+            expect(() => index.add([1,2,3,4])).to.throwError(/Wrong entry object/);
+        });
+
+        it('throws with invalid entry size', function() {
+            index = new Index('test/data/.index');
+            class Entry extends Index.Entry {
+                static get size() {
+                    return 20;
+                }
+            }
+            expect(() => index.add(new Entry(1, 0))).to.throwError(/Invalid entry size/);
         });
 
     });
@@ -113,6 +176,16 @@ describe('Index', function() {
             index.open();
             let entry = index.get(5);
             expect(entry.number).to.be(5);
+        });
+
+        it('can read entries multiple times', function() {
+            index = setupIndexWithEntries(10);
+            index.close();
+            index.open();
+            for (let i = 0; i < 5; i++) {
+                let entry = index.get(5);
+                expect(entry.number).to.be(5);
+            }
         });
 
     });
@@ -167,6 +240,37 @@ describe('Index', function() {
             }
         });
 
+        it('can read a single item range of entries', function() {
+            index = setupIndexWithEntries(50);
+            index.close();
+            index.open();
+            let entries = index.range(21, 21);
+            expect(entries.length).to.be(1);
+            expect(entries[0].number).to.be(21);
+        });
+
+        it('returns false with a non-numeric range', function() {
+            index = setupIndexWithEntries(5);
+            index.close();
+            index.open();
+            let entries = index.range('foo');
+            expect(entries).to.be(false);
+        });
+
+    });
+
+    describe('lastEntry', function() {
+
+        it('returns the last entry', function() {
+            index = setupIndexWithEntries(5);
+            expect(index.lastEntry.number).to.be(5);
+        });
+
+        it('returns false on empty index', function() {
+            index = setupIndexWithEntries(0);
+            expect(index.lastEntry).to.be(false);
+        });
+
     });
 
     describe('find', function() {
@@ -176,19 +280,31 @@ describe('Index', function() {
             expect(index.find(index.length)).to.be(0);
         });
 
-        it('returns last entry if all entries are higher searched number', function() {
+        it('returns last entry if all entries are lower searched number', function() {
             index = setupIndexWithEntries(5);
             expect(index.find(index.length+1)).to.be(index.length);
         });
 
+        it('returns 0 if all entries are lower searched number with min=true', function() {
+            index = setupIndexWithEntries(5);
+            expect(index.find(index.length+1, true)).to.be(0);
+        });
+
         it('returns the entry number on exact match', function() {
             index = setupIndexWithEntries(5);
-            expect(index.find(2)).to.be(2);
+            for (let i = 1; i <= 5; i++) {
+                expect(index.find(i)).to.be(i);
+            }
         });
 
         it('returns the highest entry number lower than the searched number', function() {
             index = setupIndexWithEntries(50, i => 2*i);
             expect(index.find(25)).to.be(12);
+        });
+
+        it('returns the lowest entry number higher than the searched number with min=true', function() {
+            index = setupIndexWithEntries(50, i => 2*i);
+            expect(index.find(25, true)).to.be(13);
         });
 
     });
@@ -273,6 +389,16 @@ describe('Index', function() {
             expect(index.validRange(1, 1)).to.be(true);
             expect(index.validRange(1, index.length)).to.be(true);
             expect(index.validRange(index.length, index.length)).to.be(true);
+        });
+
+    });
+
+    describe('destroy', function(){
+
+        it('completely deletes the file', function(){
+            index = setupIndexWithEntries(5);
+            index.destroy();
+            expect(fs.existsSync('test/data/.index')).to.be(false);
         });
 
     });

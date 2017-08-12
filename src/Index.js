@@ -32,21 +32,25 @@ class Index {
      * @param {Object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
     constructor(name = '.index', options = {}) {
-        const EntryClass = options.EntryClass || Entry;
-        Entry.assertValidEntryClass(EntryClass);
-
+        if (typeof name !== 'string') {
+            options = name;
+            name = '.index';
+        }
         let defaults = {
             dataDirectory: '.',
             writeBufferSize: 4096,
-            flushDelay: 100
+            flushDelay: 100,
+            EntryClass: Entry
         };
         options = Object.assign(defaults, options);
+        const EntryClass = options.EntryClass;
+        Entry.assertValidEntryClass(EntryClass);
         if (!fs.existsSync(options.dataDirectory)) {
             mkdirpSync(options.dataDirectory);
         }
 
         this.data = [];
-        this.name = name || '.index';
+        this.name = name;
         this.fileName = path.resolve(options.dataDirectory, this.name);
         this.readBuffer = Buffer.allocUnsafe(EntryClass.size);
         this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0);
@@ -107,15 +111,15 @@ class Index {
         if (!stat) {
             throw new Error(`Error stat'ing index file "${this.fileName}".`);
         }
-        if (stat.size > 0 && stat.size <= 4) {
-            throw new Error('Invalid index file!');
-        }
 
         if (stat.size === 0) {
             // Freshly created index... write metadata initially.
             this.writeMetadata();
         } else {
             stat.size -= this.readMetadata();
+            if (stat.size < 0) {
+                throw new Error('Invalid index file!');
+            }
         }
 
         const length = Math.floor(stat.size / this.EntryClass.size);
@@ -202,7 +206,7 @@ class Index {
         fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
         if (headerMagic !== HEADER_MAGIC) {
-            if (headerMagic.substr(0, -2) === HEADER_MAGIC.substr(0, -2)) {
+            if (headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6)) {
                 throw new Error(`Invalid file version. The index ${this.fileName} was created with a different library version.`);
             }
             throw new Error('Invalid file header.');
@@ -213,6 +217,7 @@ class Index {
         }
 
         const metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
+        metadataBuffer.fill(" ");
         fs.readSync(this.fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
         const metadata = metadataBuffer.toString('utf8').trim();
 
@@ -220,7 +225,11 @@ class Index {
         if (this.metadata && JSON.stringify(this.metadata) !== metadata) {
             throw new Error('Index metadata mismatch! ' + metadata);
         }
-        this.metadata = JSON.parse(metadata);
+        try {
+            this.metadata = JSON.parse(metadata);
+        } catch (e) {
+            throw new Error('Invalid metadata.');
+        }
 
         this.headerSize = 8 + 4 + metadataSize;
         return this.headerSize;
@@ -479,15 +488,30 @@ class Index {
     }
 
     /**
-     * Find the last index entry that has a sequence number lower than or equal to `number`.
+     * Find the given global sequence number inside this index and return the last entry position with a sequence
+     * number lower than or equal to `number`. This is equal to the `high` value in the binary search.
+     * If the the parameter `min` is set to true, it will search for the first entry position that is at least equal
+     * to `number`. This is equal to the `low` value in the binary search.
+     *
+     * Complexity: O(log {number}) - because we only need to search up to the {number}-th element maximum.
      *
      * @api
      * @param {number} number The sequence number to search for.
-     * @returns {number} The last index entry position that is lower than or equal to the given number.
+     * @param {boolean} [min] If set to true, will return the first entry that has a sequence number greater than or equal to `number`.
+     * @returns {number} The last index entry position that is lower than or equal to the given number. Returns 0 if no index matches.
      */
-    find(number) {
+    find(number, min = false) {
         let low = 1;
-        let high = this.data.length;
+        // We only need to search until the searched number because entry.number is always >= position
+        let high = Math.min(this.length, number);
+
+        if (this.get(low).number > number) {
+            return min ? low : 0;
+        }
+        if (this.get(high).number < number) {
+            return min ? 0 : high;
+        }
+
         while (low <= high) {
             const mid = low + ((high - low) >> 1);
             const entry = this.get(mid);
@@ -500,7 +524,7 @@ class Index {
                 high = mid - 1;
             }
         }
-        return high;
+        return min ? low : high;
     }
 
     /**
