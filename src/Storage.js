@@ -290,7 +290,7 @@ class Storage extends EventEmitter {
 
         const entries = index.range(from, until);
         if (entries === false) {
-            throw new Error('Range scan error.');
+            throw new Error(`Range scan error for range ${from} - ${until}.`);
         }
         for (let entry of entries) {
             const document = this.readFrom(entry.partition, entry.position, entry.size);
