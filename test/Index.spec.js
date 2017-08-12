@@ -46,47 +46,41 @@ describe('Index', function() {
     });
 
     it('throws on opening an non-index file', function() {
-        let fd = fs.openSync('test/data/.index', 'a+');
-        fs.writeSync(fd, 'foo');
-        fs.closeSync(fd);
+        fs.writeFileSync('test/data/.index', 'foo');
         expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid file header/);
     });
 
     it('throws on opening an index file with different version', function() {
-        let fd = fs.openSync('test/data/.index', 'a+');
-        fs.writeSync(fd, 'nesidx00');
-        fs.closeSync(fd);
+        fs.writeFileSync('test/data/.index', 'nesidx00');
         expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid file version/);
     });
 
     it('throws on opening an index file with wrong metadata size', function() {
-        let fd = fs.openSync('test/data/.index', 'a+');
         const metadataBuffer = Buffer.allocUnsafe(8 + 4);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(0, 8, true);
-        fs.writeSync(fd, metadataBuffer);
-        fs.closeSync(fd);
+        fs.writeFileSync('test/data/.index', metadataBuffer);
+
         expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata size/);
     });
 
     it('throws on opening an index file with too large metadata size', function() {
-        let fd = fs.openSync('test/data/.index', 'a+');
         const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(255, 8, true);
         metadataBuffer.write("{}\n", 12, 3, 'utf8');
-        fs.writeSync(fd, metadataBuffer);
-        fs.closeSync(fd);
+        fs.writeFileSync('test/data/.index', metadataBuffer);
+
         expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid index file/);
     });
 
     it('throws on opening an index file with invalid metadata', function() {
-        let fd = fs.openSync('test/data/.index', 'a+');
-        const metadataBuffer = Buffer.allocUnsafe(8 + 4);
+        const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(255, 8, true);
-        fs.writeSync(fd, metadataBuffer);
-        fs.closeSync(fd);
+        metadataBuffer.write("{x$", 12, 3, 'utf8');
+        fs.writeFileSync('test/data/.index', metadataBuffer);
+
         expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata/);
     });
 
