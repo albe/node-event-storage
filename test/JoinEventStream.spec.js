@@ -8,19 +8,21 @@ describe('JoinEventStream', function() {
     let stream, eventstore;
     const events = [{ type: 'foo' }, { type: 'bar' }, { type: 'baz' }];
 
-    beforeEach(function (done) {
+    before(function (done) {
         fs.emptyDirSync('test/data');
         eventstore = new EventStore({
             storageDirectory: 'test/data'
         });
-        eventstore.commit('foo', events[0]);
-        eventstore.commit('bar', events[1]);
+        eventstore.commit('foo', events[0], () => {
+        eventstore.commit('bar', events[1], () => {
         eventstore.commit('foo', events[2], () => {
             done();
         });
+        });
+        });
     });
 
-    afterEach(function () {
+    after(function () {
         eventstore.close();
         eventstore = undefined;
     });
