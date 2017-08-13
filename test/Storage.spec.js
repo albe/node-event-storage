@@ -351,7 +351,7 @@ describe('Storage', function() {
         it('throws when reopening with different matcher', function() {
             storage = new Storage({ dataDirectory: dataDir });
             storage.open();
-            let index = storage.ensureIndex('foo', () => true);
+            storage.ensureIndex('foo', () => true);
             storage.close();
 
             storage = new Storage({ dataDirectory: dataDir });

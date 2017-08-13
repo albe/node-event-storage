@@ -174,13 +174,13 @@ class EventStore extends EventEmitter {
             streamVersion,
             events: []
         });
-        let commitCallback = () => {
+        const commitCallback = () => {
             this.emit('commit', commit);
             if (typeof callback === 'function') return callback(commit);
         };
         for (let event of events) {
-            let eventMetadata = Object.assign({ commitId, committedAt }, metadata, { commitVersion, streamVersion });
-            let storedEvent = { stream: streamName, payload: event, metadata: eventMetadata };
+            const eventMetadata = Object.assign({ commitId, committedAt }, metadata, { commitVersion, streamVersion });
+            const storedEvent = { stream: streamName, payload: event, metadata: eventMetadata };
             commitVersion++;
             streamVersion++;
             commit.events.push(event);
