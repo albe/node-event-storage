@@ -35,8 +35,7 @@
     "node": ">=6.0"
   },
   "dependencies": {
-    "mkdirp": "^0.5.1",
-    "uuid": "^3.1.0"
+    "mkdirp": "^0.5.1"
   },
   "devDependencies": {
     "coveralls": "^2.13.1",
