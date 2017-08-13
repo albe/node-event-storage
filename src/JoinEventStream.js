@@ -51,7 +51,7 @@ class JoinEventStream extends EventStream {
             if (value === false) {
                 return;
             }
-            if (nextIndex === -1 || this._next[nextIndex].metadata.committedAt >= value.metadata.committedAt) {
+            if (nextIndex === -1 || this._next[nextIndex].metadata.commitId > value.metadata.commitId) {
                 nextIndex = index;
             }
         });
