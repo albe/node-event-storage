@@ -66,7 +66,12 @@ class Consumer extends stream.Readable {
                 this.stop();
             }
             this.position = position;
-            fs.writeFileSync(this.fileName, this.position);
+            if (!this.persist) {
+                this.persist = setImmediate(() => {
+                    fs.writeFileSync(this.fileName, this.position);
+                    this.persist = undefined;
+                });
+            }
         }
     }
 
@@ -77,6 +82,9 @@ class Consumer extends stream.Readable {
      * @api
      */
     start() {
+        if (this.isPaused()) {
+            this.resume();
+        }
         if (this.consuming) {
             return;
         }
@@ -97,11 +105,11 @@ class Consumer extends stream.Readable {
                 const maxBatchPosition = Math.min(this.position + MAX_CATCHUP_BATCH + 1, this.index.length);
                 const documents = this.storage.readRange(this.position + 1, maxBatchPosition, this.index);
                 for (let document of documents) {
-                    ++this.position;
                     if (!this.push(document)) {
                         this.stop();
                         break;
                     }
+                    ++this.position;
                 }
                 fs.writeFileSync(this.fileName, this.position);
                 catchUpBatch();
@@ -115,6 +123,9 @@ class Consumer extends stream.Readable {
      * @api
      */
     stop() {
+        if (this.consuming) {
+            this.pause();
+        }
         this.storage.removeListener('index-add', this.handler);
         this.consuming = false;
     }
