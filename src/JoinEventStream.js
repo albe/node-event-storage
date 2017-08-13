@@ -14,13 +14,26 @@ class JoinEventStream extends EventStream {
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
      */
     constructor(name, streams, eventStore, minRevision = 0, maxRevision = -1) {
-        super(name, eventStore, minRevision = 0, maxRevision = -1);
-        this._next = new Array(streams.length);
+        super(name, eventStore, minRevision, maxRevision);
+        if (!(streams instanceof Array) || streams.length === 0) {
+            throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
+        }
+        this._next = new Array(streams.length).fill(undefined);
+
+        // Translate revisions to index numbers (1-based) and wrap around negatives
+        minRevision++;
+        if (minRevision <= 0) minRevision += eventStore.length;
+        maxRevision++;
+        if (maxRevision <= 0) maxRevision += eventStore.length;
+
         this.iterator = streams.map(streamName => {
+            if (!eventStore.streams[streamName]) {
+                return { next() { return { done: true }; } };
+            }
             const streamIndex = eventStore.streams[streamName].index;
-            const from = minRevision > 0 ? streamIndex.find(minRevision) : 1;
-            const until = maxRevision > 0 ? streamIndex.find(maxRevision) : 0;
-            return eventStore.storage.readRange(from, until, streamIndex);
+            const from = streamIndex.find(minRevision, true);
+            const until = streamIndex.find(maxRevision);
+            return eventStore.storage.readRange(from || 1, until, streamIndex);
         });
     }
 
@@ -38,15 +51,16 @@ class JoinEventStream extends EventStream {
             if (value === false) {
                 return;
             }
-            if (nextIndex === -1 || this._next[nextIndex].metadata.committedAt > value.metadata.committedAt) {
+            if (nextIndex === -1 || this._next[nextIndex].metadata.committedAt >= value.metadata.committedAt) {
                 nextIndex = index;
             }
         });
+
         if (nextIndex === -1) {
             return false;
         }
         const next = this._next[nextIndex];
-        delete this._next[nextIndex];
+        this._next[nextIndex] = undefined;
         return next;
     }
 
