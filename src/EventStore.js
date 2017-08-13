@@ -1,6 +1,5 @@
 const EventStream = require('./EventStream');
 const JoinEventStream = require('./JoinEventStream');
-const uuid = require('uuid').v4;
 const fs = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
@@ -163,7 +162,7 @@ class EventStore extends EventEmitter {
             throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
         }
 
-        const commitId = uuid();
+        const commitId = this.storage.index.length;
         let commitVersion = 0;
         const committedAt = Date.now();
         const commit = Object.assign({
