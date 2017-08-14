@@ -328,7 +328,10 @@ class Storage extends EventEmitter {
      * @returns {{metadata: {matcher: string, hmac: string}}}
      */
     buildMetadataForMatcher(matcher) {
-        const matcherString = typeof matcher === 'object' ? JSON.stringify(matcher) : matcher.toString();
+        if (typeof matcher === 'object') {
+            return { metadata: { matcher } };
+        }
+        const matcherString = matcher.toString();
         return { metadata: { matcher: matcherString, hmac: this.hmac(matcherString) } };
     }
 

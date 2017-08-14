@@ -23,7 +23,7 @@ describe('EventStore', function() {
         let events = [{foo: 'bar'}, {foo: 'baz'}, {foo: 'quux'}];
         eventstore.on('ready', () => {
             eventstore.commit('foo-bar', events, () => {
-                let stream = eventstore.getEventStream('foo-bar');
+                const stream = eventstore.getEventStream('foo-bar');
                 let i = 0;
                 for (let event of stream) {
                     expect(event).to.eql(events[i++]);
@@ -34,6 +34,22 @@ describe('EventStore', function() {
     });
 
     describe('commit', function() {
+
+        it('throws when no stream name specified', function() {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            expect(() => eventstore.commit({ foo: 'bar' })).to.throwError();
+        });
+
+        it('throws when no events specified', function() {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            expect(() => eventstore.commit('foo-bar')).to.throwError();
+        });
 
         it('can commit a single event', function() {
             eventstore = new EventStore({
@@ -59,6 +75,34 @@ describe('EventStore', function() {
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }], (commit) => {
+                expect(eventstore.length).to.be(1);
+                expect(commit.streamName).to.be('foo-bar');
+                expect(commit.streamVersion).to.be(0);
+                expect(commit.events).to.eql([{ foo: 'bar' }]);
+                done();
+            });
+        });
+
+        it('invokes callback when finished with optimistic concurrency check', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], EventStore.ExpectedVersion.EmptyStream, (commit) => {
+                expect(eventstore.length).to.be(1);
+                expect(commit.streamName).to.be('foo-bar');
+                expect(commit.streamVersion).to.be(0);
+                expect(commit.events).to.eql([{ foo: 'bar' }]);
+                done();
+            });
+        });
+
+        it('invokes callback when finished with optimistic concurrency check and metdata', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], EventStore.ExpectedVersion.EmptyStream, {}, (commit) => {
                 expect(eventstore.length).to.be(1);
                 expect(commit.streamName).to.be('foo-bar');
                 expect(commit.streamVersion).to.be(0);
@@ -116,7 +160,7 @@ describe('EventStore', function() {
             });
         });
 
-        it('uses metadata from argument for commit', function() {
+        it('uses metadata from argument for commit', function(done) {
             eventstore = new EventStore({
                 storageDirectory: 'test/data'
             });
@@ -126,11 +170,121 @@ describe('EventStore', function() {
                 expect(commit.committedAt).to.be(12345);
                 expect(commit.quux).to.be('quux');
 
-                let stream = eventstore.getEventStream('foo-bar');
-                let storedEvent = stream.next().value;
+                const stream = eventstore.getEventStream('foo-bar');
+                const storedEvent = stream.next();
                 expect(storedEvent.metadata.commitId).to.be(1);
                 expect(storedEvent.metadata.committedAt).to.be(12345);
                 expect(storedEvent.metadata.quux).to.be('quux');
+                done();
+            });
+        });
+
+    });
+
+    describe('createEventStream', function() {
+
+        it('throws when trying to recreate existing stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo-bar', [{ type: 'foo' }], () => {
+                expect(() => eventstore.createEventStream('foo-bar', event => event.payload.type === 'foo')).to.throwError();
+                done();
+            });
+        });
+
+        it('can create new streams on existing events', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo-bar', [{ type: 'foo' }], () => {
+                const stream = eventstore.createEventStream('my-foo-bar', event => event.payload.type === 'foo');
+                expect(stream.events.length).to.be(1);
+                expect(stream.events[0]).to.eql({ type: 'foo' });
+                done();
+            });
+        });
+
+    });
+
+    describe('getEventStream', function() {
+
+        it('can open existing streams', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }]);
+            eventstore.close();
+
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+            eventstore.on('ready', () => {
+                const stream = eventstore.getEventStream('foo-bar');
+                expect(stream.events.length).to.be(1);
+                done();
+            });
+        });
+
+        it('needs to be tested.');
+    });
+
+    describe('fromStreams', function() {
+
+        it('throws when not specifying a join stream name', function() {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            expect(() => eventstore.fromStreams()).to.throwError();
+        });
+
+        it('throws when not specifying an array of stream names to join', function() {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            expect(() => eventstore.fromStreams('join-foo-bar')).to.throwError();
+        });
+
+        it('throws when specifying a non-existing stream to join', function() {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            expect(() => eventstore.fromStreams('join-foo-bar', ['foo-bar', 'baz'])).to.throwError(/does not exist/);
+        });
+
+        it('needs to be tested.');
+    });
+
+    describe('deleteEventStream', function() {
+
+        it('removes the stream persistently', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                expect(fs.existsSync('test/data/streams/eventstore.stream-foo-bar.index')).to.be(true);
+                eventstore.deleteEventStream('foo-bar');
+                expect(eventstore.getEventStream('foo-bar')).to.be(false);
+                expect(fs.existsSync('test/data/streams/eventstore.stream-foo-bar.index')).to.be(false);
+                done();
+            });
+        });
+
+        it('is noop for non-existing stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.deleteEventStream('bar');
+                expect(eventstore.getEventStream('foo-bar')).to.not.be(false);
                 done();
             });
         });
@@ -150,7 +304,7 @@ describe('EventStore', function() {
                 storageDirectory: 'test/data'
             });
 
-            let commits = eventstore.getCommits(0);
+            const commits = eventstore.getCommits(0);
             expect(commits.next()).to.eql({ value: undefined, done: true });
         });
 
@@ -158,13 +312,13 @@ describe('EventStore', function() {
             eventstore = new EventStore({
                 storageDirectory: 'test/data'
             });
-            let events = [
+            const events = [
                 [{ foo: 1 }, { foo: 2 }],
                 [{ bar: 1 }],
                 [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
             ];
             commitAll('foo-bar', events, () => {
-                let commits = eventstore.getCommits(0);
+                const commits = eventstore.getCommits(0);
                 let streamVersion = 0;
                 let commitNumber = 0;
                 for (let commit of commits) {
@@ -182,13 +336,13 @@ describe('EventStore', function() {
             eventstore = new EventStore({
                 storageDirectory: 'test/data'
             });
-            let events = [
+            const events = [
                 [{ foo: 1 }, { foo: 2 }],
                 [{ bar: 1 }],
                 [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
             ];
             commitAll('foo-bar', events, () => {
-                let commits = eventstore.getCommits(4);
+                const commits = eventstore.getCommits(4);
                 let streamVersion = 3;
                 let commitNumber = 2;
                 for (let commit of commits) {
@@ -206,13 +360,13 @@ describe('EventStore', function() {
             eventstore = new EventStore({
                 storageDirectory: 'test/data'
             });
-            let events = [
+            const events = [
                 [{ foo: 1 }, { foo: 2 }],
                 [{ bar: 1 }],
                 [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
             ];
             commitAll('foo-bar', events, () => {
-                let commits = eventstore.getCommits(5);
+                const commits = eventstore.getCommits(5);
                 let streamVersion = 3;
                 let commitNumber = 2;
                 for (let commit of commits) {
@@ -236,7 +390,7 @@ describe('EventStore', function() {
             });
             eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
 
-            let consumer = eventstore.getConsumer('foo-bar', 'consumer1');
+            const consumer = eventstore.getConsumer('foo-bar', 'consumer1');
             consumer.on('data', event => {
                 expect(event.id).to.be(2);
                 done();
@@ -246,7 +400,5 @@ describe('EventStore', function() {
         });
 
     });
-
-    it('needs to be tested.');
 
 });
