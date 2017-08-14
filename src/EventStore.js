@@ -131,7 +131,7 @@ class EventStore extends EventEmitter {
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
-        if (!streamName) {
+        if (typeof streamName !== 'string') {
             throw new Error('Must specify a stream name for commit.');
         }
         if (!events) {
@@ -162,7 +162,7 @@ class EventStore extends EventEmitter {
             throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
         }
 
-        const commitId = this.storage.index.length;
+        const commitId = this.length;
         let commitVersion = 0;
         const committedAt = Date.now();
         const commit = Object.assign({
@@ -223,14 +223,17 @@ class EventStore extends EventEmitter {
      * @param {Array<string>} streamNames An array of the stream names to join.
      * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
-     * @return {EventStream|boolean} The joined event stream or false if any of the streams doesn't exist.
+     * @return {EventStream} The joined event stream.
+     * @throws {Error} if any of the streams doesn't exist.
      */
     fromStreams(streamName, streamNames, minRevision = 0, maxRevision = -1) {
         if (!(streamNames instanceof Array)) {
             throw new Error('Must specify an array of stream names.');
         }
-        if (!streamNames.every(stream => stream in this.streams)) {
-            return false;
+        for (let stream of streamNames) {
+            if (!(stream in this.streams)) {
+                throw new Error(`Stream "${stream}" does not exist.`);
+            }
         }
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision);
     }
