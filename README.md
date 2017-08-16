@@ -201,3 +201,36 @@ equally among a fixed number of arbitrary partitions by doing `(document, sequen
 This is not recommended in the generic case though, since it contradicts the consistency boundary that a single stream should give.
 Many databases partition the data into Chunks (striding) of a fixed size, which helps with disk performance especially in RAID setups.
 However, since SSDs become more the standard, the benefit of chunking data is becoming more limited.
+
+### Compression
+
+To apply compression on the storage level, the `serializer` option of the Storage can be used.
+
+For example to use LZ4:
+
+```javascript
+const lz4 = require('lz4');
+const eventstore = new EventStore('my-event-store', {
+	storageDirectory: './data',
+	storageConfig: {
+		serializer: {
+			serialize: (doc) => {
+				return lz4.encode(Buffer.from(JSON.stringify(doc))).toString('binary');
+			},
+			deserialize: (string) => {
+				return JSON.parse(lz4.decode(Buffer.from(string, 'binary')));
+			}
+		}
+	}
+});
+```
+
+Since compression works on a per document level, compression efficiency is reduced. This is currently necessary
+to allow fully random access of single documents without having to read a large block before.
+If available, use a dictionary for the compression library and fill it with common words that describe
+your event/document schema and the following terms:
+
+- "metadata":{"committedAt":
+- ,"commitId":
+- ,"commitVersion":
+- ,"streamVersion":

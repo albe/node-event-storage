@@ -1,6 +1,8 @@
 const expect = require('expect.js');
 const fs = require('fs-extra');
 const Storage = require('../src/Storage');
+const zlib = require('zlib');
+//const lz4 = require('lz4');
 
 const dataDir = __dirname + '/data';
 
@@ -453,6 +455,27 @@ describe('Storage', function() {
             expect(i).to.be(8);
         });
 
+    });
+
+    it('works with compression applied in serializer', function() {
+        const dictionary = Buffer.from('"metadata":{"committedAt":,"commitId":,"commitVersion":,"streamVersion":{"stream":"Event-0f0da93d-260a-4ffd-94a0-126bd67ee8ff","payload":{"type":,"metadata":{"occuredAt":');
+        storage = new Storage({ dataDirectory: dataDir, serializer: {
+            serialize: (doc) => {
+                return zlib.deflateRawSync(Buffer.from(JSON.stringify(doc)), { dictionary }).toString('binary');
+                //return lz4.encode(Buffer.from(JSON.stringify(doc))).toString('binary');
+            },
+            deserialize: (string) => {
+                return JSON.parse(zlib.inflateRawSync(Buffer.from(string, 'binary'), { dictionary }).toString());
+                //return JSON.parse(lz4.decode(Buffer.from(string, 'binary')));
+            }
+        }});
+        storage.open();
+
+        const doc = {"stream":"Event-0f0da93d-260a-4ffd-94a0-126bd67ee8ff","payload":{"type":"DomainEvent","payload":{"type":"EventCreated","payload":{"eventIdentifier":"0f0da93d-260a-4ffd-94a0-126bd67ee8ff","name":"testi"}},"metadata":{"occuredAt":1482764928713,"aggregateId":"0f0da93d-260a-4ffd-94a0-126bd67ee8ff","version":0,"type":"EventCreated","correlationId":"9242b72b-03a0-4078-ae62-f37af7cb1b39"}},"metadata":{"committedAt":1482764928715,"commitId":1,"commitVersion":0,"streamVersion":0}};
+        storage.write(doc);
+        storage.write(doc);
+        expect(storage.read(1)).to.be.eql(doc);
+        expect(storage.read(2)).to.be.eql(doc);
     });
 
 });
