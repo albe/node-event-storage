@@ -147,21 +147,6 @@ class Storage extends EventEmitter {
     }
 
     /**
-     * Flush the write buffer to disk.
-     * This is a sync method and will invoke all previously registered flush callbacks.
-     * Will emit a 'flush' event when done.
-     *
-     * @private
-     * @returns {boolean}
-     */
-    flush() {
-        this.forEachPartition(partition => partition.flush());
-
-        this.emit('flush');
-        return true;
-    }
-
-    /**
      * Add an index entry for the given document at the position and size.
      *
      * @private
@@ -366,7 +351,7 @@ class Storage extends EventEmitter {
             if (index.metadata.hmac !== this.hmac(index.metadata.matcher)) {
                 throw new Error('Invalid HMAC for matcher.');
             }
-            matcher = eval('(' + index.metadata.matcher + ')').bind({});
+            matcher = eval('(' + index.metadata.matcher + ')').bind({}); // jshint ignore:line
         }
         this.secondaryIndexes[name] = { index, matcher };
         index.open();
