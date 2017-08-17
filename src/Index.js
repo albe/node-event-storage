@@ -399,7 +399,7 @@ class Index {
      * an empty array if the index is empty.
      *
      * @api
-     * @returns {Array<Entry>|boolean} An array of all index entries or false on error.
+     * @returns {Array<Entry>} An array of all index entries.
      */
     all() {
         if (this.length === 0) {

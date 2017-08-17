@@ -31,7 +31,7 @@ class Storage extends EventEmitter {
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {function(Object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
      * @param {Object} [config.indexOptions] An options object that should be passed to all indexes on construction.
-     * @param {string} [config.privateKey] A private key that is used to verify matchers retrieved from indexes.
+     * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -47,14 +47,14 @@ class Storage extends EventEmitter {
             dataDirectory: '.',
             indexFile: this.storageFile + '.index',
             indexOptions: {},
-            privateKey: ''
+            hmacSecret: ''
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
         this.partitioner = config.partitioner;
 
         this.hmac = string => {
-            const hmac = crypto.createHmac('sha256', config.privateKey);
+            const hmac = crypto.createHmac('sha256', config.hmacSecret);
             hmac.update(string);
             return hmac.digest('hex');
         };
@@ -116,7 +116,7 @@ class Storage extends EventEmitter {
     }
 
     /**
-     * Open the storage and indexes and create read and write buffers.
+     * Open the storage and indexes and create read and write buffers eagerly.
      * Will emit an 'opened' event if finished.
      *
      * @api
@@ -125,7 +125,6 @@ class Storage extends EventEmitter {
     open() {
         this.index.open();
 
-        // TODO: Open secondary indexes lazily
         this.forEachSecondaryIndex(index => index.open());
 
         this.emit('opened');
@@ -147,21 +146,6 @@ class Storage extends EventEmitter {
     }
 
     /**
-     * Flush the write buffer to disk.
-     * This is a sync method and will invoke all previously registered flush callbacks.
-     * Will emit a 'flush' event when done.
-     *
-     * @private
-     * @returns {boolean}
-     */
-    flush() {
-        this.forEachPartition(partition => partition.flush());
-
-        this.emit('flush');
-        return true;
-    }
-
-    /**
      * Add an index entry for the given document at the position and size.
      *
      * @private
@@ -173,6 +157,9 @@ class Storage extends EventEmitter {
      * @returns {Index.Entry} The index entry item.
      */
     addIndex(partitionId, position, size, document, callback) {
+        if (!this.index.isOpen()) {
+            this.index.open();
+        }
 
         /*if (this.index.lastEntry.position + this.index.lastEntry.size !== position) {
          this.emit('index-corrupted');
@@ -182,6 +169,7 @@ class Storage extends EventEmitter {
         const entry = new Index.Entry(this.index.length + 1, position, size, partitionId);
         this.index.add(entry, (indexPosition) => {
             this.emit('wrote', document, entry, indexPosition);
+            /* istanbul ignore if  */
             if (typeof callback === 'function') return callback(indexPosition);
         });
         return entry;
@@ -204,7 +192,7 @@ class Storage extends EventEmitter {
             if (!this.partitions[partitionIdentifier]) {
                 this.partitions[partitionIdentifier] = new Partition(partitionName, this.partitionConfig);
             }
-        } else if (!this.partitions[partitionIdentifier]) {
+        } else /* istanbul ignore next  */ if (!this.partitions[partitionIdentifier]) {
             throw new Error(`Partition #${partitionIdentifier} does not exist.`);
         }
 
@@ -226,11 +214,15 @@ class Storage extends EventEmitter {
         const partition = this.getPartition(partitionName);
         const position = partition.write(data, callback);
 
+        /* istanbul ignore next  */
         if (position === false) {
             throw new Error('Error writing document.');
         }
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
         this.forEachSecondaryIndex((index, name) => {
+            if (!index.isOpen()) {
+                index.open();
+            }
             index.add(indexEntry);
             this.emit('index-add', name, index.length, document);
         }, document);
@@ -248,14 +240,8 @@ class Storage extends EventEmitter {
      */
     readFrom(partitionId, position, size) {
         const partition = this.getPartition(partitionId);
-        let data;
-        try {
-            data = partition.readFrom(position);
-            return this.serializer.deserialize(data);
-        } catch (e) {
-            console.log('Error parsing document:', data, position);
-            throw e;
-        }
+        const data = partition.readFrom(position);
+        return this.serializer.deserialize(data);
     }
 
     /**
@@ -268,6 +254,10 @@ class Storage extends EventEmitter {
      */
     read(number, index) {
         index = index || this.index;
+
+        if (!index.isOpen()) {
+            index.open();
+        }
 
         const entry = index.get(number);
         if (entry === false) return false;
@@ -288,6 +278,10 @@ class Storage extends EventEmitter {
     *readRange(from, until, index) {
         index = index || this.index;
 
+        if (!index.isOpen()) {
+            index.open();
+        }
+
         const entries = index.range(from, until);
         if (entries === false) {
             throw new Error(`Range scan error for range ${from} - ${until}.`);
@@ -305,8 +299,9 @@ class Storage extends EventEmitter {
      * @returns {boolean} True if the document matches the matcher or false otherwise.
      */
     matches(document, matcher) {
-        if (typeof matcher === 'undefined') return true;
         if (typeof document === 'undefined') return false;
+        if (typeof matcher === 'undefined') return true;
+
         if (typeof matcher === 'function') return matcher(document);
         for (let prop of Object.getOwnPropertyNames(matcher)) {
             if (typeof matcher[prop] === 'object') {
@@ -364,9 +359,10 @@ class Storage extends EventEmitter {
             matcher = index.metadata.matcher;
         } else {
             if (index.metadata.hmac !== this.hmac(index.metadata.matcher)) {
+                index.destroy();
                 throw new Error('Invalid HMAC for matcher.');
             }
-            matcher = eval('(' + index.metadata.matcher + ')').bind({});
+            matcher = eval('(' + index.metadata.matcher + ')').bind({}); // jshint ignore:line
         }
         this.secondaryIndexes[name] = { index, matcher };
         index.open();
@@ -384,9 +380,6 @@ class Storage extends EventEmitter {
      * @throws {Error} if the index doesn't exist yet and no matcher was specified.
      */
     ensureIndex(name, matcher) {
-        /*if (!this.isopen) {
-            throw new Error('Storage is not open yet.');
-        }*/
         if (name in this.secondaryIndexes) {
             return this.secondaryIndexes[name].index;
         }
@@ -431,6 +424,9 @@ class Storage extends EventEmitter {
          2) truncate all partitions accordingly
          3) truncate/rewrite all indexes
          */
+        if (!this.index.isOpen()) {
+            this.index.open();
+        }
         const entries = this.index.range(after + 1);  // We need the first entry that is cut off
         if (entries === false || entries.length === 0) {
             return;
@@ -453,7 +449,17 @@ class Storage extends EventEmitter {
         }
 
         this.index.truncate(after);
-        this.forEachSecondaryIndex(index => index.truncate(index.find(after)));
+        this.forEachSecondaryIndex(index => {
+            let closeIndex = false;
+            if (!index.isOpen()) {
+                index.open();
+                closeIndex = true;
+            }
+            index.truncate(index.find(after));
+            if (closeIndex) {
+                index.close();
+            }
+        });
     }
 
     /**
@@ -463,12 +469,10 @@ class Storage extends EventEmitter {
      * @param {function(Object, Index.Entry)} iterationHandler
      */
     forEachDocument(iterationHandler) {
+        /* istanbul ignore if  */
         if (typeof iterationHandler !== 'function') return;
 
         const entries = this.index.all();
-        if (entries === false) {
-            return;
-        }
 
         for (let entry of entries) {
             const document = this.readFrom(entry.partition, entry.position, entry.size);
@@ -484,6 +488,7 @@ class Storage extends EventEmitter {
      * @param {Object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
      */
     forEachSecondaryIndex(iterationHandler, matchDocument) {
+        /* istanbul ignore if  */
         if (typeof iterationHandler !== 'function') return;
 
         for (let indexName of Object.keys(this.secondaryIndexes)) {
@@ -500,6 +505,7 @@ class Storage extends EventEmitter {
      * @param {function(Partition)} iterationHandler
      */
     forEachPartition(iterationHandler) {
+        /* istanbul ignore if  */
         if (typeof iterationHandler !== 'function') return;
 
         for (let partition of Object.keys(this.partitions)) {

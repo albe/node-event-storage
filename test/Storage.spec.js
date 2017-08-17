@@ -19,7 +19,14 @@ describe('Storage', function() {
         storage = undefined;
     });
 
-    describe('write', function(done) {
+    it('creates the storage directory if it does not exist', function() {
+        fs.removeSync(dataDir);
+        storage = new Storage({ dataDirectory: dataDir });
+        expect(fs.existsSync(dataDir)).to.be(true);
+    });
+
+
+    describe('write', function() {
 
         it('writes objects', function(done) {
             storage = new Storage({ dataDirectory: dataDir });
@@ -49,6 +56,16 @@ describe('Storage', function() {
             });
         });
 
+        it('reopens partition if partition was closed', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+
+            const part = storage.getPartition('');
+            part.close();
+            expect(() => storage.write({ foo: 'bar' })).to.not.throwError();
+            expect(storage.index.length).to.be(1);
+        });
+
         it('can partition writes', function(done) {
             storage = new Storage({ dataDirectory: dataDir, partitioner: (doc, number) => 'part-' + ((number-1) % 4) });
             storage.open();
@@ -62,6 +79,18 @@ describe('Storage', function() {
                     done();
                 } : undefined);
             }
+        });
+
+        it('can open secondary indexes lazily', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            const index = storage.ensureIndex('foo', { type: 'foo' });
+            storage.close();
+
+            expect(index.isOpen()).to.be(false);
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ type: (i % 3) ? 'bar' : 'foo' });
+            }
+            expect(index.isOpen()).to.be(true);
         });
 
     });
@@ -86,6 +115,14 @@ describe('Storage', function() {
     });
 
     describe('read', function() {
+
+        it('returns false when trying to read out of bounds', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+
+            storage.write({ foo: 'bar' });
+            expect(storage.read(2)).to.be(false);
+        });
 
         it('can read back written documents', function() {
             storage = new Storage({ dataDirectory: dataDir });
@@ -159,6 +196,19 @@ describe('Storage', function() {
             storage.open();
 
             expect(storage.read(3, odd)).to.eql({ foo: 5 });
+        });
+
+        it('can open secondary indexes lazily', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            const index = storage.ensureIndex('foo', { type: 'foo' });
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ type: (i % 3) ? 'bar' : 'foo' });
+            }
+            storage.close();
+
+            expect(index.isOpen()).to.be(false);
+            storage.read(1, index);
+            expect(index.isOpen()).to.be(true);
         });
 
     });
@@ -273,6 +323,19 @@ describe('Storage', function() {
             expect(() => storage.readRange(8, 4).next()).to.throwError();
         });
 
+        it('can open secondary indexes lazily', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            const index = storage.ensureIndex('foo', { type: 'foo' });
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ type: (i % 3) ? 'bar' : 'foo' });
+            }
+            storage.close();
+
+            expect(index.isOpen()).to.be(false);
+            Array.from(storage.readRange(1, 2, index));
+            expect(index.isOpen()).to.be(true);
+        });
+
     });
 
     describe('ensureIndex', function() {
@@ -283,6 +346,22 @@ describe('Storage', function() {
 
             storage.ensureIndex('foo', () => true);
             expect(fs.existsSync('test/data/storage.foo.index')).to.be(true);
+        });
+
+        it('can be called multiple times', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+
+            const index1 = storage.ensureIndex('foo', () => true);
+            const index2 = storage.ensureIndex('foo', () => true);
+            expect(index1).to.be(index2);
+        });
+
+        it('throws when calling for non-existing index without matcher', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+
+            expect(() => storage.ensureIndex('foo')).to.throwError(/matcher/);
         });
 
         it('indexes documents by function matcher', function() {
@@ -337,14 +416,12 @@ describe('Storage', function() {
         });
 
         it('throws when hmac does not validate matcher from existing index', function() {
-            storage = new Storage({ dataDirectory: dataDir, privateKey: 'foo' });
+            storage = new Storage({ dataDirectory: dataDir, hmacSecret: 'foo' });
             storage.open();
-            let index = storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
-            storage.write({type: 'Foo'});
-            expect(index.length).to.be(1);
+            storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
             storage.close();
 
-            storage = new Storage({ dataDirectory: dataDir, privateKey: 'bar' });
+            storage = new Storage({ dataDirectory: dataDir, hmacSecret: 'bar' });
             storage.open();
 
             expect(() => storage.ensureIndex('foo', (doc) => doc.type === 'Foo')).to.throwError();
@@ -362,9 +439,71 @@ describe('Storage', function() {
             expect(() => storage.ensureIndex('foo', (doc) => doc.type === 'Foo')).to.throwError();
         });
 
+        it('does not create an index when filling it fails', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+            storage.write({type: 'Foo'});
+
+            storage.matches = () => { throw new Error('Failure'); };
+            try {
+                storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
+            } catch (e) {}
+            expect(fs.existsSync('test/data/storage.foo.index')).to.be(false);
+        });
+
+    });
+
+    describe('openIndex', function() {
+
+        it('throws on non-existing indexes', function () {
+            storage = new Storage({dataDirectory: dataDir});
+            storage.open();
+
+            expect(() => storage.openIndex('foo')).to.throwError(/does not exist/);
+        });
+
+        it('throws when hmac does not validate matcher from existing index', function () {
+            storage = new Storage({dataDirectory: dataDir, hmacSecret: 'foo'});
+            storage.open();
+            storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
+            storage.close();
+
+            storage = new Storage({dataDirectory: dataDir, hmacSecret: 'bar'});
+            storage.open();
+            expect(() => storage.openIndex('foo')).to.throwError(/HMAC/);
+        });
+
+        it('opens existing indexes', function () {
+            storage = new Storage({dataDirectory: dataDir});
+            storage.open();
+            storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
+            storage.write({type: 'Foo'});
+            storage.close();
+
+            storage = new Storage({dataDirectory: dataDir});
+            storage.open();
+            const index = storage.openIndex('foo');
+            expect(index.length).to.be(1);
+        });
+
     });
 
     describe('truncate', function() {
+
+        it('does nothing if truncating after the current position', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            storage.truncate(12);
+
+            expect(storage.length).to.be(10);
+        });
 
         it('correctly truncates to empty', function() {
             storage = new Storage({ dataDirectory: dataDir });
@@ -406,7 +545,7 @@ describe('Storage', function() {
         it('truncates after the given document number on each partition', function() {
             storage = new Storage({
                 dataDirectory: dataDir,
-                partitioner: (doc, number) => 'part-' + ((number - 1) % 4)
+                partitioner: (doc, number) => 'part-' + (parseInt((number - 1) / 4) % 4)
             });
             storage.open();
 
@@ -453,6 +592,61 @@ describe('Storage', function() {
                 i += 2;
             }
             expect(i).to.be(8);
+        });
+
+        it('keeps truncated secondary indexes closed', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+            let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
+
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i});
+            }
+
+            storage.close();
+
+            storage.truncate(6);
+
+            expect(index.isOpen()).to.be(false);
+            index.open();
+            expect(index.length).to.be(3);
+        });
+    });
+
+    describe('matches', function() {
+
+        it('returns true if no matcher specified', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            expect(storage.matches({ foo: 'bar' })).to.be(true);
+        });
+
+        it('returns false if no document specified', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            expect(storage.matches()).to.be(false);
+        });
+
+        it('works with object matchers', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            expect(storage.matches({ foo: 'foo', bar: { baz: 'baz', quux: 'quux' } }, { foo: 'foo', bar: { baz: 'baz' } })).to.be(true);
+            expect(storage.matches({ foo: 'foo', bar: { baz: 'baz2', quux: 'quux' } }, { foo: 'foo', bar: { baz: 'baz' } })).to.be(false);
+        });
+
+        it('works with function matchers', function() {
+            storage = new Storage({ dataDirectory: dataDir });
+            expect(storage.matches({ foo: 'foo', bar: { baz: 'baz', quux: 'quux' } }, (doc) => doc.foo === 'foo')).to.be(true);
+            expect(storage.matches({ foo: 'foo2', bar: { baz: 'baz', quux: 'quux' } }, (doc) => doc.foo === 'foo')).to.be(false);
+        });
+
+    });
+
+    describe('forEachDocument', function() {
+
+        it('does nothing when called on empty storage', function(done) {
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+
+            storage.forEachDocument((doc) => expect(false).to.be(true));
+            setTimeout(done, 1);
         });
 
     });
