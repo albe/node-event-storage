@@ -234,3 +234,18 @@ your event/document schema and the following terms:
 - ,"commitId":
 - ,"commitVersion":
 - ,"streamVersion":
+
+### Security
+
+When specifying a matcher function for streams/indexes those matcher functions will be serialized into the index
+file and be `eval`'d on later loading for convenience to not having to specify the matcher when reopening.
+In order to prevent some malicious attacker from executing arbitrary code in your application by altering an index
+file, the matcher function gets fingerprinted with an HMAC.
+This HMAC is calculated with a secret that you should specify with the `hmacSecret` option of the storage
+configuration.
+
+Currently the `hmacSecret` is an optional parameter defaulting to an empty string, which is unsecure, so always
+specify an own unique random secret for this in production.
+
+Alternatively you should always explicitly specify your matchers when opening an existing index, since that will
+check that the specified matcher matches the one in the index file.
