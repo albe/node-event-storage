@@ -83,6 +83,18 @@ describe('Consumer', function() {
         storage.write({ type: 'Foobar', id: 3 });
     });
 
+    it('can start from arbitrary position', function(done){
+        consumer = new Consumer(storage, 'foobar', 'consumer1', 2);
+        let expected = 3;
+        consumer.on('data', document => {
+            expect(document.id).to.be(expected);
+            done();
+        });
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
     it('stops when pushing fails', function(done){
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.on('caught-up', () => {
