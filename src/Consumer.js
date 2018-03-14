@@ -15,8 +15,9 @@ class Consumer extends stream.Readable {
      * @param {Storage} storage The storage to create the consumer for.
      * @param {string} indexName The name of the index to consume.
      * @param {string} identifier The unique name to identify this consumer.
+     * @param {number} [startFrom] The revision to start from within the index to consume.
      */
-    constructor(storage, indexName, identifier) {
+    constructor(storage, indexName, identifier, startFrom = 0) {
         super({ objectMode: true });
 
         if (!(storage instanceof Storage)) {
@@ -41,7 +42,7 @@ class Consumer extends stream.Readable {
         try {
             this.position = fs.readFileSync(this.fileName);
         } catch (e) {
-            this.position = 0;
+            this.position = startFrom;
         }
 
         this.consuming = false;
@@ -61,17 +62,19 @@ class Consumer extends stream.Readable {
             return;
         }
 
-        if (this.position === position - 1) {
-            if (!this.push(document)) {
-                this.stop();
-            }
-            this.position = position;
-            if (!this.persist) {
-                this.persist = setImmediate(() => {
-                    fs.writeFileSync(this.fileName, this.position);
-                    this.persist = undefined;
-                });
-            }
+        if (this.position !== position - 1) {
+            return;
+        }
+
+        if (!this.push(document)) {
+            this.stop();
+        }
+        this.position = position;
+        if (!this.persist) {
+            this.persist = setImmediate(() => {
+                fs.writeFileSync(this.fileName, this.position);
+                this.persist = undefined;
+            });
         }
     }
 
