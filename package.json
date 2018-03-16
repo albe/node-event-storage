@@ -24,6 +24,21 @@
     "test": "nyc --reporter=html mocha test/*.spec.js",
     "coverage": "nyc report --reporter=text-lcov | coveralls"
   },
+  "files": [
+    "*/Consumer*.js",
+    "*/EventStore*.js",
+    "*/EventStream*.js",
+    "*/Index*.js",
+    "*/IndexEntry*.js",
+    "*/JoinEventStream*.js",
+    "*/Partition*.js",
+    "*/Storage*.js",
+    "CNAME",
+    ".travis.yml",
+    "_config.yml",
+    ".gitignore",
+    "package-lock.json"
+  ],
   "license": "MIT",
   "maintainers": [
     {
