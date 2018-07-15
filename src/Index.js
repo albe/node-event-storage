@@ -193,13 +193,31 @@ class Index {
     }
 
     /**
+     * Verify the metadata block read from the file against the expected metadata and set it.
+     *
+     * @private
+     * @param {string} metadata Stringified metadata read from the file.
+     * @throws {Error} if metadata is set and the read metadata does not match.
+     */
+    verifyAndSetMetadata(metadata) {
+        // Verify metadata if it was set in constructor
+        if (this.metadata && JSON.stringify(this.metadata) !== metadata) {
+            throw new Error('Index metadata mismatch! ' + metadata);
+        }
+        try {
+            this.metadata = JSON.parse(metadata);
+        } catch (e) {
+            throw new Error('Invalid metadata.');
+        }
+    }
+
+    /**
      * Read the index metadata from the file.
      *
      * @private
      * @returns {number} The size of the metadata header.
      * @throws {Error} if the file header magic value is invalid.
      * @throws {Error} if the metadata size in the header is invalid.
-     * @throws {Error} if metadata is set and the read metadata does not match.
      */
     readMetadata() {
         const headerBuffer = Buffer.allocUnsafe(8 + 4);
@@ -220,17 +238,7 @@ class Index {
         metadataBuffer.fill(" ");
         fs.readSync(this.fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
         const metadata = metadataBuffer.toString('utf8').trim();
-
-        // Verify metadata if it was set in constructor
-        if (this.metadata && JSON.stringify(this.metadata) !== metadata) {
-            throw new Error('Index metadata mismatch! ' + metadata);
-        }
-        try {
-            this.metadata = JSON.parse(metadata);
-        } catch (e) {
-            throw new Error('Invalid metadata.');
-        }
-
+        this.verifyAndSetMetadata(metadata);
         this.headerSize = 8 + 4 + metadataSize;
         return this.headerSize;
     }
