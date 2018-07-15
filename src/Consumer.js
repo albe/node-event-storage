@@ -138,6 +138,9 @@ class Consumer extends stream.Readable {
      * @private
      */
     _read() {
+        if (this.isPaused()) {
+            return;
+        }
         this.start();
     }
 }
