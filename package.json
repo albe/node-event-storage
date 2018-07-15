@@ -37,6 +37,7 @@
     ".travis.yml",
     "_config.yml",
     ".gitignore",
+    "index.js",
     "package-lock.json"
   ],
   "license": "MIT",
