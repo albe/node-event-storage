@@ -106,6 +106,31 @@ describe('Index', function() {
             expect(entry.partition).to.be(4);
         });
 
+        it('correctly validates custom entry classes', function() {
+            class CustomEntryClassWithMissingFromBuffer {
+                static get size() { return 4; }
+            }
+            class CustomEntryClassWithMissingToBuffer {
+                static get size() { return 4; }
+                static fromBuffer(buffer, offset = 0) {}
+            }
+            class CustomZeroSizeEntryClass {
+                static get size() { return 0; }
+                static fromBuffer(buffer, offset = 0) {}
+                toBuffer(buffer, offset) {}
+            }
+            function CustomEs5Entry() {
+                this.toBuffer = function(buffer, offset) {};
+            }
+            CustomEs5Entry.prototype.size = 4;
+            CustomEs5Entry.prototype.fromBuffer = function(buffer, offset) {}
+            expect(() => Index.Entry.assertValidEntryClass({})).to.throwError(/Invalid index entry class/);
+            expect(() => Index.Entry.assertValidEntryClass(CustomEntryClassWithMissingFromBuffer)).to.throwError(/Invalid index entry class/);
+            expect(() => Index.Entry.assertValidEntryClass({})).to.throwError(/Invalid index entry class/);
+            expect(() => Index.Entry.assertValidEntryClass(CustomZeroSizeEntryClass)).to.throwError(/size must be positive/);
+            expect(() => Index.Entry.assertValidEntryClass(CustomEs5Entry)).to.not.throwError();
+        });
+
     });
 
     describe('add', function() {
