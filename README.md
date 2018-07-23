@@ -8,7 +8,7 @@
 
 An optimized embedded event store for modern node.js, written in ES6.
 
-Disclaimer: This is currently under heavy development and not production ready.
+> **Disclaimer:** This is currently under heavy development and not production ready. See https://github.com/albe/node-event-storage/issues/29 for more information.
 
 ## Why?
 
