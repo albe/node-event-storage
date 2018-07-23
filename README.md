@@ -2,7 +2,7 @@
 [![Code Climate](https://codeclimate.com/github/albe/node-event-storage/badges/gpa.svg)](https://codeclimate.com/github/albe/node-event-storage)
 [![Coverage Status](https://coveralls.io/repos/github/albe/node-event-storage/badge.svg?branch=master)](https://coveralls.io/github/albe/node-event-storage?branch=master)
 [![dependencies Status](https://david-dm.org/albe/node-event-storage/status.svg)](https://david-dm.org/albe/node-event-storage)
-[![devDependencies Status](https://david-dm.org/albe/node-event-storage/dev-status.svg)](https://david-dm.org/albe/node-event-storage?type=dev)
+[![Code documentation](https://inch-ci.org/github/albe/node-event-storage.svg?branch=master)](https://inch-ci.org/github/albe/node-event-storage)
 
 # node-event-storage
 
@@ -24,6 +24,12 @@ It is a nice project, but has a few drawbacks though:
   - events are fixed onto one stream and it's not possible to create multiple streams that partially contain
       the same events. This makes creating projections hard and/or slow.
 
+## Use Cases
+
+Event sourced client applications running on node.js (electron, node-webkit, etc.).
+Small event sourced single-server applications that want to get near-optimal write performance.
+Using it as queryable log storage.
+
 ## Event-Storage and it's specifics
 
 The thing that makes event storages stand out (and also makes them simpler and more performant), is that they
@@ -39,15 +45,10 @@ This means a couple of things:
   - indexes are append-only and hence gain the same benefits
   - since only sequential reading is needed, indexes are simple file position lists - no fancy B+-Tree/fractal tree required
   - indexes are therefore pretty cheap and can be created in high numbers
+  - creating backups is easily doable with rsync or by creating file copies on the fly
 
 Using any SQL/NoSQL database for storing events therefore is sub-optimal, as those databases do a lot of work on
 top which is simply not needed. Write and read performance suffer.
-
-## Use Cases
-
-Event sourced client applications running on node.js (electron, node-webkit, etc.).
-Small event sourced single-server applications that want to get near-optimal write performance.
-Using it as queryable log storage.
 
 ## Installation
 
