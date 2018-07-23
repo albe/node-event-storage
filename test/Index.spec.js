@@ -119,11 +119,10 @@ describe('Index', function() {
                 static fromBuffer(buffer, offset = 0) {}
                 toBuffer(buffer, offset) {}
             }
-            function CustomEs5Entry() {
-                this.toBuffer = function(buffer, offset) {};
-            }
+            function CustomEs5Entry() {}
             CustomEs5Entry.size = 4;
             CustomEs5Entry.fromBuffer = function(buffer, offset) {};
+            CustomEs5Entry.prototype.toBuffer = function(buffer, offset) {};
             expect(() => Index.Entry.assertValidEntryClass({})).to.throwError(/Invalid index entry class/);
             expect(() => Index.Entry.assertValidEntryClass(CustomEntryClassWithMissingFromBuffer)).to.throwError(/Invalid index entry class/);
             expect(() => Index.Entry.assertValidEntryClass({})).to.throwError(/Invalid index entry class/);
