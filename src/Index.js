@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const mkdirpSync = require('mkdirp').sync;
 const Entry = require('./IndexEntry');
-const EntryInterface = Entry.EntryInterface;
+const { assertEqual, wrapAndCheck, binarySearch } = require('./util');
 
 Buffer.poolSize = 64 * 1024;
 
@@ -49,20 +49,29 @@ class Index {
             mkdirpSync(options.dataDirectory);
         }
 
-        this.data = [];
         this.name = name;
-        this.fileName = path.resolve(options.dataDirectory, this.name);
-        this.readBuffer = Buffer.allocUnsafe(EntryClass.size);
-        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0);
-        this.flushDelay = options.flushDelay >>> 0;
+        options.readBufferSize = EntryClass.size;
+        this.initialize(options);
 
         this.EntryClass = EntryClass;
         if (options.metadata) {
             this.metadata = Object.assign({entryClass: EntryClass.name, entrySize: EntryClass.size}, options.metadata);
         }
 
-        this.fd = null;
         this.open();
+    }
+
+    /**
+     * @private
+     * @param {Object} options
+     */
+    initialize(options) {
+        this.data = [];
+        this.fd = null;
+        this.fileName = path.resolve(options.dataDirectory, this.name);
+        this.readBuffer = Buffer.allocUnsafe(options.readBufferSize >>> 0);
+        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0);
+        this.flushDelay = options.flushDelay >>> 0;
     }
 
     /**
@@ -108,9 +117,6 @@ class Index {
      */
     checkFile() {
         const stat = fs.fstatSync(this.fd);
-        if (!stat) {
-            throw new Error(`Error stat'ing index file "${this.fileName}".`);
-        }
 
         if (stat.size === 0) {
             // Freshly created index... write metadata initially.
@@ -145,9 +151,6 @@ class Index {
         }
 
         this.fd = fs.openSync(this.fileName, 'a+');
-        if (!this.fd) {
-            throw new Error(`Error opening index file "${this.fileName}".`);
-        }
 
         this.writeBufferCursor = 0;
         this.flushCallbacks = [];
@@ -309,12 +312,9 @@ class Index {
      * @returns {number} The index position for the entry. It matches the index size after the insertion.
      */
     add(entry, callback) {
-        if (entry.constructor.name !== this.EntryClass.name) {
-            throw new Error(`Wrong entry object, got ${entry.constructor.name}, expected ${this.EntryClass.name}.`);
-        }
-        if (entry.constructor.size !== this.EntryClass.size) {
-            throw new Error(`Invalid entry size, got ${entry.constructor.size}, expected ${this.EntryClass.size}.`);
-        }
+        assertEqual(entry.constructor.name, this.EntryClass.name, `Wrong entry object`);
+        assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size`);
+
         if (this.readUntil === this.data.length - 1) {
             this.readUntil++;
         }
@@ -339,18 +339,11 @@ class Index {
      *
      * @private
      * @param {number} index
-     * @returns {Entry|boolean} The index entry at the given position or false on error.
+     * @returns {Entry} The index entry at the given position.
      */
     read(index) {
-        if (!this.fd) {
-            return false;
-        }
-
         index--;
 
-        if (index <= this.readUntil) {
-            return this.data[index];
-        }
         fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
         if (index === this.readUntil + 1) {
             this.readUntil++;
@@ -370,13 +363,6 @@ class Index {
      * @returns {Array<Entry>|boolean} An array of the index entries in the given range or false on error.
      */
     readRange(from, until) {
-        if (!this.fd) {
-            return false;
-        }
-
-        if (until < from) {
-            return false;
-        }
         if (until === from) {
             return this.read(from);
         }
@@ -417,20 +403,6 @@ class Index {
     }
 
     /**
-     * @private
-     * @param {number} index The 1-based index position to wrap around if < 0 and check against the bounds.
-     * @returns {number|boolean} The wrapped index or false if index out of bounds.
-     */
-    wrapAndCheck(index) {
-        if (typeof index !== 'number') return false;
-        if (index < 0) index += this.length + 1;
-        if (index < 1 || index > this.length) {
-            return false;
-        }
-        return index;
-    }
-
-    /**
      * Get a single index entry at given position, checking the boundaries.
      *
      * @api
@@ -438,7 +410,7 @@ class Index {
      * @returns {Entry|boolean} The entry at the given index position or false if out of bounds.
      */
     get(index) {
-        index = this.wrapAndCheck(index);
+        index = wrapAndCheck(index, this.length);
         if (index === false) {
             return false;
         }
@@ -477,8 +449,8 @@ class Index {
      * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
     range(from, until = -1) {
-        from = this.wrapAndCheck(from);
-        until = this.wrapAndCheck(until);
+        from = wrapAndCheck(from, this.length);
+        until = wrapAndCheck(until, this.length);
 
         if (from === false || until < from) {
             return false;
@@ -509,29 +481,8 @@ class Index {
      * @returns {number} The last index entry position that is lower than or equal to the given number. Returns 0 if no index matches.
      */
     find(number, min = false) {
-        let low = 1;
         // We only need to search until the searched number because entry.number is always >= position
-        let high = Math.min(this.length, number);
-
-        if (this.get(low).number > number) {
-            return min ? low : 0;
-        }
-        if (this.get(high).number < number) {
-            return min ? 0 : high;
-        }
-
-        while (low <= high) {
-            const mid = low + ((high - low) >> 1);
-            const entry = this.get(mid);
-            if (entry.number === number) {
-                return mid;
-            }
-            if (entry.number < number) {
-                low = mid + 1;
-            } else {
-                high = mid - 1;
-            }
-        }
+        const [low, high] = binarySearch(number, Math.min(this.length, number), index => this.get(index).number);
         return min ? low : high;
     }
 
@@ -547,9 +498,7 @@ class Index {
         if (after < 0) {
             after = 0;
         }
-        if (this.fd) {
-            this.flush();
-        }
+        this.flush();
 
         fs.truncateSync(this.fileName, this.headerSize + after * this.EntryClass.size);
         this.data.splice(after);

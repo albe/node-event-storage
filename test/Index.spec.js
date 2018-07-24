@@ -125,7 +125,7 @@ describe('Index', function() {
             CustomEs5Entry.prototype.toBuffer = function(buffer, offset) {};
             expect(() => Index.Entry.assertValidEntryClass({})).to.throwError(/Invalid index entry class/);
             expect(() => Index.Entry.assertValidEntryClass(CustomEntryClassWithMissingFromBuffer)).to.throwError(/Invalid index entry class/);
-            expect(() => Index.Entry.assertValidEntryClass({})).to.throwError(/Invalid index entry class/);
+            expect(() => Index.Entry.assertValidEntryClass(CustomEntryClassWithMissingToBuffer)).to.throwError(/Invalid index entry class/);
             expect(() => Index.Entry.assertValidEntryClass(CustomZeroSizeEntryClass)).to.throwError(/size must be positive/);
             expect(() => Index.Entry.assertValidEntryClass(CustomEs5Entry)).to.not.throwError();
         });
@@ -145,12 +145,29 @@ describe('Index', function() {
             }
         });
 
+        it('appends entries to reopened index correctly', function() {
+            index = setupIndexWithEntries(5);
+            index.close();
+            index.open();
+            index.add(new Index.Entry(6, 6));
+            let entries = index.all();
+            expect(entries.length).to.be(6);
+            for (let i = 1; i <= entries.length; i++) {
+                expect(entries[i - 1].number).to.be(i);
+            }
+        });
+
         it('calls callback eventually', function(done) {
             index = new Index('test/data/.index', { flushDelay: 1 });
             let position = index.add(new Index.Entry(1, 0), (number) => {
                 expect(number).to.be(position);
                 done();
             });
+        });
+
+        it('flushes automatically when writeBuffer full', function() {
+            index = setupIndexWithEntries(5, { writeBufferSize: 5 * Index.Entry.size });
+            expect(index.flush()).to.be(false);
         });
 
         it('throws with invalid entry object', function() {
@@ -180,18 +197,18 @@ describe('Index', function() {
             expect(index.get(index.length+1)).to.be(false);
         });
 
+        it('returns false on closed index', function() {
+            index = setupIndexWithEntries(5);
+            index.close();
+            expect(index.get(1)).to.be(false);
+        });
+
         it('can read entry from the end', function() {
             setupIndexWithEntries(5);
             index.close();
             index.open();
             let entry = index.get(-1);
             expect(entry.number).to.be(index.length);
-        });
-
-        it('returns false on closed index', function() {
-            index = setupIndexWithEntries(1);
-            index.close();
-            expect(index.get(1)).to.be(false);
         });
 
         it('can random read entries', function() {
@@ -227,9 +244,10 @@ describe('Index', function() {
         });
 
         it('returns false on closed index', function() {
-            index = setupIndexWithEntries(1);
+            index = setupIndexWithEntries(5);
             index.close();
             expect(index.range(1)).to.be(false);
+            expect(index.range(1,5)).to.be(false);
         });
 
         it('can read an arbitrary range of entries', function() {
@@ -359,6 +377,16 @@ describe('Index', function() {
             expect(index.length).to.be(2);
         });
 
+        it('does not truncate closed index', function() {
+            index = setupIndexWithEntries(5);
+            index.close();
+
+            index.truncate(2);
+
+            index.open();
+            expect(index.length).to.be(5);
+        });
+
         it('does nothing if truncating after index length', function() {
             index = setupIndexWithEntries(5);
             index.close();
@@ -423,6 +451,22 @@ describe('Index', function() {
             index = setupIndexWithEntries(5);
             index.destroy();
             expect(fs.existsSync('test/data/.index')).to.be(false);
+        });
+
+    });
+
+    describe('flush', function(){
+
+        it('returns false on a closed index', function(){
+            index = setupIndexWithEntries(1);
+            index.close();
+            expect(index.flush()).to.be(false);
+        });
+
+        it('returns false if nothing to flush', function(){
+            index = setupIndexWithEntries(1);
+            index.flush();
+            expect(index.flush()).to.be(false);
         });
 
     });
