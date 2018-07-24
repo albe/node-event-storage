@@ -339,18 +339,11 @@ class Index {
      *
      * @private
      * @param {number} index
-     * @returns {Entry|boolean} The index entry at the given position or false on error.
+     * @returns {Entry} The index entry at the given position.
      */
     read(index) {
-        if (!this.fd) {
-            return false;
-        }
-
         index--;
 
-        if (index <= this.readUntil) {
-            return this.data[index];
-        }
         fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
         if (index === this.readUntil + 1) {
             this.readUntil++;
@@ -370,13 +363,6 @@ class Index {
      * @returns {Array<Entry>|boolean} An array of the index entries in the given range or false on error.
      */
     readRange(from, until) {
-        if (!this.fd) {
-            return false;
-        }
-
-        if (until < from) {
-            return false;
-        }
         if (until === from) {
             return this.read(from);
         }

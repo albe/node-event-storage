@@ -211,12 +211,6 @@ describe('Index', function() {
             expect(entry.number).to.be(index.length);
         });
 
-        it('returns false on closed index', function() {
-            index = setupIndexWithEntries(1);
-            index.close();
-            expect(index.get(1)).to.be(false);
-        });
-
         it('can random read entries', function() {
             index = setupIndexWithEntries(10);
             index.close();
