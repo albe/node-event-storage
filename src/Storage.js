@@ -5,42 +5,10 @@ const path = require('path');
 const EventEmitter = require('events');
 const Partition = require('./Partition');
 const Index = require('./Index');
+const { createHmac, matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('./util');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
-
-/**
- * @param {string} secret The secret to use for calculating further HMACs
- * @returns {Function(string)} A function that calculates the HMAC for a given string
- */
-const createHmac = secret => string => {
-        const hmac = crypto.createHmac('sha256', secret);
-        hmac.update(string);
-        return hmac.digest('hex');
-    };
-
-/**
- * @param {Object} document The document to check against the matcher.
- * @param {Object|function} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
- * @returns {boolean} True if the document matches the matcher or false otherwise.
- */
-function matches(document, matcher) {
-    if (typeof document === 'undefined') return false;
-    if (typeof matcher === 'undefined') return true;
-
-    if (typeof matcher === 'function') return matcher(document);
-
-    for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (typeof matcher[prop] === 'object') {
-            if (!matches(document[prop], matcher[prop])) {
-                return false;
-            }
-        } else if (document[prop] !== matcher[prop]) {
-            return false;
-        }
-    }
-    return true;
-}
 
 /**
  * An append-only storage with highly performant positional range scans.
@@ -331,22 +299,6 @@ class Storage extends EventEmitter {
     }
 
     /**
-     * @private
-     * @param {Object|function} matcher The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
-     * @returns {{metadata: {matcher: string, hmac: string}}}
-     */
-    buildMetadataForMatcher(matcher) {
-        if (!matcher) {
-            return undefined;
-        }
-        if (typeof matcher === 'object') {
-            return { metadata: { matcher } };
-        }
-        const matcherString = matcher.toString();
-        return { metadata: { matcher: matcherString, hmac: this.hmac(matcherString) } };
-    }
-
-    /**
      * Open an existing index.
      *
      * @api
@@ -365,18 +317,16 @@ class Storage extends EventEmitter {
         if (!fs.existsSync(path.join(this.indexDirectory, indexName))) {
             throw new Error(`Index "${name}" does not exist.`);
         }
-        let metadata = this.buildMetadataForMatcher(matcher);
+        const metadata = buildMetadataForMatcher(matcher, this.hmac);
+        const index = new Index(indexName, Object.assign({}, this.indexOptions, { metadata }));
 
-        const index = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
-        if (typeof index.metadata.matcher === 'object') {
-            matcher = index.metadata.matcher;
-        } else {
-            if (index.metadata.hmac !== this.hmac(index.metadata.matcher)) {
-                index.destroy();
-                throw new Error('Invalid HMAC for matcher.');
-            }
-            matcher = eval('(' + index.metadata.matcher + ')').bind({}); // jshint ignore:line
+        try {
+            matcher = buildMatcherFromMetadata(index.metadata, this.hmac);
+        } catch (e) {
+            index.destroy();
+            throw e;
         }
+
         this.secondaryIndexes[name] = { index, matcher };
         index.open();
         return index;
@@ -406,8 +356,8 @@ class Storage extends EventEmitter {
             throw new Error('Need to specify a matcher.');
         }
 
-        const metadata = this.buildMetadataForMatcher(matcher);
-        const newIndex = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
+        const metadata = buildMetadataForMatcher(matcher, this.hmac);
+        const newIndex = new Index(indexName, Object.assign({}, this.indexOptions, { metadata }));
         try {
             this.forEachDocument((document, indexEntry) => {
                 if (matches(document, matcher)) {
@@ -427,6 +377,7 @@ class Storage extends EventEmitter {
     /**
      * Truncate all partitions after the given (global) sequence number.
      *
+     * @private
      * @param {number} after The document sequence number to truncate after.
      */
     truncatePartitions(after) {
