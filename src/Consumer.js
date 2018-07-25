@@ -79,6 +79,38 @@ class Consumer extends stream.Readable {
     }
 
     /**
+     * Check if this consumer has caught up. If so, register a handler for the stream and emit a 'caught-up' event.
+     *
+     * @private
+     * @return {boolean} True if this consumer has caught up and can
+     */
+    checkCaughtUp() {
+        if (this.index.length <= this.position) {
+            this.storage.on('index-add', this.handler);
+            this.emit('caught-up');
+            return true;
+        }
+        return (this.consuming === false);
+    }
+
+    /**
+     * Consume (push) a number of documents and update the position record.
+     *
+     * @private
+     * @param {Array|Generator} documents The list or a stream of documents to consume
+     */
+    consumeDocuments(documents) {
+        for (let document of documents) {
+            if (!this.push(document)) {
+                this.stop();
+                break;
+            }
+            ++this.position;
+        }
+        fs.writeFileSync(this.fileName, this.position);
+    }
+
+    /**
      * Start consuming documents.
      *
      * This will also catch up from the last position in case new documents were added.
@@ -96,25 +128,13 @@ class Consumer extends stream.Readable {
         // Catch up to current index position
         const catchUpBatch = () => {
             setImmediate(() => {
-                if (this.index.length <= this.position) {
-                    this.storage.on('index-add', this.handler);
-                    this.emit('caught-up');
-                    return;
-                }
-                if (this.consuming === false) {
+                if (this.checkCaughtUp()) {
                     return;
                 }
 
                 const maxBatchPosition = Math.min(this.position + MAX_CATCHUP_BATCH + 1, this.index.length);
                 const documents = this.storage.readRange(this.position + 1, maxBatchPosition, this.index);
-                for (let document of documents) {
-                    if (!this.push(document)) {
-                        this.stop();
-                        break;
-                    }
-                    ++this.position;
-                }
-                fs.writeFileSync(this.fileName, this.position);
+                this.consumeDocuments(documents);
                 catchUpBatch();
             });
         };
