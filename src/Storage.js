@@ -10,6 +10,39 @@ const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
 /**
+ * @param {string} secret The secret to use for calculating further HMACs
+ * @returns {Function(string)} A function that calculates the HMAC for a given string
+ */
+const createHmac = secret => string => {
+        const hmac = crypto.createHmac('sha256', secret);
+        hmac.update(string);
+        return hmac.digest('hex');
+    };
+
+/**
+ * @param {Object} document The document to check against the matcher.
+ * @param {Object|function} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
+ * @returns {boolean} True if the document matches the matcher or false otherwise.
+ */
+function matches(document, matcher) {
+    if (typeof document === 'undefined') return false;
+    if (typeof matcher === 'undefined') return true;
+
+    if (typeof matcher === 'function') return matcher(document);
+
+    for (let prop of Object.getOwnPropertyNames(matcher)) {
+        if (typeof matcher[prop] === 'object') {
+            if (!matches(document[prop], matcher[prop])) {
+                return false;
+            }
+        } else if (document[prop] !== matcher[prop]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * An append-only storage with highly performant positional range scans.
  * It's highly optimized for an event-store and hence does not support compaction or data-rewrite, nor any querying
  */
@@ -41,7 +74,7 @@ class Storage extends EventEmitter {
         }
 
         this.storageFile = storageName || 'storage';
-        let defaults = {
+        const defaults = {
             serializer: { serialize: JSON.stringify, deserialize: JSON.parse },
             partitioner: (document, number) => '',
             dataDirectory: '.',
@@ -53,17 +86,25 @@ class Storage extends EventEmitter {
         this.serializer = config.serializer;
         this.partitioner = config.partitioner;
 
-        this.hmac = string => {
-            const hmac = crypto.createHmac('sha256', config.hmacSecret);
-            hmac.update(string);
-            return hmac.digest('hex');
-        };
+        this.hmac = createHmac(config.hmacSecret);
 
         this.dataDirectory = path.resolve(config.dataDirectory);
         if (!fs.existsSync(this.dataDirectory)) {
             mkdirpSync(this.dataDirectory);
         }
 
+        this.initializeIndexes(config);
+        this.scanPartitions(config);
+    }
+
+    /**
+     * Create/open the primary index and build the base configuration for all secondary indexes.
+     *
+     * @private
+     * @param {Object} config The configuration object
+     * @returns void
+     */
+    initializeIndexes(config) {
         this.indexDirectory = path.resolve(config.indexDirectory || this.dataDirectory);
 
         this.indexOptions = config.indexOptions;
@@ -72,8 +113,6 @@ class Storage extends EventEmitter {
         delete this.indexOptions.matcher;
         this.index = new Index(config.indexFile, this.indexOptions);
         this.secondaryIndexes = {};
-
-        this.scanPartitions(config);
     }
 
     /**
@@ -93,7 +132,7 @@ class Storage extends EventEmitter {
      * @returns void
      */
     scanPartitions(config) {
-        let defaults = {
+        const defaults = {
             readBufferSize: DEFAULT_READ_BUFFER_SIZE,
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
@@ -107,11 +146,10 @@ class Storage extends EventEmitter {
         for (let file of files) {
             if (file.substr(-6) === '.index') continue;
             if (file.substr(-7) === '.branch') continue;
-            if (file.substr(0, this.storageFile.length) === this.storageFile) {
-                //console.log('Found existing partition', file);
-                const partition = new Partition(file, this.partitionConfig);
-                this.partitions[partition.id] = partition;
-            }
+            if (file.substr(0, this.storageFile.length) !== this.storageFile) continue;
+
+            const partition = new Partition(file, this.partitionConfig);
+            this.partitions[partition.id] = partition;
         }
     }
 
@@ -294,35 +332,13 @@ class Storage extends EventEmitter {
 
     /**
      * @private
-     * @param {Object} document The document to check against the matcher.
-     * @param {Object|function} matcher An object of properties and their values that need to match in the object.
-     * @returns {boolean} True if the document matches the matcher or false otherwise.
-     */
-    matches(document, matcher) {
-        if (typeof document === 'undefined') return false;
-        if (typeof matcher === 'undefined') return true;
-
-        if (typeof matcher === 'function') return matcher(document);
-        for (let prop of Object.getOwnPropertyNames(matcher)) {
-            if (typeof matcher[prop] === 'object') {
-                if (!this.matches(document[prop], matcher[prop])) {
-                    return false;
-                }
-            } else {
-                if (document[prop] !== matcher[prop]) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-
-    /**
-     * @private
      * @param {Object|function} matcher The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
      * @returns {{metadata: {matcher: string, hmac: string}}}
      */
     buildMetadataForMatcher(matcher) {
+        if (!matcher) {
+            return undefined;
+        }
         if (typeof matcher === 'object') {
             return { metadata: { matcher } };
         }
@@ -349,10 +365,7 @@ class Storage extends EventEmitter {
         if (!fs.existsSync(path.join(this.indexDirectory, indexName))) {
             throw new Error(`Index "${name}" does not exist.`);
         }
-        let metadata;
-        if (matcher) {
-            metadata = this.buildMetadataForMatcher(matcher);
-        }
+        let metadata = this.buildMetadataForMatcher(matcher);
 
         const index = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
         if (typeof index.metadata.matcher === 'object') {
@@ -397,7 +410,7 @@ class Storage extends EventEmitter {
         const newIndex = new Index(indexName, Object.assign({}, this.indexOptions, metadata));
         try {
             this.forEachDocument((document, indexEntry) => {
-                if (this.matches(document, matcher)) {
+                if (matches(document, matcher)) {
                     newIndex.add(indexEntry);
                 }
             });
@@ -409,6 +422,36 @@ class Storage extends EventEmitter {
         this.secondaryIndexes[name] = { index: newIndex, matcher };
         this.emit('index-created', name);
         return newIndex;
+    }
+
+    /**
+     * Truncate all partitions after the given (global) sequence number.
+     *
+     * @param {number} after The document sequence number to truncate after.
+     */
+    truncatePartitions(after) {
+        if (after === 0) {
+            this.forEachPartition(partition => partition.truncate(0));
+            return;
+        }
+
+        const entries = this.index.range(after + 1);  // We need the first entry that is cut off
+        if (entries === false || entries.length === 0) {
+            return;
+        }
+
+        const partitions = [];
+        const numPartitions = Object.keys(this.partitions).length;
+        for (let entry of entries) {
+            if (partitions.indexOf(entry.partition) >= 0) continue;
+
+            partitions.push(entry.partition);
+            this.getPartition(entry.partition).truncate(entry.position);
+
+            if (partitions.length === numPartitions) {
+                break;
+            }
+        }
     }
 
     /**
@@ -427,26 +470,8 @@ class Storage extends EventEmitter {
         if (!this.index.isOpen()) {
             this.index.open();
         }
-        const entries = this.index.range(after + 1);  // We need the first entry that is cut off
-        if (entries === false || entries.length === 0) {
-            return;
-        }
 
-        if (after === 0) {
-            this.forEachPartition(partition => partition.truncate(0));
-        } else {
-            const partitions = [];
-            const numPartitions = Object.keys(this.partitions).length;
-            for (let entry of entries) {
-                if (partitions.indexOf(entry.partition) >= 0) continue;
-                partitions.push(entry.partition);
-                this.getPartition(entry.partition).truncate(entry.position);
-
-                if (partitions.length === numPartitions) {
-                    break;
-                }
-            }
-        }
+        this.truncatePartitions(after);
 
         this.index.truncate(after);
         this.forEachSecondaryIndex(index => {
@@ -492,7 +517,7 @@ class Storage extends EventEmitter {
         if (typeof iterationHandler !== 'function') return;
 
         for (let indexName of Object.keys(this.secondaryIndexes)) {
-            if (!matchDocument || this.matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
+            if (!matchDocument || matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
                 iterationHandler(this.secondaryIndexes[indexName].index, indexName);
             }
         }
