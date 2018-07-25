@@ -1,5 +1,4 @@
 const fs = require('fs');
-const crypto = require('crypto');
 const mkdirpSync = require('mkdirp').sync;
 const path = require('path');
 const EventEmitter = require('events');

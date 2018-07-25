@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 
 /**
  * @param {string} secret The secret to use for calculating further HMACs
