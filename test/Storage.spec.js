@@ -444,11 +444,14 @@ describe('Storage', function() {
             storage.open();
             storage.write({type: 'Foo'});
 
-            storage.matches = () => { throw new Error('Failure'); };
+            const Index = require('../src/Index');
+            const originalAdd = Index.prototype.add;
+            Index.prototype.add = () => { throw new Error('Failure'); };
             try {
                 storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
             } catch (e) {}
             expect(fs.existsSync('test/data/storage.foo.index')).to.be(false);
+            Index.prototype.add = originalAdd;
         });
 
     });
@@ -615,26 +618,24 @@ describe('Storage', function() {
 
     describe('matches', function() {
 
+        const matches = Storage.matches;
+
         it('returns true if no matcher specified', function() {
-            storage = new Storage({ dataDirectory: dataDir });
-            expect(storage.matches({ foo: 'bar' })).to.be(true);
+            expect(matches({ foo: 'bar' })).to.be(true);
         });
 
         it('returns false if no document specified', function() {
-            storage = new Storage({ dataDirectory: dataDir });
-            expect(storage.matches()).to.be(false);
+            expect(matches()).to.be(false);
         });
 
         it('works with object matchers', function() {
-            storage = new Storage({ dataDirectory: dataDir });
-            expect(storage.matches({ foo: 'foo', bar: { baz: 'baz', quux: 'quux' } }, { foo: 'foo', bar: { baz: 'baz' } })).to.be(true);
-            expect(storage.matches({ foo: 'foo', bar: { baz: 'baz2', quux: 'quux' } }, { foo: 'foo', bar: { baz: 'baz' } })).to.be(false);
+            expect(matches({ foo: 'foo', bar: { baz: 'baz', quux: 'quux' } }, { foo: 'foo', bar: { baz: 'baz' } })).to.be(true);
+            expect(matches({ foo: 'foo', bar: { baz: 'baz2', quux: 'quux' } }, { foo: 'foo', bar: { baz: 'baz' } })).to.be(false);
         });
 
         it('works with function matchers', function() {
-            storage = new Storage({ dataDirectory: dataDir });
-            expect(storage.matches({ foo: 'foo', bar: { baz: 'baz', quux: 'quux' } }, (doc) => doc.foo === 'foo')).to.be(true);
-            expect(storage.matches({ foo: 'foo2', bar: { baz: 'baz', quux: 'quux' } }, (doc) => doc.foo === 'foo')).to.be(false);
+            expect(matches({ foo: 'foo', bar: { baz: 'baz', quux: 'quux' } }, (doc) => doc.foo === 'foo')).to.be(true);
+            expect(matches({ foo: 'foo2', bar: { baz: 'baz', quux: 'quux' } }, (doc) => doc.foo === 'foo')).to.be(false);
         });
 
     });
