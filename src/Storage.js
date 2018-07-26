@@ -57,7 +57,10 @@ class Storage extends EventEmitter {
 
         this.dataDirectory = path.resolve(config.dataDirectory);
         if (!fs.existsSync(this.dataDirectory)) {
-            mkdirpSync(this.dataDirectory);
+            try {
+                mkdirpSync(this.dataDirectory);
+            } catch (e) {
+            }
         }
 
         this.initializeIndexes(config);
@@ -491,3 +494,4 @@ class Storage extends EventEmitter {
 }
 
 module.exports = Storage;
+module.exports.matches = matches;
