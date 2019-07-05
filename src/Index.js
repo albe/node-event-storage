@@ -189,7 +189,7 @@ class Index {
         metadataSize += pad + 1;
         const metadataBuffer = Buffer.allocUnsafe(8 + 4 + metadataSize);
         metadataBuffer.write(HEADER_MAGIC, 0, 8, 'utf8');
-        metadataBuffer.writeUInt32BE(metadataSize, 8, true);
+        metadataBuffer.writeUInt32BE(metadataSize, 8);
         metadataBuffer.write(metadata, 8 + 4, metadataSize, 'utf8');
         fs.writeSync(this.fd, metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = 8 + 4 + metadataSize;
@@ -232,7 +232,7 @@ class Index {
             }
             throw new Error('Invalid file header.');
         }
-        const metadataSize = headerBuffer.readUInt32BE(8, true);
+        const metadataSize = headerBuffer.readUInt32BE(8);
         if (metadataSize < 3) {
             throw new Error('Invalid metadata size.');
         }
