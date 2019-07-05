@@ -58,7 +58,7 @@ describe('Index', function() {
     it('throws on opening an index file with wrong metadata size', function() {
         const metadataBuffer = Buffer.allocUnsafe(8 + 4);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
-        metadataBuffer.writeUInt32BE(0, 8, true);
+        metadataBuffer.writeUInt32BE(0, 8);
         fs.writeFileSync('test/data/.index', metadataBuffer);
 
         expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata size/);
@@ -67,7 +67,7 @@ describe('Index', function() {
     it('throws on opening an index file with too large metadata size', function() {
         const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
-        metadataBuffer.writeUInt32BE(255, 8, true);
+        metadataBuffer.writeUInt32BE(255, 8);
         metadataBuffer.write("{}\n", 12, 3, 'utf8');
         fs.writeFileSync('test/data/.index', metadataBuffer);
 
@@ -77,7 +77,7 @@ describe('Index', function() {
     it('throws on opening an index file with invalid metadata', function() {
         const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
-        metadataBuffer.writeUInt32BE(255, 8, true);
+        metadataBuffer.writeUInt32BE(255, 8);
         metadataBuffer.write("{x$", 12, 3, 'utf8');
         fs.writeFileSync('test/data/.index', metadataBuffer);
 

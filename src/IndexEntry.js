@@ -80,10 +80,10 @@ class Entry extends Array {
      * @return {Entry} A new entry matching the values from the Buffer.
      */
     static fromBuffer(buffer, offset = 0) {
-        const number     = buffer.readUInt32LE(offset, true);
-        const position   = buffer.readUInt32LE(offset +  4, true);
-        const size       = buffer.readUInt32LE(offset +  8, true);
-        const partition  = buffer.readUInt32LE(offset + 12, true);
+        const number     = buffer.readUInt32LE(offset);
+        const position   = buffer.readUInt32LE(offset +  4);
+        const size       = buffer.readUInt32LE(offset +  8);
+        const partition  = buffer.readUInt32LE(offset + 12);
         return new this(number, position, size, partition);
     }
 
@@ -95,10 +95,10 @@ class Entry extends Array {
      * @return {number} The size of the data written. Will always be 16.
      */
     toBuffer(buffer, offset) {
-        buffer.writeUInt32LE(this[0], offset, true);
-        buffer.writeUInt32LE(this[1], offset +  4, true);
-        buffer.writeUInt32LE(this[2], offset +  8, true);
-        buffer.writeUInt32LE(this[3], offset + 12, true);
+        buffer.writeUInt32LE(this[0], offset);
+        buffer.writeUInt32LE(this[1], offset +  4);
+        buffer.writeUInt32LE(this[2], offset +  8);
+        buffer.writeUInt32LE(this[3], offset + 12);
         return Entry.size;
     }
 
