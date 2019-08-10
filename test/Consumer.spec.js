@@ -17,7 +17,9 @@ describe('Consumer', function() {
     });
 
     afterEach(function () {
-        if (storage) storage.close();
+        if (storage) {
+            storage.close();
+        }
         storage = undefined;
         consumer = undefined;
     });
@@ -231,6 +233,28 @@ describe('Consumer', function() {
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('throws when calling setState outside of document handler', function() {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        expect(() => consumer.setState({ foo: 'bar' })).to.throwError();
+    });
+
+    it('restores state after reopening', function(done) {
+        const state = { foo: 0, bar: 'baz' };
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.on('data', (document) => {
+            const newState = {...state, foo: state.foo + 1, lastId: document.id};
+            consumer.setState(newState);
+            consumer.once('persisted', () => {
+                consumer = new Consumer(storage, 'foobar', 'consumer-1');
+                expect(consumer.state.foo).to.be(1);
+                done();
+            });
+            consumer.stop();
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
     });
 
 });

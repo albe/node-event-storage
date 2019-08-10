@@ -40,13 +40,32 @@ class Consumer extends stream.Readable {
 
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
         try {
-            this.position = fs.readFileSync(this.fileName);
+            const consumerData = fs.readFileSync(this.fileName);
+            this.position = consumerData.readInt32LE(0);
+            this.state = JSON.parse(consumerData.toString('utf8', 4));
         } catch (e) {
             this.position = startFrom;
+            this.state = {};
         }
 
+        this.persisting = null;
         this.consuming = false;
         this.handler = this.handleNewDocument.bind(this);
+        this.on('error', () => (this.handleDocument = false));
+    }
+
+    /**
+     * Update the state of this consumer transactionally with the position.
+     * May only be called from within the document handling callback.
+     *
+     * @param {Object} newState
+     * @api
+     */
+    setState(newState) {
+        if (!this.handleDocument) {
+            throw new Error('Called setState outside of document handler!');
+        }
+        this.state = Object.freeze(newState);
     }
 
     /**
@@ -66,16 +85,34 @@ class Consumer extends stream.Readable {
             return;
         }
 
+        this.handleDocument = true;
+        this.once('data', () => (this.handleDocument = false));
         if (!this.push(document)) {
             this.stop();
         }
         this.position = position;
-        if (!this.persist) {
-            this.persist = setImmediate(() => {
-                fs.writeFileSync(this.fileName, this.position);
-                this.persist = undefined;
-            });
+        this.persist();
+    }
+
+    /**
+     * Persist current state of this consumer.
+     * This will write the current position and state to the consumer storage file.
+     *
+     * @private
+     */
+    persist() {
+        if (this.persisting) {
+            return;
         }
+        this.persisting = setImmediate(() => {
+            const consumerState = JSON.stringify(this.state);
+            const consumerData = Buffer.allocUnsafe(4 + consumerState.length);
+            consumerData.writeInt32LE(this.position, 0);
+            consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
+            fs.writeFileSync(this.fileName, consumerData);
+            this.persisting = null;
+            this.emit('persisted');
+        });
     }
 
     /**
@@ -86,6 +123,7 @@ class Consumer extends stream.Readable {
      */
     checkCaughtUp() {
         if (this.index.length <= this.position) {
+            this.handleDocument = false;
             this.storage.on('index-add', this.handler);
             this.emit('caught-up');
             return true;
@@ -124,6 +162,7 @@ class Consumer extends stream.Readable {
             return;
         }
         this.consuming = true;
+        this.handleDocument = true;
 
         // Catch up to current index position
         const catchUpBatch = () => {
@@ -135,7 +174,8 @@ class Consumer extends stream.Readable {
                 const maxBatchPosition = Math.min(this.position + MAX_CATCHUP_BATCH + 1, this.index.length);
                 const documents = this.storage.readRange(this.position + 1, maxBatchPosition, this.index);
                 this.consumeDocuments(documents);
-                catchUpBatch();
+                this.once('persisted', () => catchUpBatch());
+                this.persist();
             });
         };
         catchUpBatch();
@@ -151,6 +191,7 @@ class Consumer extends stream.Readable {
         }
         this.storage.removeListener('index-add', this.handler);
         this.consuming = false;
+        this.handleDocument = false;
     }
 
     /**

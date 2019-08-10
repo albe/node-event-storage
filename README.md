@@ -120,11 +120,37 @@ myConsumer.on('data', event => {
 });
 ```
 
-Note
+**Note**
 > The consuming of events will start as soon as a handler for the `data` event is registered and suspended
 > when the last listener is removed.
 
 As soon as the consumer has caught up the stream, it will emit a `caught-up` event.
+
+#### Exactly-Once semantics
+
+Since version 0.6 the consumers can persist their state (a simple JSON object), which allows for achieving
+exactly-once processing semantics relatively easy. What this means is, that the state of the consumer will
+always reflect the state of having each event processed exactly once, because if persisting the state fails,
+the position is also not updated and vice versa.
+
+```javascript
+let myConsumer = eventstore.getConsumer('my-stream', 'my-stream-consumer1');
+myConsumer.on('data', event => {
+    const newState = { ...myConsumer.state, projectedValue: myConsumer.state.projectedValue + event.someValue };
+    myConsumer.setState(newState);
+});
+```
+
+This is very useful for projecting some data out of a stream with exactly-once processing without a lot of effort.
+Whenever the state is persisted, the consumer will also emit a `persisted` event.
+
+**Note**
+> Never mutate the consumers `state` property directly and only use the `setState` method **inside** the `data` handler.
+
+The reason this is works is, that conceptually the state update and the position update happens within a single
+transaction. So anything you can wrap inside a transaction with storing the position yields exactly-once semantics.
+However, for example sending an email exactly once for every event is not achievable with this, because you can't
+wrap a transaction around sending an e-mail and persisting the consumer position in a local file easily.
 
 ## Implementation details
 
@@ -153,9 +179,10 @@ writer is not yet guaranteed by the storage itself however.
 Reads are guaranteed to be isolated due to the append-only nature and a read only ever seeing writes that have finished
 (not necessarily flushed - i.e. Dirty Reads) at the point of the read. Multiple reads can happen without blocking writes.
 
-If Dirty Reads are not wanted, they can be disabled with the storage configuration option `dirtyReads` set to false.
+If Dirty Reads are not wanted, they can be disabled with the storage configuration option `dirtyReads` set to false. That
+way you will only ever be able to read back documents that where flushed to disk.
 
-t.b.d. Dirty Reads, Lost Updates, Non-Repeatable Reads, Phantom Read
+t.b.d. Lost Updates, Non-Repeatable Reads, Phantom Read
 
 #### Durability
 
