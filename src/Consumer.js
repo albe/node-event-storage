@@ -30,6 +30,19 @@ class Consumer extends stream.Readable {
             throw new Error('Must specify an identifier name for the consumer.');
         }
 
+        this.initializeStorage(storage, indexName, identifier);
+        this.restoreState(startFrom);
+        this.handler = this.handleNewDocument.bind(this);
+        this.on('error', () => (this.handleDocument = false));
+    }
+
+    /**
+     * @private
+     * @param {Storage} storage The storage to create the consumer for.
+     * @param {string} indexName The name of the index to consume.
+     * @param {string} identifier The unique name to identify this consumer.
+     */
+    initializeStorage(storage, indexName, identifier) {
         this.storage = storage;
         this.index = this.storage.openIndex(indexName);
         this.indexName = indexName;
@@ -37,8 +50,17 @@ class Consumer extends stream.Readable {
         if (!fs.existsSync(consumerDirectory)) {
             mkdirpSync(consumerDirectory);
         }
-
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
+    }
+
+    /**
+     * @private
+     * @param {number} startFrom The revision to start from within the index to consume.
+     */
+    restoreState(startFrom) {
+        if (!this.fileName) {
+            return;
+        }
         try {
             const consumerData = fs.readFileSync(this.fileName);
             this.position = consumerData.readInt32LE(0);
@@ -50,8 +72,6 @@ class Consumer extends stream.Readable {
 
         this.persisting = null;
         this.consuming = false;
-        this.handler = this.handleNewDocument.bind(this);
-        this.on('error', () => (this.handleDocument = false));
     }
 
     /**

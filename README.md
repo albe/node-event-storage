@@ -147,7 +147,7 @@ Whenever the state is persisted, the consumer will also emit a `persisted` event
 **Note**
 > Never mutate the consumers `state` property directly and only use the `setState` method **inside** the `data` handler.
 
-The reason this is works is, that conceptually the state update and the position update happens within a single
+The reason why this works is, that conceptually the state update and the position update happens within a single
 transaction. So anything you can wrap inside a transaction with storing the position yields exactly-once semantics.
 However, for example sending an email exactly once for every event is not achievable with this, because you can't
 wrap a transaction around sending an e-mail and persisting the consumer position in a local file easily.
