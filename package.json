@@ -33,12 +33,8 @@
     "*/JoinEventStream*.js",
     "*/Partition*.js",
     "*/Storage*.js",
-    "CNAME",
-    ".travis.yml",
-    "_config.yml",
-    ".gitignore",
-    "index.js",
-    "package-lock.json"
+    "*/util.js",
+    "/index.js"
   ],
   "license": "MIT",
   "maintainers": [
