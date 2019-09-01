@@ -165,7 +165,6 @@ class Consumer extends stream.Readable {
             }
             ++this.position;
         }
-        fs.writeFileSync(this.fileName, this.position);
     }
 
     /**
