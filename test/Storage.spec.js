@@ -1,3 +1,4 @@
+//const { describe, it, beforeEach, afterEach } = require('mocha');
 const expect = require('expect.js');
 const fs = require('fs-extra');
 const Storage = require('../src/Storage');
@@ -8,10 +9,17 @@ const dataDir = __dirname + '/data';
 
 describe('Storage', function() {
 
+    /**
+     * @var {WritableStorage}
+     */
     let storage;
 
     beforeEach(function () {
-        fs.emptyDirSync(dataDir);
+        try {
+            fs.emptyDirSync(dataDir);
+        } catch (e) {
+            console.log(e);
+        }
     });
 
     afterEach(function () {
@@ -418,25 +426,25 @@ describe('Storage', function() {
         it('throws when hmac does not validate matcher from existing index', function() {
             storage = new Storage({ dataDirectory: dataDir, hmacSecret: 'foo' });
             storage.open();
-            storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
+            storage.ensureIndex('foo-hmac', (doc) => doc.type === 'Foo');
             storage.close();
 
             storage = new Storage({ dataDirectory: dataDir, hmacSecret: 'bar' });
             storage.open();
 
-            expect(() => storage.ensureIndex('foo', (doc) => doc.type === 'Foo')).to.throwError();
+            expect(() => storage.ensureIndex('foo-hmac', (doc) => doc.type === 'Foo')).to.throwError();
         });
 
         it('throws when reopening with different matcher', function() {
             storage = new Storage({ dataDirectory: dataDir });
             storage.open();
-            storage.ensureIndex('foo', () => true);
+            storage.ensureIndex('foo-matcher', () => true);
             storage.close();
 
             storage = new Storage({ dataDirectory: dataDir });
             storage.open();
 
-            expect(() => storage.ensureIndex('foo', (doc) => doc.type === 'Foo')).to.throwError();
+            expect(() => storage.ensureIndex('foo-matcher', (doc) => doc.type === 'Foo')).to.throwError();
         });
 
         it('does not create an index when filling it fails', function() {
@@ -448,9 +456,9 @@ describe('Storage', function() {
             const originalAdd = Index.prototype.add;
             Index.prototype.add = () => { throw new Error('Failure'); };
             try {
-                storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
+                storage.ensureIndex('foo-new', (doc) => doc.type === 'Foo');
             } catch (e) {}
-            expect(fs.existsSync('test/data/storage.foo.index')).to.be(false);
+            expect(fs.existsSync('test/data/storage.foo-new.index')).to.be(false);
             Index.prototype.add = originalAdd;
         });
 
@@ -673,4 +681,53 @@ describe('Storage', function() {
         expect(storage.read(2)).to.be.eql(doc);
     });
 
+    describe('concurrency', function(){
+
+        it('allows multiple writers to different partitions', function(){
+            // t.b.d. - only possible if there is no storage global index
+        });
+
+        it('allows multiple readers for one storage', function(){
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i});
+            }
+            storage.flush();
+
+            let reader1 = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader1.open();
+            expect(reader1.length).to.be(storage.length);
+
+            let reader2 = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader2.open();
+            expect(reader2.length).to.be(storage.length);
+
+            reader1.close();
+            reader2.close();
+        });
+
+        it('updates readers when writer appends', function(done){
+            storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true });
+            storage.open();
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i});
+            }
+            storage.flush();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            reader.on('index-add', (name, number, doc) => {
+                expect(number).to.be(11);
+                expect(doc).to.eql({foo: 11});
+                reader.close();
+                done();
+            });
+            expect(reader.length).to.be(storage.length);
+
+            storage.write({ foo: 11 });
+            storage.flush();
+        });
+
+    });
 });

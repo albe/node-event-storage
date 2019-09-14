@@ -4,7 +4,7 @@ const Partition = require('../src/Partition');
 
 describe('Partition', function() {
 
-    let partition;
+    let partition, readers = [];
 
     beforeEach(function () {
         fs.emptyDirSync('test/data');
@@ -13,14 +13,23 @@ describe('Partition', function() {
 
     afterEach(function () {
         if (partition) partition.close();
+        for (let reader of readers) reader.close();
+        readers = [];
         partition = undefined;
     });
+
+    function createReader() {
+        const reader = new Partition.ReadOnly(partition.name, { dataDirectory: 'test/data' });
+        readers[readers.length] = reader;
+        return reader;
+    }
 
     function fillPartition(num, documentBuilder) {
         let lastposition;
         for (let i = 1; i <= num; i++) {
             lastposition = partition.write(documentBuilder && documentBuilder(i) || 'foobar');
         }
+        partition.flush();
         return lastposition;
     }
 
@@ -266,4 +275,55 @@ describe('Partition', function() {
 
     });
 
+    describe('concurrency', function(){
+
+        it('allows multiple readers for a partition', function(){
+            partition.open();
+            fillPartition(10);
+            expect(partition.size).to.be.greaterThan(0);
+
+            let reader1 = createReader();
+            reader1.open();
+            expect(reader1.size).to.be(partition.size);
+            let reader2 = createReader();
+            reader2.open();
+            expect(reader2.size).to.be(partition.size);
+        });
+
+        it('updates reader when writer appends', function(done){
+            partition.open();
+            fillPartition(10);
+            const size = partition.size;
+
+            let reader = createReader();
+            reader.open();
+            reader.on('append', (prevSize, newSize) => {
+                expect(prevSize).to.be(size);
+                expect(newSize).to.be(partition.size);
+                done();
+            });
+
+            partition.write('foo');
+            expect(partition.size).to.be.greaterThan(reader.size);
+            partition.flush();
+            fs.fdatasync(partition.fd);
+        });
+
+        it('updates reader when writer truncates', function(done){
+            partition.open();
+            fillPartition(10);
+            const size = partition.size;
+
+            let reader = createReader();
+            reader.open();
+            reader.on('truncate', (prevSize, newSize) => {
+                expect(prevSize).to.be(size);
+                expect(newSize).to.be(partition.size);
+                done();
+            });
+
+            partition.truncate(0);
+            fs.fdatasync(partition.fd);
+        });
+    });
 });

@@ -4,7 +4,7 @@ const Index = require('../src/Index');
 
 describe('Index', function() {
 
-    let index;
+    let index, counter = 1, readers = [];
 
     beforeEach(function() {
         fs.emptyDirSync('test/data');
@@ -12,6 +12,8 @@ describe('Index', function() {
 
     afterEach(function() {
         if (index) index.close();
+        for (let reader of readers) reader.close();
+        readers = [];
         index = undefined;
     });
 
@@ -20,11 +22,18 @@ describe('Index', function() {
             options = indexMapper;
             indexMapper = undefined;
         }
-        index = new Index('test.index', Object.assign({ dataDirectory: 'test/data' }, options));
+        index = new Index('test' + (counter++) + '.index', Object.assign({ dataDirectory: 'test/data' }, options));
         for (let i = 1; i <= num; i++) {
             index.add(new Index.Entry(indexMapper && indexMapper(i) || i, i));
         }
+        index.flush();
         return index;
+    }
+
+    function createReader(name, options) {
+        let reader = new Index.ReadOnly(name, Object.assign({ dataDirectory: 'test/data' }, options));
+        readers[readers.length] = reader;
+        return reader;
     }
 
     it('is opened on instanciation', function() {
@@ -469,5 +478,57 @@ describe('Index', function() {
             expect(index.flush()).to.be(false);
         });
 
+    });
+
+    describe('concurrency', function(){
+
+        it('allows only a single writer for a index', function(){
+            // t.b.d.
+        });
+
+        it('allows multiple readers for a single index', function(){
+            index = setupIndexWithEntries(5);
+
+            let reader1 = createReader(index.name);
+            expect(reader1.isOpen()).to.be(true);
+            expect(reader1.length).to.be(index.length);
+            expect(reader1.lastEntry.number).to.be(index.lastEntry.number);
+
+            let reader2 = createReader(index.name);
+            expect(reader2.isOpen()).to.be(true);
+            expect(reader2.length).to.be(index.length);
+            expect(reader2.lastEntry.number).to.be(index.lastEntry.number);
+        });
+
+        it('updates reader when writer flushes', function(done){
+            index = setupIndexWithEntries(5);
+            let reader1 = createReader(index.name);
+
+            reader1.on('append', (prev, next) => {
+                expect(prev).to.be(5);
+                expect(next).to.be(6);
+                expect(reader1.get(next).number).to.be(index.get(next).number);
+                done();
+            });
+
+            index.add(new Index.Entry(6, 6));
+            index.flush();
+            fs.fdatasync(index.fd);
+        });
+
+        it('updates reader when writer truncates', function(done){
+            index = setupIndexWithEntries(5);
+            let reader1 = createReader(index.name);
+
+            reader1.on('truncate', (prev, next) => {
+                expect(prev).to.be(5);
+                expect(next).to.be(0);
+                expect(reader1.length).to.be(0);
+                done();
+            });
+
+            index.truncate(0);
+            fs.fdatasync(index.fd);
+        });
     });
 });
