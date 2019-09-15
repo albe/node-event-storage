@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const mkdirpSync = require('mkdirp').sync;
 const EventEmitter = require('events');
 const Entry = require('../IndexEntry');
 const { wrapAndCheck, binarySearch } = require('../util');
@@ -24,7 +23,7 @@ class ReadableIndex extends EventEmitter {
     /**
      * @param {string} [name] The name of the file to use for storing the index.
      * @param {Object} [options] An object with additional index options.
-     * @param {EntryInterface} [options.EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
+     * @param {typeof EntryInterface} [options.EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [options.dataDirectory] The directory to store the index file in. Default '.'.
      * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
@@ -41,34 +40,29 @@ class ReadableIndex extends EventEmitter {
             EntryClass: Entry
         };
         options = Object.assign(defaults, options);
-        const EntryClass = options.EntryClass;
-        Entry.assertValidEntryClass(EntryClass);
-        if (!fs.existsSync(options.dataDirectory)) {
-            mkdirpSync(options.dataDirectory);
-        }
+        Entry.assertValidEntryClass(options.EntryClass);
 
         this.name = name;
-        options.readBufferSize = EntryClass.size;
         this.initialize(options);
-
-        this.EntryClass = EntryClass;
-        if (options.metadata) {
-            this.metadata = Object.assign({entryClass: EntryClass.name, entrySize: EntryClass.size}, options.metadata);
-        }
-
         this.open();
     }
 
     /**
-     * @private
+     * @protected
      * @param {Object} options
      */
     initialize(options) {
         this.data = [];
         this.fd = null;
         this.fileMode = 'r';
+        this.EntryClass = options.EntryClass;
+        this.dataDirectory = options.dataDirectory;
         this.fileName = path.resolve(options.dataDirectory, this.name);
-        this.readBuffer = Buffer.allocUnsafe(options.readBufferSize >>> 0);
+        this.readBuffer = Buffer.allocUnsafe(options.EntryClass.size);
+
+        if (options.metadata) {
+            this.metadata = Object.assign({entryClass: options.EntryClass.name, entrySize: options.EntryClass.size}, options.metadata);
+        }
     }
 
     /**
@@ -303,7 +297,7 @@ class ReadableIndex extends EventEmitter {
      * an empty array if the index is empty.
      *
      * @api
-     * @returns {Array<Entry>} An array of all index entries.
+     * @returns {Array<EntryInterface>} An array of all index entries.
      */
     all() {
         if (this.length === 0) {
@@ -344,10 +338,7 @@ class ReadableIndex extends EventEmitter {
         if (from < 1 || from > this.length) {
             return false;
         }
-        if (until < from || until > this.length) {
-            return false;
-        }
-        return true;
+        return (until >= from && until <= this.length);
     }
 
     /**
@@ -368,7 +359,9 @@ class ReadableIndex extends EventEmitter {
 
         const readFrom = Math.max(this.readUntil + 1, from);
         let readUntil = until;
-        while (readUntil >= readFrom && this.data[readUntil - 1]) readUntil--;
+        while (readUntil >= readFrom && this.data[readUntil - 1]) {
+            readUntil--;
+        }
 
         if (readFrom <= readUntil) {
             this.readRange(readFrom, readUntil);

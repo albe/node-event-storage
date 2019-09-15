@@ -1,5 +1,4 @@
 const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
 const path = require('path');
 const EventEmitter = require('events');
 
@@ -33,6 +32,20 @@ function hash(str) {
 }
 
 /**
+ * Parse a string containing the data length of the following serialized document.
+ *
+ * @param {string} dataLengthStr The string containing the document size, left padded with whitespace.
+ * @returns {number|boolean} The size of the following document or false on error.
+ */
+function parseDataLength(dataLengthStr) {
+    const dataLength = parseInt(dataLengthStr, 10);
+    if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
+        return false;
+    }
+    return dataLength;
+}
+
+/**
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
  * In the case of an event store, this is most likely the (write) streams.
  */
@@ -44,7 +57,7 @@ class ReadablePartition extends EventEmitter {
      * @param {string} name
      * @returns {number}
      */
-    static id(name) {
+    static idFor(name) {
         return hash(name);
     }
 
@@ -66,9 +79,6 @@ class ReadablePartition extends EventEmitter {
         };
         config = Object.assign(defaults, config);
         this.dataDirectory = path.resolve(config.dataDirectory);
-        if (!fs.existsSync(this.dataDirectory)) {
-            mkdirpSync(this.dataDirectory);
-        }
 
         this.name = name;
         this.id = hash(name);
@@ -180,10 +190,11 @@ class ReadablePartition extends EventEmitter {
      */
     readDataLength(buffer, offset, position, size) {
         const dataLengthStr = buffer.toString('utf8', offset, offset + 10);
-        const dataLength = parseInt(dataLengthStr, 10);
-        if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
+        const dataLength = parseDataLength(dataLengthStr);
+        if (dataLength === false) {
             throw new Error(`Error reading document size from ${position}, got ${dataLength}.`);
         }
+
         if (size && dataLength !== size) {
             throw new InvalidDataSizeError(`Invalid document size ${dataLength} at position ${position}, expected ${size}.`);
         }
@@ -203,6 +214,9 @@ class ReadablePartition extends EventEmitter {
      * @returns {Object} A reader object with properties `buffer`, `cursor` and `length`.
      */
     prepareReadBuffer(position) {
+        if (position + 10 >= this.size) {
+            return { buffer: null, cursor: 0, length: 0 };
+        }
         let buffer = this.readBuffer;
         let bufferPos = this.readBufferPos;
         let bufferLength = this.readBufferLength;
@@ -231,11 +245,8 @@ class ReadablePartition extends EventEmitter {
         if (!this.fd) {
             return false;
         }
-        if (position + 10 >= this.size) {
-            return false;
-        }
-        const reader = this.prepareReadBuffer(position);
 
+        const reader = this.prepareReadBuffer(position);
         if (reader.length < size + 10) {
             return false;
         }

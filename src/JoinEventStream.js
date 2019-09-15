@@ -1,6 +1,21 @@
 const EventStream = require('./EventStream');
 
 /**
+ * Translates an EventStore revision number to an index sequence number and wraps it around the given length, if it's < 0
+ *
+ * @param {number} rev The zero-based EventStore revision
+ * @param {number} length The length of the store
+ * @returns {number} The 1-based index sequence number
+ */
+function wrapRevision(rev, length) {
+    rev++;
+    if (rev <= 0) {
+        rev += length;
+    }
+    return rev;
+}
+
+/**
  * An event stream is a simple wrapper around an iterator over storage documents.
  * It implements a node readable stream interface.
  */
@@ -21,10 +36,8 @@ class JoinEventStream extends EventStream {
         this._next = new Array(streams.length).fill(undefined);
 
         // Translate revisions to index numbers (1-based) and wrap around negatives
-        minRevision++;
-        if (minRevision <= 0) minRevision += eventStore.length;
-        maxRevision++;
-        if (maxRevision <= 0) maxRevision += eventStore.length;
+        minRevision = wrapRevision(minRevision, eventStore.length);
+        maxRevision = wrapRevision(maxRevision, eventStore.length);
 
         this.iterator = streams.map(streamName => {
             if (!eventStore.streams[streamName]) {
@@ -38,6 +51,16 @@ class JoinEventStream extends EventStream {
     }
 
     /**
+     * Returns the value of the iterator at position `index`
+     * @param {number} index The iterator position for which to return the next value
+     * @returns {*}
+     */
+    getValue(index) {
+        const next = this.iterator[index].next();
+        return next.done ? false : next.value;
+    }
+
+    /**
      * @private
      * @returns {Object|boolean} The next event or false if no more events in the stream.
      */
@@ -45,8 +68,7 @@ class JoinEventStream extends EventStream {
         let nextIndex = -1;
         this._next.forEach((value, index) => {
             if (typeof value === 'undefined') {
-                const next = this.iterator[index].next();
-                value = this._next[index] = next.done ? false : next.value;
+                value = this._next[index] = this.getValue(index);
             }
             if (value === false) {
                 return;

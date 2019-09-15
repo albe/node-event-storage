@@ -728,5 +728,39 @@ describe('Storage', function() {
             storage.flush();
         });
 
+        it('recognizes new indexes created by other writer', function(done){
+            storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            reader.on('index-created', (name) => {
+                expect(name.substr(-9, 3)).to.be('one');
+                expect(reader.secondaryIndexes[name]).to.not.exist();
+                reader.close();
+                done();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.ensureIndex('one', doc => doc.type === 'one');
+            storage.flush();
+        });
+
+        it('recognizes new partitions created by other writer', function(done){
+            storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            reader.on('partition-created', (id) => {
+                expect(reader.getPartition(id).name.substr(-3)).to.be('one');
+                reader.close();
+                done();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.flush();
+        });
+
     });
 });

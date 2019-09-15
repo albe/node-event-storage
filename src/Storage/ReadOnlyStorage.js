@@ -1,11 +1,27 @@
 const fs = require('fs');
 const ReadableStorage = require('./ReadableStorage');
+const ReadablePartition = require('../Partition/ReadablePartition');
+
+function createWatcher(directory, handler) {
+    const watchers = {};
+    return (function() {
+        const watchers = {};
+        return fs.watch(directory, {persistent: false}, handler);
+    })();
+}
 
 /**
  * An append-only storage with highly performant positional range scans.
  * It's highly optimized for an event-store and hence does not support compaction or data-rewrite, nor any querying
  */
 class ReadOnlyStorage extends ReadableStorage {
+
+    /**
+     * @inheritdoc
+     */
+    constructor(storageName = 'storage', config = {}) {
+        super(storageName, config);
+    }
 
     /**
      * Open the storage and indexes and create read and write buffers eagerly.
@@ -15,14 +31,42 @@ class ReadOnlyStorage extends ReadableStorage {
      * @returns {boolean}
      */
     open() {
-        this.index.open();
+        if (!this.watcher) {
+            this.watcher = fs.watch(this.dataDirectory, {persistent: false}, this.onDirectoryContentsChanged.bind(this));
+        }
+        return super.open();
+    }
 
-        this.forEachSecondaryIndex(index => index.open());
-        // TODO: Add directory watcher for new indexes and partitions and emit 'index-created'(name)
-        //this.watcher = fs.watch();
+    /**
+     * @private
+     * @param {string} eventType
+     * @param {string} filename
+     */
+    onDirectoryContentsChanged(eventType, filename) {
+        if (eventType === 'change') {
+            return;
+        }
 
-        this.emit('opened');
-        return true;
+        if (filename.substr(-7) === '.branch') {
+            return;
+        }
+        // Ignore files not belonging to this storage
+        if (filename.substr(0, this.storageFile.length) !== this.storageFile) {
+            return;
+        }
+
+        if (filename.substr(-6) === '.index') {
+            // New indexes are not automatically opened in the reader
+            this.emit('index-created', filename);
+            return;
+        }
+
+        const partitionId = ReadablePartition.idFor(filename);
+        if (!this.partitions[partitionId]) {
+            const partition = this.createPartition(filename, this.partitionConfig);
+            this.partitions[partition.id] = partition;
+            this.emit('partition-created', partition.id);
+        }
     }
 
     /**
@@ -35,6 +79,7 @@ class ReadOnlyStorage extends ReadableStorage {
     close() {
         if (this.watcher) {
             this.watcher.close();
+            this.watcher = null;
         }
         super.close();
     }
@@ -43,10 +88,10 @@ class ReadOnlyStorage extends ReadableStorage {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {ReadableIndex}
+     * @returns {{ index: ReadableIndex, matcher?: Object|function }}
      */
     createIndex(name, options = {}) {
-        const index = super.createIndex(name, options);
+        const { index } = super.createIndex(name, options);
         index.on('append', (prevLength, newLength) => {
             const entries = index.range(prevLength + 1, newLength);
             if (entries === false) {
@@ -57,16 +102,17 @@ class ReadOnlyStorage extends ReadableStorage {
                 this.emit('index-add', name, entry.number, document);
             }
         });
-        return index;
+        return { index };
     }
 
     /**
      * @protected
-     * @param args
-     * @returns {Partition}
+     * @param {string} name
+     * @param {object} [options]
+     * @returns {ReadablePartition}
      */
-    createPartition(...args) {
-        const partition = super.createPartition(...args);
+    createPartition(name, options = {}) {
+        const partition = super.createPartition(name, options);
         partition.on('append', (prevSize, newSize) => {
             this.emit('append', partition.id, prevSize, newSize);
         });

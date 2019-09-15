@@ -1,6 +1,5 @@
 const fs = require('fs');
 const mkdirpSync = require('mkdirp').sync;
-const path = require('path');
 const ReadablePartition = require('./ReadablePartition');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
@@ -40,6 +39,9 @@ class WritablePartition extends ReadablePartition {
         };
         config = Object.assign(defaults, config);
         super(name, config);
+        if (!fs.existsSync(this.dataDirectory)) {
+            mkdirpSync(this.dataDirectory);
+        }
         this.fileMode = 'a+';
         this.writeBufferSize = config.writeBufferSize >>> 0;
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0;
@@ -135,6 +137,15 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
+     * @private
+     */
+    flushIfWriteBufferDocumentsFull() {
+        if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
+            this.flush();
+        }
+    }
+
+    /**
      * @api
      * @param {string} data The data to write to storage.
      * @param {function} [callback] A function that will be called when the document is written to disk.
@@ -152,14 +163,16 @@ class WritablePartition extends ReadablePartition {
         if (dataSize > this.writeBuffer.byteLength) {
             //console.log('unbuffered write!');
             fs.writeSync(this.fd, dataToWrite);
-            if (typeof callback === 'function') process.nextTick(callback);
+            if (typeof callback === 'function') {
+                process.nextTick(callback);
+            }
         } else {
             this.writeBufferCursor += this.writeBuffer.write(dataToWrite, this.writeBufferCursor, dataSize, 'utf8');
             this.writeBufferDocuments++;
-            if (typeof callback === 'function') this.flushCallbacks.push(callback);
-            if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
-                this.flush();
+            if (typeof callback === 'function') {
+                this.flushCallbacks.push(callback);
             }
+            this.flushIfWriteBufferDocumentsFull();
         }
         const dataPosition = this.size;
         this.size += dataSize;
@@ -180,6 +193,19 @@ class WritablePartition extends ReadablePartition {
             return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
         }
         return super.prepareReadBuffer(position);
+    }
+
+    /**
+     * Truncate the internal read buffer after the given position.
+     * @param {number} after The byte position to truncate the read buffer after.
+     */
+    truncateReadBuffer(after) {
+        if (this.readBufferPos >= after) {
+            this.readBufferPos = -1;
+            this.readBufferLength = 0;
+        } else if (this.readBufferPos + this.readBufferLength > after) {
+            this.readBufferLength -= (this.readBufferPos + this.readBufferLength) - after;
+        }
     }
 
     /**
@@ -213,12 +239,7 @@ class WritablePartition extends ReadablePartition {
         deletedBranch.close();
 
         fs.truncateSync(this.fileName, this.headerSize + after);
-        if (this.readBufferPos >= after) {
-            this.readBufferPos = -1;
-            this.readBufferLength = 0;
-        } else if (this.readBufferPos + this.readBufferLength > after) {
-            this.readBufferLength -= (this.readBufferPos + this.readBufferLength) - after;
-        }
+        this.truncateReadBuffer(after);
         this.size = after;
     }
 }

@@ -1,3 +1,4 @@
+const path = require('path');
 const ReadableIndex = require('./ReadableIndex');
 const WatchesFile = require('../WatchesFile');
 
@@ -9,27 +10,46 @@ const WatchesFile = require('../WatchesFile');
 class ReadOnlyIndex extends WatchesFile(ReadableIndex) {
 
     /**
+     * @inheritDoc
+     */
+    constructor(name, options) {
+        super(name, options);
+    }
+
+    /**
      * @private
      * @param {string} eventType
      * @param {string} filename
      */
     onChange(eventType, filename) {
+        if (!this.fd) {
+            return;
+        }
         if (eventType === 'change') {
             const prevLength = this.data.length;
             const length = this.readFileLength();
             this.data.length = length;
-            if (length > prevLength) {
-                this.emit('append', prevLength, length);
-            }
-            if (length < prevLength) {
-                this.emit('truncate', prevLength, length);
-            }
-        }
-        if (eventType === 'rename' && filename) {
+            this.emitFileChange(prevLength, length);
+        } else if (eventType === 'rename' && filename) {
             // Closes current watcher and creates a new watcher on the new filename
             this.close();
-            this.fileName = filename;
+            this.name = filename;
+            this.fileName = path.resolve(this.dataDirectory, this.name);
             this.open();
+        }
+    }
+
+    /**
+     * @private
+     * @param {number} prevLength
+     * @param {number} newLength
+     */
+    emitFileChange(prevLength, newLength) {
+        if (newLength > prevLength) {
+            this.emit('append', prevLength, newLength);
+        }
+        if (newLength < prevLength) {
+            this.emit('truncate', prevLength, newLength);
         }
     }
 

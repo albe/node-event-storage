@@ -32,6 +32,20 @@ class EventUnwrapper extends stream.Transform {
 }
 
 /**
+ * Invokes the given callback with the given arguments, if it is a function.
+ * @param {Function} [callback]
+ * @param {*} [args]
+ * @returns {boolean} true if the callback was invoked.
+ */
+function maybeInvoke(callback, ...args) {
+    if (typeof callback === 'function') {
+        callback(...args);
+        return true;
+    }
+    return false;
+}
+
+/**
  * An event store optimized for working with many streams.
  * An event stream is implemented as an iterator over an index on the storage, therefore indexes need to be lightweight
  * and highly performant in read-only mode.
@@ -50,7 +64,7 @@ class EventStore extends EventEmitter {
         super();
         if (typeof storeName !== 'string') {
             config = storeName;
-            storeName = null;
+            storeName = 'eventstore';
         }
 
         this.storageDirectory = path.resolve(config.storageDirectory || './data');
@@ -63,16 +77,24 @@ class EventStore extends EventEmitter {
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
 
         this.streams = {};
-        this.storeName = storeName || 'eventstore';
-        if (config.readOnly === true) {
-            this.storage = new Storage.ReadOnly(this.storeName, storageConfig);
-        } else {
-            this.storage = new Storage(this.storeName, storageConfig);
-        }
+        this.storeName = storeName;
+        this.storage = this.createStorage(this.storeName, storageConfig);
         this.storage.open();
         this.streams['_all'] = { index: this.storage.index };
 
         this.scanStreams(() => this.emit('ready'));
+    }
+
+    /**
+     * @param {string} name
+     * @param {Object} config
+     * @returns {ReadableStorage|WritableStorage}
+     */
+    createStorage(name, config) {
+        if (config.readOnly === true) {
+            return new Storage.ReadOnly(name, config);
+        }
+        return new Storage(name, config);
     }
 
     /**
@@ -99,7 +121,7 @@ class EventStore extends EventEmitter {
                     this.emit('stream-available', streamName);
                 }
             }
-            if (typeof callback === 'function') return callback();
+            maybeInvoke(callback);
         });
     }
 
@@ -134,12 +156,9 @@ class EventStore extends EventEmitter {
      * @param {number} [expectedVersion]
      * @param {Object} [metadata]
      * @param {Function} [callback]
-     * @returns {{events: Array<Object>, metadata: object, callback?: Function, expectedVersion: number}}
+     * @returns {{events: Array<Object>, metadata: object, callback: ?Function, expectedVersion: number}}
      */
-    fixArgumentTypes(events, expectedVersion, metadata, callback) {
-        if (!events) {
-            throw new Error('No events specified for commit.');
-        }
+    static fixArgumentTypes(events, expectedVersion, metadata, callback) {
         if (!(events instanceof Array)) {
             events = [events];
         }
@@ -178,7 +197,10 @@ class EventStore extends EventEmitter {
         if (typeof streamName !== 'string') {
             throw new Error('Must specify a stream name for commit.');
         }
-        ({ events, expectedVersion, metadata, callback } = this.fixArgumentTypes(events, expectedVersion, metadata, callback));
+        if (!events) {
+            throw new Error('No events specified for commit.');
+        }
+        ({ events, expectedVersion, metadata, callback } = EventStore.fixArgumentTypes(events, expectedVersion, metadata, callback));
 
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName });
@@ -201,7 +223,7 @@ class EventStore extends EventEmitter {
         });
         const commitCallback = () => {
             this.emit('commit', commit);
-            if (typeof callback === 'function') return callback(commit);
+            maybeInvoke(callback, commit);
         };
         for (let event of events) {
             const eventMetadata = Object.assign({ commitId, committedAt }, metadata, { commitVersion, streamVersion });

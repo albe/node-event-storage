@@ -1,9 +1,10 @@
 const fs = require('fs');
+const mkdirpSync = require('mkdirp').sync;
 const path = require('path');
 const WritablePartition = require('../Partition/WritablePartition');
 const WritableIndex = require('../Index/WritableIndex');
 const ReadableStorage = require('./ReadableStorage');
-const { matches, buildMetadataForMatcher } = require('../util');
+const { matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('../util');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
@@ -46,6 +47,12 @@ class WritableStorage extends ReadableStorage {
         config = Object.assign(defaults, config);
         config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush }, config.indexOptions);
         super(storageName, config);
+        if (!fs.existsSync(this.dataDirectory)) {
+            try {
+                mkdirpSync(this.dataDirectory);
+            } catch (e) {
+            }
+        }
 
         this.partitioner = config.partitioner;
     }
@@ -59,7 +66,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} size The size of the stored document.
      * @param {Object} document The document to add to the index.
      * @param {function} [callback] The callback to call when the index is written to disk.
-     * @returns {Index.Entry} The index entry item.
+     * @returns {EntryInterface} The index entry item.
      */
     addIndex(partitionId, position, size, document, callback) {
         if (!this.index.isOpen()) {
@@ -75,9 +82,35 @@ class WritableStorage extends ReadableStorage {
         this.index.add(entry, (indexPosition) => {
             this.emit('wrote', document, entry, indexPosition);
             /* istanbul ignore if  */
-            if (typeof callback === 'function') return callback(indexPosition);
+            if (typeof callback === 'function') {
+                return callback(indexPosition);
+            }
         });
         return entry;
+    }
+
+    /**
+     * Get a partition either by name or by id.
+     * If a partition with the given name does not exist, a new one will be created.
+     * If a partition with the given id does not exist, an error is thrown.
+     *
+     * @protected
+     * @param {string|number} partitionIdentifier The partition name or the partition Id
+     * @returns {ReadablePartition}
+     * @throws {Error} If an id is given and no such partition exists.
+     */
+    getPartition(partitionIdentifier) {
+        if (typeof partitionIdentifier === 'string') {
+            const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
+            partitionIdentifier = WritablePartition.idFor(partitionName);
+            if (!this.partitions[partitionIdentifier]) {
+                this.partitions[partitionIdentifier] = this.createPartition(partitionName, this.partitionConfig);
+                this.emit('partition-created', partitionIdentifier);
+            }
+            this.partitions[partitionIdentifier].open();
+            return this.partitions[partitionIdentifier];
+        }
+        return super.getPartition(partitionIdentifier);
     }
 
     /**
@@ -100,6 +133,9 @@ class WritableStorage extends ReadableStorage {
         }
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
         this.forEachSecondaryIndex((index, name) => {
+            if (!(index instanceof WritableIndex)) {
+                return;
+            }
             if (!index.isOpen()) {
                 index.open();
             }
@@ -135,21 +171,21 @@ class WritableStorage extends ReadableStorage {
         }
 
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
-        const newIndex = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
+        const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
         try {
             this.forEachDocument((document, indexEntry) => {
                 if (matches(document, matcher)) {
-                    newIndex.add(indexEntry);
+                    index.add(indexEntry);
                 }
             });
         } catch (e) {
-            newIndex.destroy();
+            index.destroy();
             throw e;
         }
 
-        this.secondaryIndexes[name] = { index: newIndex, matcher };
+        this.secondaryIndexes[name] = { index, matcher };
         this.emit('index-created', name);
-        return newIndex;
+        return index;
     }
 
     /**
@@ -164,6 +200,26 @@ class WritableStorage extends ReadableStorage {
         this.forEachPartition(partition => result = result || partition.flush());
         this.forEachSecondaryIndex(index => index.flush());
         return result;
+    }
+
+    /**
+     * Iterate all distinct partitions in which the given iterable list of entries are stored.
+     * @param {Iterable<Index.Entry>} entries
+     * @param {function(Index.Entry)} iterationHandler
+     */
+    forEachDistinctPartitionOf(entries, iterationHandler) {
+        const partitions = [];
+        const numPartitions = Object.keys(this.partitions).length;
+        for (let entry of entries) {
+            if (partitions.indexOf(entry.partition) >= 0) {
+                continue;
+            }
+            partitions.push(entry.partition);
+            iterationHandler(entry);
+            if (partitions.length === numPartitions) {
+                break;
+            }
+        }
     }
 
     /**
@@ -183,18 +239,7 @@ class WritableStorage extends ReadableStorage {
             return;
         }
 
-        const partitions = [];
-        const numPartitions = Object.keys(this.partitions).length;
-        for (let entry of entries) {
-            if (partitions.indexOf(entry.partition) >= 0) continue;
-
-            partitions.push(entry.partition);
-            this.getPartition(entry.partition).truncate(entry.position);
-
-            if (partitions.length === numPartitions) {
-                break;
-            }
-        }
+        this.forEachDistinctPartitionOf(entries, entry => this.getPartition(entry.partition).truncate(entry.position));
     }
 
     /**
@@ -218,6 +263,9 @@ class WritableStorage extends ReadableStorage {
 
         this.index.truncate(after);
         this.forEachSecondaryIndex(index => {
+            if (!(index instanceof WritableIndex)) {
+                return;
+            }
             let closeIndex = false;
             if (!index.isOpen()) {
                 index.open();
@@ -234,19 +282,30 @@ class WritableStorage extends ReadableStorage {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {ReadableIndex}
+     * @returns {{ index: WritableIndex, matcher: Object|function }}
      */
     createIndex(name, options = {}) {
-        return new WritableIndex(name, options);
+        const index = new WritableIndex(name, options);
+        let matcher;
+
+        try {
+            matcher = buildMatcherFromMetadata(index.metadata, this.hmac);
+        } catch (e) {
+            index.destroy();
+            throw e;
+        }
+
+        return { index, matcher };
     }
 
     /**
      * @protected
-     * @param args
-     * @returns {ReadablePartition}
+     * @param {string} name
+     * @param {object} [config]
+     * @returns {WritablePartition}
      */
-    createPartition(...args) {
-        return new WritablePartition(...args);
+    createPartition(name, config = {}) {
+        return new WritablePartition(name, config);
     }
 
 }

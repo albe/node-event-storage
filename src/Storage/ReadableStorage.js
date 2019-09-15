@@ -1,10 +1,9 @@
 const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
 const path = require('path');
 const EventEmitter = require('events');
-const ReadOnlyPartition = require('../Partition/ReadOnlyPartition');
-const ReadOnlyIndex = require('../Index/ReadOnlyIndex');
-const { createHmac, matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('../util');
+const Partition = require('../Partition');
+const Index = require('../Index');
+const { createHmac, matches, buildMetadataForMatcher } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
@@ -48,12 +47,6 @@ class ReadableStorage extends EventEmitter {
         this.hmac = createHmac(config.hmacSecret);
 
         this.dataDirectory = path.resolve(config.dataDirectory);
-        if (!fs.existsSync(this.dataDirectory)) {
-            try {
-                mkdirpSync(this.dataDirectory);
-            } catch (e) {
-            }
-        }
 
         this.initializeIndexes(config);
         this.scanPartitions(config);
@@ -63,19 +56,22 @@ class ReadableStorage extends EventEmitter {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {ReadableIndex}
+     * @returns {{ index: ReadableIndex, matcher?: Object|function }}
      */
     createIndex(name, options = {}) {
-        return new ReadOnlyIndex(name, options);
+        /** @type ReadableIndex */
+        const index = new Index.ReadOnly(name, options);
+        return { index };
     }
 
     /**
      * @protected
-     * @param args
+     * @param {string} name
+     * @param {object} [options]
      * @returns {ReadablePartition}
      */
-    createPartition(...args) {
-        return new ReadOnlyPartition(...args);
+    createPartition(name, options = {}) {
+        return new Partition.ReadOnly(name, options);
     }
 
     /**
@@ -90,7 +86,7 @@ class ReadableStorage extends EventEmitter {
 
         this.indexOptions = config.indexOptions;
         this.indexOptions.dataDirectory = this.indexDirectory;
-        // Safety precaution to prevent accidentially restricting main index
+        // Safety precaution to prevent accidentally restricting main index
         delete this.indexOptions.matcher;
         this.index = this.createIndex(config.indexFile, this.indexOptions);
         this.secondaryIndexes = {};
@@ -167,17 +163,12 @@ class ReadableStorage extends EventEmitter {
      *
      * @protected
      * @param {string|number} partitionIdentifier The partition name or the partition Id
-     * @returns {Partition}
+     * @returns {ReadablePartition}
      * @throws {Error} If an id is given and no such partition exists.
      */
     getPartition(partitionIdentifier) {
-        if (typeof partitionIdentifier === 'string') {
-            const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
-            partitionIdentifier = ReadOnlyPartition.id(partitionName);
-            if (!this.partitions[partitionIdentifier]) {
-                this.partitions[partitionIdentifier] = this.createPartition(partitionName, this.partitionConfig);
-            }
-        } else /* istanbul ignore next  */ if (!this.partitions[partitionIdentifier]) {
+        /* istanbul ignore next  */
+        if (!this.partitions[partitionIdentifier]) {
             throw new Error(`Partition #${partitionIdentifier} does not exist.`);
         }
 
@@ -186,7 +177,7 @@ class ReadableStorage extends EventEmitter {
     }
 
     /**
-     * @private
+     * @protected
      * @param {number} partitionId The partition to read from.
      * @param {number} position The file position to read from.
      * @param {number} [size] The expected byte size of the document at the given position.
@@ -204,7 +195,7 @@ class ReadableStorage extends EventEmitter {
      *
      * @api
      * @param {number} number The 1-based document number (inside the given index) to read.
-     * @param {Index} [index] The index to use for finding the document position.
+     * @param {ReadableIndex} [index] The index to use for finding the document position.
      * @returns {Object} The document at the given position inside the index.
      */
     read(number, index) {
@@ -215,7 +206,9 @@ class ReadableStorage extends EventEmitter {
         }
 
         const entry = index.get(number);
-        if (entry === false) return false;
+        if (entry === false) {
+            return false;
+        }
 
         return this.readFrom(entry.partition, entry.position, entry.size);
     }
@@ -227,7 +220,7 @@ class ReadableStorage extends EventEmitter {
      * @api
      * @param {number} from The 1-based document number (inclusive) to start reading from.
      * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
-     * @param {Index} [index] The index to use for finding the documents in the range.
+     * @param {ReadableIndex} [index] The index to use for finding the documents in the range.
      * @returns {Generator} A generator that will read each document in the range one by one.
      */
     *readRange(from, until, index) {
@@ -267,16 +260,8 @@ class ReadableStorage extends EventEmitter {
             throw new Error(`Index "${name}" does not exist.`);
         }
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
-        const index = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
+        let { index } = this.secondaryIndexes[name] = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
 
-        try {
-            matcher = buildMatcherFromMetadata(index.metadata, this.hmac);
-        } catch (e) {
-            index.destroy();
-            throw e;
-        }
-
-        this.secondaryIndexes[name] = { index, matcher };
         index.open();
         return index;
     }
@@ -285,11 +270,13 @@ class ReadableStorage extends EventEmitter {
      * Helper method to iterate over all documents.
      *
      * @protected
-     * @param {function(Object, Index.Entry)} iterationHandler
+     * @param {function(Object, EntryInterface)} iterationHandler
      */
     forEachDocument(iterationHandler) {
         /* istanbul ignore if  */
-        if (typeof iterationHandler !== 'function') return;
+        if (typeof iterationHandler !== 'function') {
+            return;
+        }
 
         const entries = this.index.all();
 
@@ -303,12 +290,14 @@ class ReadableStorage extends EventEmitter {
      * Helper method to iterate over all secondary indexes.
      *
      * @protected
-     * @param {function(Index, string)} iterationHandler
+     * @param {function(ReadableIndex, string)} iterationHandler
      * @param {Object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
      */
     forEachSecondaryIndex(iterationHandler, matchDocument) {
         /* istanbul ignore if  */
-        if (typeof iterationHandler !== 'function') return;
+        if (typeof iterationHandler !== 'function') {
+            return;
+        }
 
         for (let indexName of Object.keys(this.secondaryIndexes)) {
             if (!matchDocument || matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
@@ -321,11 +310,13 @@ class ReadableStorage extends EventEmitter {
      * Helper method to iterate over all partitions.
      *
      * @protected
-     * @param {function(Partition)} iterationHandler
+     * @param {function(ReadablePartition)} iterationHandler
      */
     forEachPartition(iterationHandler) {
         /* istanbul ignore if  */
-        if (typeof iterationHandler !== 'function') return;
+        if (typeof iterationHandler !== 'function') {
+            return;
+        }
 
         for (let partition of Object.keys(this.partitions)) {
             iterationHandler(this.partitions[partition]);

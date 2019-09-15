@@ -1,4 +1,5 @@
 const fs = require('fs');
+const mkdirpSync = require('mkdirp').sync;
 const ReadableIndex = require('./ReadableIndex');
 const { assertEqual } = require('../util');
 
@@ -42,11 +43,15 @@ class WritableIndex extends ReadableIndex {
     }
 
     /**
-     * @private
+     * @protected
      * @param {Object} options
      */
     initialize(options) {
         super.initialize(options);
+        if (!fs.existsSync(options.dataDirectory)) {
+            mkdirpSync(options.dataDirectory);
+        }
+
         this.fileMode = 'a+';
         this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0);
         this.writeBufferCursor = 0;
@@ -139,7 +144,6 @@ class WritableIndex extends ReadableIndex {
     /**
      * Flush the write buffer to disk if it is not empty.
      *
-     * @private
      * @returns {boolean} If a flush actually was executed.
      */
     flush() {
@@ -183,7 +187,7 @@ class WritableIndex extends ReadableIndex {
      * Append a single entry to the end of this index.
      *
      * @api
-     * @param {Entry} entry The index entry to append.
+     * @param {EntryInterface} entry The index entry to append.
      * @param {function} [callback] A callback function to execute when the index entry is flushed to disk.
      * @returns {number} The index position for the entry. It matches the index size after the insertion.
      */
@@ -230,3 +234,4 @@ class WritableIndex extends ReadableIndex {
 }
 
 module.exports = WritableIndex;
+module.exports.Entry = ReadableIndex.Entry;

@@ -7,6 +7,13 @@ const WatchesFile = require('../WatchesFile');
 class ReadOnlyPartition extends WatchesFile(ReadablePartition) {
 
     /**
+     * @inheritDoc
+     */
+    constructor(name, options = {}) {
+        super(name, options);
+    }
+
+    /**
      * @private
      * @param {string} eventType
      * @param {string} filename
