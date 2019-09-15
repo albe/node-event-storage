@@ -1,28 +1,10 @@
-const fs = require('fs');
 const ReadablePartition = require('./ReadablePartition');
+const WatchesFile = require('../WatchesFile');
 
 /**
  * A read-only partition is a readable partition that keeps it's size in sync with the underlying file.
  */
-class ReadOnlyPartition extends ReadablePartition {
-
-    /**
-     * @private
-     */
-    watchFile() {
-        this.stopWatching();
-        this.watcher = fs.watch(this.fileName, { persistent: false }, this.onChange.bind(this));
-    }
-
-    /**
-     * @private
-     */
-    stopWatching() {
-        if (this.watcher) {
-            this.watcher.close();
-            this.watcher = null;
-        }
-    }
+class ReadOnlyPartition extends WatchesFile(ReadablePartition) {
 
     /**
      * @private
@@ -46,32 +28,6 @@ class ReadOnlyPartition extends ReadablePartition {
             this.fileName = filename;
             this.open();
         }
-    }
-
-    /**
-     * Open the partition storage and create read and write buffers.
-     *
-     * @api
-     * @returns {boolean}
-     */
-    open() {
-        if (this.fd) {
-            return true;
-        }
-
-        this.watchFile();
-        return super.open();
-    }
-
-    /**
-     * Close the partition and frees up all resources.
-     *
-     * @api
-     * @returns void
-     */
-    close() {
-        this.stopWatching();
-        super.close();
     }
 
 }
