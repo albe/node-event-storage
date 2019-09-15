@@ -29,9 +29,9 @@ class ReadableStorage extends EventEmitter {
      */
     constructor(storageName = 'storage', config = {}) {
         super();
-        if (typeof storageName === 'object') {
+        if (typeof storageName !== 'string') {
             config = storageName;
-            storageName = undefined;
+            storageName = null;
         }
 
         this.storageFile = storageName || 'storage';

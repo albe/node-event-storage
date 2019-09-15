@@ -144,10 +144,10 @@ class ReadablePartition extends EventEmitter {
     close() {
         if (this.fd) {
             fs.closeSync(this.fd);
-            this.fd = undefined;
+            this.fd = null;
         }
         if (this.readBuffer) {
-            this.readBuffer = undefined;
+            this.readBuffer = null;
             this.readBufferPos = -1;
             this.readBufferLength = 0;
         }

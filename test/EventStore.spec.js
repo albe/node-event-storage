@@ -12,7 +12,7 @@ describe('EventStore', function() {
 
     afterEach(function () {
         if (eventstore) eventstore.close();
-        eventstore = undefined;
+        eventstore = null;
     });
 
     it('basically works', function(done) {

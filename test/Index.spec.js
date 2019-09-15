@@ -14,7 +14,7 @@ describe('Index', function() {
         if (index) index.close();
         for (let reader of readers) reader.close();
         readers = [];
-        index = undefined;
+        index = null;
     });
 
     function createIndex(name = 'test.index', options = {}) {
@@ -24,7 +24,7 @@ describe('Index', function() {
     function setupIndexWithEntries(num, indexMapper, options) {
         if (typeof indexMapper === 'object') {
             options = indexMapper;
-            indexMapper = undefined;
+            indexMapper = null;
         }
         index = createIndex('test' + (counter++) + '.index', options);
         for (let i = 1; i <= num; i++) {

@@ -15,7 +15,7 @@ describe('Partition', function() {
         if (partition) partition.close();
         for (let reader of readers) reader.close();
         readers = [];
-        partition = undefined;
+        partition = null;
     });
 
     function createReader() {

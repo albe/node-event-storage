@@ -20,7 +20,7 @@ class ReadOnlyPartition extends ReadablePartition {
     stopWatching() {
         if (this.watcher) {
             this.watcher.close();
-            this.watcher = undefined;
+            this.watcher = null;
         }
     }
 

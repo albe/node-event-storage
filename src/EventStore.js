@@ -48,9 +48,9 @@ class EventStore extends EventEmitter {
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
-        if (typeof storeName === 'object') {
+        if (typeof storeName !== 'string') {
             config = storeName;
-            storeName = undefined;
+            storeName = null;
         }
 
         this.storageDirectory = path.resolve(config.storageDirectory || './data');
@@ -134,30 +134,26 @@ class EventStore extends EventEmitter {
      * @param {number} [expectedVersion]
      * @param {Object} [metadata]
      * @param {Function} [callback]
-     * @returns {{events: Array<Object>, metadata?: object, callback?: Function, expectedVersion: number}}
+     * @returns {{events: Array<Object>, metadata: object, callback?: Function, expectedVersion: number}}
      */
-    fixOptionalArguments(events, expectedVersion, metadata, callback) {
+    fixArgumentTypes(events, expectedVersion, metadata, callback) {
         if (!events) {
             throw new Error('No events specified for commit.');
         }
         if (!(events instanceof Array)) {
             events = [events];
         }
-        if (typeof expectedVersion === 'object') {
-            // expectedVersion not given, but metadata
+        if (typeof expectedVersion !== 'number') {
             callback = metadata;
             metadata = expectedVersion;
             expectedVersion = ExpectedVersion.Any;
         }
-        if (typeof expectedVersion === 'function') {
-            // expectedVersion and metadata not given
-            callback = expectedVersion;
-            metadata = undefined;
-            expectedVersion = ExpectedVersion.Any;
-        } else if (typeof metadata === 'function') {
-            // metadata not given, but callback
+        if (typeof metadata !== 'object') {
             callback = metadata;
-            metadata = undefined;
+            metadata = {};
+        }
+        if (typeof callback !== 'function') {
+            callback = null;
         }
         return { events, expectedVersion, metadata, callback };
     }
@@ -182,7 +178,7 @@ class EventStore extends EventEmitter {
         if (typeof streamName !== 'string') {
             throw new Error('Must specify a stream name for commit.');
         }
-        ({ events, expectedVersion, metadata, callback } = this.fixOptionalArguments(events, expectedVersion, metadata, callback));
+        ({ events, expectedVersion, metadata, callback } = this.fixArgumentTypes(events, expectedVersion, metadata, callback));
 
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName });

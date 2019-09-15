@@ -22,7 +22,7 @@ class ReadOnlyIndex extends ReadableIndex {
     stopWatching() {
         if (this.watcher) {
             this.watcher.close();
-            this.watcher = undefined;
+            this.watcher = null;
         }
     }
 

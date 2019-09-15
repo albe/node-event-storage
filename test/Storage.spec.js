@@ -24,7 +24,7 @@ describe('Storage', function() {
 
     afterEach(function () {
         if (storage) storage.close();
-        storage = undefined;
+        storage = null;
     });
 
     it('creates the storage directory if it does not exist', function() {

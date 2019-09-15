@@ -87,7 +87,7 @@ class WritablePartition extends ReadablePartition {
             this.flush();
         }
         if (this.writeBuffer) {
-            this.writeBuffer = undefined;
+            this.writeBuffer = null;
             this.writeBufferCursor = 0;
             this.writeBufferDocuments = 0;
         }

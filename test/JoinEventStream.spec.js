@@ -24,7 +24,7 @@ describe('JoinEventStream', function() {
 
     after(function () {
         eventstore.close();
-        eventstore = undefined;
+        eventstore = null;
     });
 
     it('makes the name available', function(){

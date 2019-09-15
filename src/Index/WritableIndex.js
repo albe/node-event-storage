@@ -28,6 +28,10 @@ class WritableIndex extends ReadableIndex {
      * @param {Object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
     constructor(name = '.index', options = {}) {
+        if (typeof name !== 'string') {
+            options = name;
+            name = '.index';
+        }
         let defaults = {
             writeBufferSize: 4096,
             flushDelay: 100,

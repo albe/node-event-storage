@@ -20,8 +20,8 @@ describe('Consumer', function() {
         if (storage) {
             storage.close();
         }
-        storage = undefined;
-        consumer = undefined;
+        storage = null;
+        consumer = null;
     });
 
     it('throws when instanciated without a storage', function() {

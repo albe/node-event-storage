@@ -32,9 +32,9 @@ class WritableStorage extends ReadableStorage {
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
      */
     constructor(storageName = 'storage', config = {}) {
-        if (typeof storageName === 'object') {
+        if (typeof storageName !== 'string') {
             config = storageName;
-            storageName = undefined;
+            storageName = null;
         }
         const defaults = {
             partitioner: (document, number) => '',

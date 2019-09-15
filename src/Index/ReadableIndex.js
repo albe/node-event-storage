@@ -239,7 +239,7 @@ class ReadableIndex extends EventEmitter {
         this.readBuffer.fill(0);
         if (this.fd) {
             fs.closeSync(this.fd);
-            this.fd = undefined;
+            this.fd = null;
         }
     }
 
