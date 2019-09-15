@@ -17,12 +17,16 @@ describe('Index', function() {
         index = undefined;
     });
 
+    function createIndex(name = 'test.index', options = {}) {
+        return new Index(name, Object.assign({ dataDirectory: 'test/data' }, options));
+    }
+
     function setupIndexWithEntries(num, indexMapper, options) {
         if (typeof indexMapper === 'object') {
             options = indexMapper;
             indexMapper = undefined;
         }
-        index = new Index('test' + (counter++) + '.index', Object.assign({ dataDirectory: 'test/data' }, options));
+        index = createIndex('test' + (counter++) + '.index', options);
         for (let i = 1; i <= num; i++) {
             index.add(new Index.Entry(indexMapper && indexMapper(i) || i, i));
         }
@@ -50,7 +54,7 @@ describe('Index', function() {
         index = new Index('test/data/.index', { metadata: { test: 'valueStays' } });
         expect(index.metadata.test).to.be('valueStays');
         index.close();
-        index = new Index('test/data/.index');
+        index = new Index(index.name);
         expect(index.metadata.test).to.be('valueStays');
     });
 
@@ -95,14 +99,14 @@ describe('Index', function() {
 
     it('throws on reopening with altered metadata', function() {
         index = new Index('test/data/.index', { metadata: { test: 'valueStays' } });
-        expect(() => index = new Index('test/data/.index', { metadata: { test: 'anotherValue' } })).to.throwError(/Index metadata mismatch/);
+        expect(() => index = new Index(index.name, { metadata: { test: 'anotherValue' } })).to.throwError(/Index metadata mismatch/);
     });
 
     it('throws on opening with altered file', function() {
         index = setupIndexWithEntries(5);
         index.close();
-        fs.appendFileSync('test/data/test.index', 'foo');
-        expect(() => index = new Index('test/data/test.index')).to.throwError(/Index file is corrupt/);
+        fs.appendFileSync(index.fileName, 'foo');
+        expect(() => index = createIndex(index.name)).to.throwError(/Index file is corrupt/);
     });
 
     describe('Entry', function() {
