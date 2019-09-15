@@ -9,8 +9,6 @@ const fs = require('fs');
  */
 const WatchesFile = Base => class extends Base {
 
-    watcher = null;
-
     /**
      * @private
      */
