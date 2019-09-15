@@ -82,13 +82,13 @@ class WritableIndex extends ReadableIndex {
      * @throws {Error} if the file can not be opened.
      */
     open() {
-        if (super.open() !== false) {
-            this.writeBufferCursor = 0;
-            this.flushCallbacks = [];
-            //fs.flockSync(this.fd, 'exnb');
-            return true;
+        if (this.fd) {
+            return false;
         }
-        return false;
+        this.writeBufferCursor = 0;
+        this.flushCallbacks = [];
+        //fs.flockSync(this.fd, 'exnb');
+        return super.open();
     }
 
     /**
