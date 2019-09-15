@@ -62,11 +62,12 @@ class ReadOnlyIndex extends ReadableIndex {
      * @throws {Error} if the file can not be opened.
      */
     open() {
-        if (super.open() !== false) {
-            this.watchFile();
-            return true;
+        if (this.fd) {
+            return false;
         }
-        return false;
+
+        this.watchFile();
+        return super.open();
     }
 
     /**

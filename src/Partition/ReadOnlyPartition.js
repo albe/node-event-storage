@@ -70,9 +70,7 @@ class ReadOnlyPartition extends ReadablePartition {
      * @returns void
      */
     close() {
-        if (this.fd) {
-            this.stopWatching();
-        }
+        this.stopWatching();
         super.close();
     }
 
