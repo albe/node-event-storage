@@ -34,7 +34,7 @@ class WritableStorage extends ReadableStorage {
     constructor(storageName = 'storage', config = {}) {
         if (typeof storageName !== 'string') {
             config = storageName;
-            storageName = null;
+            storageName = undefined;
         }
         const defaults = {
             partitioner: (document, number) => '',
