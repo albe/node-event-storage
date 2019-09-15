@@ -18,7 +18,6 @@ describe('Storage', function() {
         try {
             fs.emptyDirSync(dataDir);
         } catch (e) {
-            console.log(e);
         }
     });
 
