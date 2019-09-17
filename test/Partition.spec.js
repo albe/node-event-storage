@@ -4,11 +4,15 @@ const Partition = require('../src/Partition');
 
 describe('Partition', function() {
 
-    let partition, readers = [];
+    const dataDir = 'test/data';
+    /** @type {WritablePartition} */
+    let partition;
+    /** @type {Array<ReadOnlyPartition>} */
+    let readers = [];
 
     beforeEach(function () {
-        fs.emptyDirSync('test/data');
-        partition = new Partition('.part', { dataDirectory: 'test/data' });
+        fs.emptyDirSync(dataDir);
+        partition = new Partition('.part', { dataDirectory: dataDir, readBufferSize: 4*1024 });
     });
 
     afterEach(function () {
@@ -19,22 +23,34 @@ describe('Partition', function() {
     });
 
     function createReader() {
-        const reader = new Partition.ReadOnly(partition.name, { dataDirectory: 'test/data' });
+        const reader = new Partition.ReadOnly(partition.name, { dataDirectory: dataDir });
         readers[readers.length] = reader;
         return reader;
     }
 
     function fillPartition(num, documentBuilder) {
-        let lastposition;
+        let lastPosition;
         for (let i = 1; i <= num; i++) {
-            lastposition = partition.write(documentBuilder && documentBuilder(i) || 'foobar');
+            lastPosition = partition.write(documentBuilder && documentBuilder(i) || 'foobar');
         }
         partition.flush();
-        return lastposition;
+        return lastPosition;
     }
+
+    it('creates the storage directory if it does not exist', function() {
+        fs.removeSync(dataDir);
+        partition = new Partition('.part', { dataDirectory: dataDir });
+        expect(fs.existsSync(dataDir)).to.be(true);
+    });
 
     it('is not opened automatically on construct', function() {
         expect(partition.isOpen()).to.be(false);
+    });
+
+    it('does nothing on reopening', function() {
+        partition.open();
+        expect(partition.isOpen()).to.be(true);
+        expect(() => partition.open()).to.not.throwError();
     });
 
     it('throws when not providing partition name', function() {
@@ -199,6 +215,16 @@ describe('Partition', function() {
             expect(() => partition.readFrom(0)).to.throwError((e) => {
                 expect(e).to.be.a(Partition.CorruptFileError);
             });
+        });
+
+        it('can read more documents than fit into a single read buffer', function() {
+            partition.open();
+            const lastPosition = fillPartition(1000);
+            partition.close();
+            partition.open();
+
+            let read = partition.readFrom(0);
+            expect(partition.readFrom(lastPosition)).to.be(read);
         });
 
         it('can read large documents', function() {

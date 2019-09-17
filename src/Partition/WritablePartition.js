@@ -248,3 +248,4 @@ class WritablePartition extends ReadablePartition {
 }
 
 module.exports = WritablePartition;
+module.exports.CorruptFileError = ReadablePartition.CorruptFileError;

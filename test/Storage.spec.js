@@ -736,7 +736,7 @@ describe('Storage', function() {
             reader.open();
             reader.on('index-created', (name) => {
                 expect(name.substr(-9, 3)).to.be('one');
-                expect(reader.secondaryIndexes[name]).to.not.exist();
+                expect(reader.secondaryIndexes[name]).to.be(undefined);
                 reader.close();
                 done();
             });

@@ -71,7 +71,8 @@ class EventStore extends EventEmitter {
         let defaults = {
             dataDirectory: this.storageDirectory,
             indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
-            partitioner: (event) => event.stream
+            partitioner: (event) => event.stream,
+            readOnly: config.readOnly || false
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
@@ -107,10 +108,10 @@ class EventStore extends EventEmitter {
         // Find existing streams by scanning dir for filenames starting with 'stream-'
         fs.readdir(this.streamsDirectory, (err, files) => {
             if (err) {
-                if (typeof callback === 'function') {
-                    return callback(err);
+                if (maybeInvoke(callback, err) === false) {
+                    throw err;
                 }
-                throw err;
+                return;
             }
             let matches;
             for (let file of files) {

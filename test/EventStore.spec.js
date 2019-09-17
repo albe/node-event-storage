@@ -33,6 +33,39 @@ describe('EventStore', function() {
         });
     });
 
+    it('throws when trying to open non-existing store read-only', function() {
+        expect(() => new EventStore({
+            storageDirectory: 'test/data',
+            readOnly: true
+        })).to.throwError();
+    });
+
+    it('can open read-only', function(done) {
+        eventstore = new EventStore({
+            storageDirectory: 'test/data'
+        });
+
+        let events = [{foo: 'bar'}, {foo: 'baz'}, {foo: 'quux'}];
+        eventstore.on('ready', () => {
+            eventstore.commit('foo-bar', events, () => {
+                let readstore = new EventStore({
+                    storageDirectory: 'test/data',
+                    readOnly: true
+                });
+
+                readstore.on('ready', () => {
+                    const stream = readstore.getEventStream('foo-bar');
+                    let i = 0;
+                    for (let event of stream) {
+                        expect(event).to.eql(events[i++]);
+                    }
+                    readstore.close();
+                    done();
+                });
+            });
+        });
+    });
+
     describe('commit', function() {
 
         it('throws when no stream name specified', function() {
@@ -49,6 +82,20 @@ describe('EventStore', function() {
             });
 
             expect(() => eventstore.commit('foo-bar')).to.throwError();
+        });
+
+        it('throws when opened in read-only mode', function() {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+            eventstore.close();
+
+            eventstore = new EventStore({
+                storageDirectory: 'test/data',
+                readOnly: true
+            });
+
+            expect(() => eventstore.commit('foo-bar', { foo: 'bar' })).to.throwError();
         });
 
         it('can commit a single event', function() {
@@ -261,7 +308,49 @@ describe('EventStore', function() {
         it('needs to be tested.');
     });
 
+    describe('createEventStream', function() {
+
+        it('throws in read-only mode', function () {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            let readstore = new EventStore({
+                storageDirectory: 'test/data',
+                readOnly: true
+            });
+            expect(() => readstore.createEventStream('foo-bar', () => true)).to.throwError();
+            readstore.close();
+        });
+
+        it('throws when trying to re-create stream', function () {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+            eventstore.createEventStream('foo-bar', () => true)
+
+            expect(() => eventstore.createEventStream('foo-bar', () => true)).to.throwError();
+        });
+    });
+
     describe('deleteEventStream', function() {
+
+        it('throws in read-only mode', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+            eventstore.createEventStream('foo-bar', () => true);
+
+            let readstore = new EventStore({
+                storageDirectory: 'test/data',
+                readOnly: true
+            });
+            readstore.on('ready', () => {
+                expect(() => readstore.deleteEventStream('foo-bar')).to.throwError();
+                readstore.close();
+                done();
+            });
+        });
 
         it('removes the stream persistently', function(done) {
             eventstore = new EventStore({
