@@ -2,14 +2,6 @@ const fs = require('fs');
 const ReadableStorage = require('./ReadableStorage');
 const ReadablePartition = require('../Partition/ReadablePartition');
 
-function createWatcher(directory, handler) {
-    const watchers = {};
-    return (function() {
-        const watchers = {};
-        return fs.watch(directory, {persistent: false}, handler);
-    })();
-}
-
 /**
  * An append-only storage with highly performant positional range scans.
  * It's highly optimized for an event-store and hence does not support compaction or data-rewrite, nor any querying
