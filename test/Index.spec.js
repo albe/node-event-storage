@@ -546,5 +546,16 @@ describe('Index', function() {
                 done();
             });
         });
+
+        it('does not trigger handler when index closed', function(done){
+            index = setupIndexWithEntries(5);
+
+            let reader = createReader(index.name);
+            reader.on('truncate', () => expect(this).to.be(false));
+
+            index.truncate(0);
+            reader.close();
+            fs.fdatasync(index.fd, () => done());
+        });
     });
 });

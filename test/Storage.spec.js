@@ -653,7 +653,7 @@ describe('Storage', function() {
             storage = new Storage({ dataDirectory: dataDir });
             storage.open();
 
-            storage.forEachDocument((doc) => expect(false).to.be(true));
+            storage.forEachDocument((doc) => expect(this).to.be(false));
             setTimeout(done, 1);
         });
 
@@ -680,25 +680,25 @@ describe('Storage', function() {
         expect(storage.read(2)).to.be.eql(doc);
     });
 
-    describe('concurrency', function(){
+    describe('concurrency', function() {
 
-        it('allows multiple writers to different partitions', function(){
+        it('allows multiple writers to different partitions', function () {
             // t.b.d. - only possible if there is no storage global index
         });
 
-        it('allows multiple readers for one storage', function(){
-            storage = new Storage({ dataDirectory: dataDir });
+        it('allows multiple readers for one storage', function () {
+            storage = new Storage({dataDirectory: dataDir});
             storage.open();
             for (let i = 1; i <= 10; i++) {
                 storage.write({foo: i});
             }
             storage.flush();
 
-            let reader1 = new Storage.ReadOnly({ dataDirectory: dataDir });
+            let reader1 = new Storage.ReadOnly({dataDirectory: dataDir});
             reader1.open();
             expect(reader1.length).to.be(storage.length);
 
-            let reader2 = new Storage.ReadOnly({ dataDirectory: dataDir });
+            let reader2 = new Storage.ReadOnly({dataDirectory: dataDir});
             reader2.open();
             expect(reader2.length).to.be(storage.length);
 
@@ -706,7 +706,11 @@ describe('Storage', function() {
             reader2.close();
         });
 
-        it('updates readers when writer appends', function(done){
+    });
+
+    describe('ReadOnly', function(){
+
+        it('triggers event when writer appends', function(done){
             storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true });
             storage.open();
             for (let i = 1; i <= 10; i++) {
@@ -716,6 +720,7 @@ describe('Storage', function() {
 
             let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
             reader.open();
+            reader.on('index-add', () => expect(this).to.be(false));
             reader.on('wrote', (doc, entry, position) => {
                 expect(entry.number).to.be(11);
                 expect(doc).to.eql({foo: 11});
@@ -728,7 +733,7 @@ describe('Storage', function() {
             storage.flush();
         });
 
-        it('updates secondary indexes on readers when writer appends', function(done){
+        it('updates secondary indexes when writer appends', function(done){
             storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true });
             storage.open();
             storage.ensureIndex('foo', doc => doc.type === 'foo');
@@ -753,7 +758,7 @@ describe('Storage', function() {
             storage.flush();
         });
 
-        it('updates readers when writer truncates', function(done){
+        it('triggers event when writer truncates', function(done){
             storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true });
             storage.open();
             for (let i = 1; i <= 10; i++) {
@@ -774,7 +779,31 @@ describe('Storage', function() {
             storage.truncate(4);
         });
 
-        it('recognizes new indexes created by other writer', function(done){
+        it('does not trigger truncate for secondary indexes', function(done){
+            storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true });
+            storage.open();
+            storage.ensureIndex('foo', doc => doc.type === 'foo');
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i, type: i > 5 ? 'foo' : 'bar'});
+            }
+            storage.flush();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            reader.on('truncate', (prevLength, newLength) => {
+                expect(prevLength).to.be(10);
+                expect(newLength).to.be(4);
+                setTimeout(() => {
+                    reader.close();
+                    done();
+                }, 5);
+            });
+            expect(reader.length).to.be(storage.length);
+
+            storage.truncate(4);
+        });
+
+        it('recognizes new indexes created by writer', function(done){
             storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true, partitioner:  (document, number) => document.type });
             storage.open();
 
@@ -792,7 +821,31 @@ describe('Storage', function() {
             storage.flush();
         });
 
-        it('recognizes new partitions created by other writer', function(done){
+        it('ignores new indexes created by other storage', function(done){
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+            storage.close();
+
+            storage = new Storage('other-storage', { dataDirectory: dataDir, syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            reader.on('index-created', (name) => {
+                expect(this).to.be(false);
+                reader.close();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.ensureIndex('one', doc => doc.type === 'one');
+            storage.flush();
+            setTimeout(() => {
+                reader.close();
+                done();
+            }, 5);
+        });
+
+        it('recognizes new partitions created by writer', function(done){
             storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true, partitioner:  (document, number) => document.type });
             storage.open();
 
@@ -806,6 +859,40 @@ describe('Storage', function() {
 
             storage.write({ foo: 1, type: 'one' });
             storage.flush();
+        });
+
+        it('ignores new partitions created by other storage', function(done){
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+            storage.close();
+
+            storage = new Storage('other-storage', { dataDirectory: dataDir, syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            reader.on('partition-created', (name) => {
+                expect(this).to.be(false);
+                reader.close();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.flush();
+            setTimeout(() => {
+                reader.close();
+                done();
+            }, 5);
+        });
+
+        it('can be opened and closed multiple times', function(){
+            storage = new Storage({ dataDirectory: dataDir });
+            storage.open();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            expect(reader.open()).to.be(true);
+            reader.close();
+            reader.close();
         });
 
     });

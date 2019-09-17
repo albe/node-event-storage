@@ -198,7 +198,7 @@ describe('Consumer', function() {
             consumer.stop();
 
             consumer.on('data', document => {
-                expect(false).to.be(true);
+                expect(this).to.be(false);
             });
             setTimeout(done, 10);
         });
