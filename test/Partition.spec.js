@@ -374,8 +374,10 @@ describe('Partition', function() {
             let reader = createReader();
             reader.open();
             fs.rename(reader.fileName, reader.fileName + '2', () => {
-                expect(reader.isOpen()).to.be(false);
-                done();
+                setTimeout(() => {
+                    expect(reader.isOpen()).to.be(false);
+                    done();
+                }, 5);
             });
         });
     });
