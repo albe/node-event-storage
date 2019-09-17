@@ -534,5 +534,17 @@ describe('Index', function() {
             index.truncate(0);
             fs.fdatasync(index.fd);
         });
+
+        it('closes when file renamed', function(done){
+            index = setupIndexWithEntries(5);
+            index.close();
+            let reader = createReader(index.name);
+            expect(reader.isOpen()).to.be(true);
+
+            fs.rename(reader.fileName, reader.fileName + '2', () => {
+                expect(reader.isOpen()).to.be(false);
+                done();
+            });
+        });
     });
 });

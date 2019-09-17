@@ -31,11 +31,7 @@ class ReadOnlyIndex extends WatchesFile(ReadableIndex) {
             this.data.length = length;
             this.emitFileChange(prevLength, length);
         } else if (eventType === 'rename' && filename) {
-            // Closes current watcher and creates a new watcher on the new filename
             this.close();
-            this.name = filename;
-            this.fileName = path.resolve(this.dataDirectory, this.name);
-            this.open();
         }
     }
 
