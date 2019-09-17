@@ -33,6 +33,17 @@ describe('EventStore', function() {
         });
     });
 
+    it('throws when scanning of stream directory fails', function() {
+        const fs = require('fs');
+        const originalReaddir = fs.readdir;
+        fs.readdir = (dir, callback) => callback(new Error('Something went wrong!'), null);
+
+        expect(() => new EventStore({
+            storageDirectory: 'test/data'
+        })).to.throwError(/Something went wrong!/);
+        fs.readdir = originalReaddir;
+    });
+
     it('throws when trying to open non-existing store read-only', function() {
         expect(() => new EventStore({
             storageDirectory: 'test/data',

@@ -32,20 +32,6 @@ class EventUnwrapper extends stream.Transform {
 }
 
 /**
- * Invokes the given callback with the given arguments, if it is a function.
- * @param {Function} [callback]
- * @param {*} [args]
- * @returns {boolean} true if the callback was invoked.
- */
-function maybeInvoke(callback, ...args) {
-    if (typeof callback === 'function') {
-        callback(...args);
-        return true;
-    }
-    return false;
-}
-
-/**
  * An event store optimized for working with many streams.
  * An event stream is implemented as an iterator over an index on the storage, therefore indexes need to be lightweight
  * and highly performant in read-only mode.
@@ -83,7 +69,13 @@ class EventStore extends EventEmitter {
         this.storage.open();
         this.streams['_all'] = { index: this.storage.index };
 
-        this.scanStreams(() => this.emit('ready'));
+        this.scanStreams((err) => {
+            if (err) {
+                this.storage.close();
+                throw err;
+            }
+            this.emit('ready');
+        });
     }
 
     /**
@@ -105,13 +97,13 @@ class EventStore extends EventEmitter {
      * @param {function} callback A callback that will be called when all existing streams are found.
      */
     scanStreams(callback) {
+        if (typeof callback !== 'function') {
+            callback = () => {};
+        }
         // Find existing streams by scanning dir for filenames starting with 'stream-'
         fs.readdir(this.streamsDirectory, (err, files) => {
             if (err) {
-                if (maybeInvoke(callback, err) === false) {
-                    throw err;
-                }
-                return;
+                return callback(err);
             }
             let matches;
             for (let file of files) {
@@ -122,7 +114,7 @@ class EventStore extends EventEmitter {
                     this.emit('stream-available', streamName);
                 }
             }
-            maybeInvoke(callback);
+            callback();
         });
     }
 
@@ -157,7 +149,7 @@ class EventStore extends EventEmitter {
      * @param {number} [expectedVersion]
      * @param {Object} [metadata]
      * @param {Function} [callback]
-     * @returns {{events: Array<Object>, metadata: object, callback: ?Function, expectedVersion: number}}
+     * @returns {{events: Array<Object>, metadata: object, callback: Function, expectedVersion: number}}
      */
     static fixArgumentTypes(events, expectedVersion, metadata, callback) {
         if (!(events instanceof Array)) {
@@ -173,7 +165,7 @@ class EventStore extends EventEmitter {
             metadata = {};
         }
         if (typeof callback !== 'function') {
-            callback = null;
+            callback = () => {};
         }
         return { events, expectedVersion, metadata, callback };
     }
@@ -224,7 +216,7 @@ class EventStore extends EventEmitter {
         });
         const commitCallback = () => {
             this.emit('commit', commit);
-            maybeInvoke(callback, commit);
+            callback(commit);
         };
         for (let event of events) {
             const eventMetadata = Object.assign({ commitId, committedAt }, metadata, { commitVersion, streamVersion });
