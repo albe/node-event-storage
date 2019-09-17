@@ -305,7 +305,29 @@ describe('EventStore', function() {
             expect(() => eventstore.fromStreams('join-foo-bar', ['foo-bar', 'baz'])).to.throwError(/does not exist/);
         });
 
-        it('needs to be tested.');
+        it('iterates events from multiple streams in correct order', function(done) {
+            eventstore = new EventStore({
+                storageDirectory: 'test/data'
+            });
+
+            eventstore.commit('foo', { key: 1 }, () => {
+                eventstore.commit('bar', { key: 2}, () => {
+                    eventstore.commit('foo', { key: 3 }, () => {
+                        eventstore.commit('bar', { key: 4}, () => {
+                            let joinStream = eventstore.fromStreams('foobar', ['foo','bar']);
+                            let key = 1;
+                            for (let event of joinStream) {
+                                expect(event.key).to.be(key);
+                                key++;
+                            }
+                            expect(key).to.be(5);
+                            done();
+                        });
+                    });
+                });
+            });
+        });
+
     });
 
     describe('createEventStream', function() {
