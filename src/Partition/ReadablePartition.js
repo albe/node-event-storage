@@ -170,9 +170,6 @@ class ReadablePartition extends EventEmitter {
      * @param {number} [from] The file position to start filling the read buffer from. Default 0.
      */
     fillBuffer(from = 0) {
-        if (!this.fd) {
-            return;
-        }
         this.readBufferLength = fs.readSync(this.fd, this.readBuffer, 0, this.readBuffer.byteLength, this.headerSize + from);
         this.readBufferPos = from;
     }

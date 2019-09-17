@@ -77,6 +77,13 @@ describe('Partition', function() {
         expect(() => partition.open()).to.throwError();
     });
 
+    it('can be opened and closed multiple times', function() {
+        partition.open();
+        expect(partition.open()).to.be(true);
+        partition.close();
+        partition.close();
+    });
+
     describe('write', function() {
 
         it('returns false when partition is not open', function() {
@@ -222,12 +229,15 @@ describe('Partition', function() {
 
         it('can read more documents than fit into a single read buffer', function() {
             partition.open();
-            const lastPosition = fillPartition(1000);
+            fillPartition(1000);
             partition.close();
             partition.open();
 
-            let read = partition.readFrom(0);
-            expect(partition.readFrom(lastPosition)).to.be(read);
+            let pos = 0;
+            for (let i = 0; i < 1000; i++) {
+                expect(partition.readFrom(pos)).to.be('foobar');
+                pos += 'foobar'.length + 11;
+            }
         });
 
         it('can read large documents', function() {
