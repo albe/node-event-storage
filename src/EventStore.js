@@ -63,11 +63,10 @@ class EventStore extends EventEmitter {
         const storageConfig = Object.assign(defaults, config.storageConfig);
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
 
-        this.streams = {};
         this.storeName = storeName;
         this.storage = this.createStorage(this.storeName, storageConfig);
         this.storage.open();
-        this.streams['_all'] = { index: this.storage.index };
+        this.streams = { _all: { index: this.storage.index } };
 
         this.scanStreams((err) => {
             if (err) {
