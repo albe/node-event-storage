@@ -187,6 +187,9 @@ class WritablePartition extends ReadablePartition {
      * @returns {Object} A reader object with properties `buffer`, `cursor` and `length`.
      */
     prepareReadBuffer(position) {
+        if (position + 10 >= this.size) {
+            return { buffer: null, cursor: 0, length: 0 };
+        }
         let bufferPos = this.size - this.writeBufferCursor;
         // Handle the case when data that is still in write buffer is supposed to be read
         if (this.dirtyReads && this.writeBufferCursor > 0 && position >= bufferPos) {

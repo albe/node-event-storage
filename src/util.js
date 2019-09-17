@@ -50,7 +50,7 @@ function buildMetadataForMatcher(matcher, hmac) {
 }
 
 /**
- * @param {{matcher: string, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
+ * @param {{matcher: string|Object, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
  * @param {function(string)} hmac A function that calculates a HMAC of the given string.
  * @returns {Object|function} The matcher object or function.
  */

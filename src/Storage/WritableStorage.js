@@ -288,11 +288,15 @@ class WritableStorage extends ReadableStorage {
         const index = new WritableIndex(name, options);
         let matcher;
 
-        try {
-            matcher = buildMatcherFromMetadata(index.metadata, this.hmac);
-        } catch (e) {
-            index.destroy();
-            throw e;
+        // If the index contains a matcher (possibly a serialized function) we check HMAC
+        // to prevent evaluating unknown code.
+        if (index.metadata.matcher) {
+            try {
+                matcher = buildMatcherFromMetadata(index.metadata, this.hmac);
+            } catch (e) {
+                index.destroy();
+                throw e;
+            }
         }
 
         return { index, matcher };

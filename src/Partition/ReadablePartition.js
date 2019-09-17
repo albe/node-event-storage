@@ -192,7 +192,7 @@ class ReadablePartition extends EventEmitter {
         const dataLengthStr = buffer.toString('utf8', offset, offset + 10);
         const dataLength = parseDataLength(dataLengthStr);
         if (dataLength === false) {
-            throw new Error(`Error reading document size from ${position}, got ${dataLength}.`);
+            throw new Error(`Error reading document size from ${position}, got ${dataLengthStr}.`);
         }
 
         if (size && dataLength !== size) {

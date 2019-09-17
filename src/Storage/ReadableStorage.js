@@ -88,7 +88,8 @@ class ReadableStorage extends EventEmitter {
         this.indexOptions.dataDirectory = this.indexDirectory;
         // Safety precaution to prevent accidentally restricting main index
         delete this.indexOptions.matcher;
-        this.index = this.createIndex(config.indexFile, this.indexOptions);
+        const { index } = this.createIndex(config.indexFile, this.indexOptions);
+        this.index = index;
         this.secondaryIndexes = {};
     }
 
