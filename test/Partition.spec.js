@@ -22,6 +22,9 @@ describe('Partition', function() {
         partition = null;
     });
 
+    /**
+     * @returns {ReadOnlyPartition}
+     */
     function createReader() {
         const reader = new Partition.ReadOnly(partition.name, { dataDirectory: dataDir });
         readers[readers.length] = reader;
@@ -345,11 +348,25 @@ describe('Partition', function() {
             reader.on('truncate', (prevSize, newSize) => {
                 expect(prevSize).to.be(size);
                 expect(newSize).to.be(partition.size);
+                reader.close();
                 done();
             });
 
             partition.truncate(0);
             fs.fdatasync(partition.fd);
+        });
+
+        it('recognizes file renames and closes', function(done){
+            partition.open();
+            fillPartition(10);
+            partition.close();
+
+            let reader = createReader();
+            reader.open();
+            fs.rename(reader.fileName, reader.fileName + '2', () => {
+                expect(reader.isOpen()).to.be(false);
+                done();
+            });
         });
     });
 });

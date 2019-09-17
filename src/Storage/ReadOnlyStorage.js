@@ -84,6 +84,7 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     createIndex(name, options = {}) {
         const { index } = super.createIndex(name, options);
+        const indexShortName = name.replace(this.storageFile + '.', '').replace('.index', '');
         index.on('append', (prevLength, newLength) => {
             const entries = index.range(prevLength + 1, newLength);
             if (entries === false) {
@@ -91,27 +92,19 @@ class ReadOnlyStorage extends ReadableStorage {
             }
             for (let entry of entries) {
                 const document = this.readFrom(entry.partition, entry.position, entry.size);
-                this.emit('index-add', name, entry.number, document);
+                if (index === this.index) {
+                    this.emit('wrote', document, entry, entry.position);
+                } else {
+                    this.emit('index-add', indexShortName, entry.number, document);
+                }
+            }
+        });
+        index.on('truncate', (prevLength, newLength) => {
+            if (index === this.index) {
+                this.emit('truncate', prevLength, newLength);
             }
         });
         return { index };
-    }
-
-    /**
-     * @protected
-     * @param {string} name
-     * @param {object} [options]
-     * @returns {ReadablePartition}
-     */
-    createPartition(name, options = {}) {
-        const partition = super.createPartition(name, options);
-        partition.on('append', (prevSize, newSize) => {
-            this.emit('append', partition.id, prevSize, newSize);
-        });
-        partition.on('truncate', (prevSize, newSize) => {
-            this.emit('truncate', partition.id, prevSize, newSize);
-        });
-        return partition;
     }
 }
 

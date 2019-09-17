@@ -29,11 +29,10 @@ class ReadOnlyPartition extends WatchesFile(ReadablePartition) {
                 this.emit('truncate', prevSize, this.size);
             }
         }
+
         if (eventType === 'rename' && filename) {
             // Closes current watcher and creates a new watcher on the new filename
             this.close();
-            this.fileName = filename;
-            this.open();
         }
     }
 

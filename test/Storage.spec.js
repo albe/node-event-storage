@@ -716,8 +716,8 @@ describe('Storage', function() {
 
             let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
             reader.open();
-            reader.on('index-add', (name, number, doc) => {
-                expect(number).to.be(11);
+            reader.on('wrote', (doc, entry, position) => {
+                expect(entry.number).to.be(11);
                 expect(doc).to.eql({foo: 11});
                 reader.close();
                 done();
@@ -726,6 +726,52 @@ describe('Storage', function() {
 
             storage.write({ foo: 11 });
             storage.flush();
+        });
+
+        it('updates secondary indexes on readers when writer appends', function(done){
+            storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true });
+            storage.open();
+            storage.ensureIndex('foo', doc => doc.type === 'foo');
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i, type: 'foo'});
+            }
+            storage.flush();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            reader.openIndex('foo');
+            reader.on('index-add', (name, number, doc) => {
+                expect(name).to.be('foo');
+                expect(number).to.be(11);
+                expect(doc).to.eql({foo: 11, type: 'foo'});
+                reader.close();
+                done();
+            });
+            expect(reader.length).to.be(storage.length);
+
+            storage.write({ foo: 11, type: 'foo' });
+            storage.flush();
+        });
+
+        it('updates readers when writer truncates', function(done){
+            storage = new Storage({ dataDirectory: dataDir, syncOnFlush: true });
+            storage.open();
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i});
+            }
+            storage.flush();
+
+            let reader = new Storage.ReadOnly({ dataDirectory: dataDir });
+            reader.open();
+            reader.on('truncate', (prevLength, newLength) => {
+                expect(prevLength).to.be(10);
+                expect(newLength).to.be(4);
+                reader.close();
+                done();
+            });
+            expect(reader.length).to.be(storage.length);
+
+            storage.truncate(4);
         });
 
         it('recognizes new indexes created by other writer', function(done){
