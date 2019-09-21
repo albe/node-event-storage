@@ -21,6 +21,7 @@ class EventUnwrapper extends stream.Transform {
     }
 
     _transform(data, encoding, callback) {
+        /* istanbul ignore else */
         if (data.stream && data.payload) {
             this.push(data.payload);
         } else {
@@ -96,6 +97,7 @@ class EventStore extends EventEmitter {
      * @param {function} callback A callback that will be called when all existing streams are found.
      */
     scanStreams(callback) {
+        /* istanbul ignore if */
         if (typeof callback !== 'function') {
             callback = () => {};
         }

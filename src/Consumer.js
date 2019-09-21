@@ -58,6 +58,7 @@ class Consumer extends stream.Readable {
      * @param {number} startFrom The revision to start from within the index to consume.
      */
     restoreState(startFrom) {
+        /* istanbul ignore if */
         if (!this.fileName) {
             return;
         }

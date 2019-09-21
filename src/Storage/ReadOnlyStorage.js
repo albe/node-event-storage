@@ -87,6 +87,7 @@ class ReadOnlyStorage extends ReadableStorage {
         const indexShortName = name.replace(this.storageFile + '.', '').replace('.index', '');
         index.on('append', (prevLength, newLength) => {
             const entries = index.range(prevLength + 1, newLength);
+            /* istanbul ignore if */
             if (entries === false) {
                 return;
             }
