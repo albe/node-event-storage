@@ -58,6 +58,47 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * @inheritDoc
+     * @returns {boolean}
+     */
+    open() {
+        if (this.lockFd) {
+            return true;
+        }
+        try {
+            this.lockFd = fs.openSync(path.resolve(this.dataDirectory, this.storageFile + '.lock'), 'wx');
+        } catch (e) {
+            /* istanbul ignore if */
+            if (e.code !== 'EEXIST') {
+                throw new Error(`Error creating lock for storage ${this.storageFile}: ` + e.message);
+            }
+            throw new Error(`Storage ${this.storageFile} is locked by another process`);
+        }
+        return super.open();
+    }
+
+    /**
+     * Unlock this storage, no matter if it was previously locked by this writer.
+     * Only use this if you are sure there is no other process still having a writer open.
+     * Current implementation just deletes a lock file that is named like the storage.
+     */
+    unlock() {
+        fs.unlinkSync(path.resolve(this.dataDirectory, this.storageFile + '.lock'));
+    }
+
+    /**
+     * @inheritDoc
+     */
+    close() {
+        if (this.lockFd) {
+            fs.closeSync(this.lockFd);
+            this.lockFd = null;
+            this.unlock();
+        }
+        super.close();
+    }
+
+    /**
      * Add an index entry for the given document at the position and size.
      *
      * @private

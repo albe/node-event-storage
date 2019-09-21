@@ -92,7 +92,6 @@ class WritableIndex extends ReadableIndex {
         }
         this.writeBufferCursor = 0;
         this.flushCallbacks = [];
-        //fs.flockSync(this.fd, 'exnb');
         return super.open();
     }
 
@@ -127,7 +126,6 @@ class WritableIndex extends ReadableIndex {
         if (this.fd) {
             this.flush();
             fs.fdatasyncSync(this.fd);
-            //fs.flockSync(this.fd, 'un');
         }
         super.close();
     }

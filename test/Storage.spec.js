@@ -686,6 +686,26 @@ describe('Storage', function() {
             // t.b.d. - only possible if there is no storage global index
         });
 
+        it('allows only a single writer', function(){
+            storage = new Storage({dataDirectory: dataDir});
+            storage.open();
+            expect(() => {
+                let storage2 = new Storage({dataDirectory: dataDir});
+                storage2.open();
+                storage2.close();
+            }).to.throwError(/is locked/);
+        });
+
+        it('releases write lock after closing', function(){
+            const storage2 = new Storage({dataDirectory: dataDir});
+            storage2.open();
+            storage2.close();
+            expect(() => {
+                storage = new Storage({dataDirectory: dataDir});
+                storage.open();
+            }).to.not.throwError();
+        });
+
         it('allows multiple readers for one storage', function () {
             storage = new Storage({dataDirectory: dataDir});
             storage.open();
