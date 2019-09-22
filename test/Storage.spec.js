@@ -12,9 +12,18 @@ describe('Storage', function() {
      * @var {WritableStorage}
      */
     let storage;
+    let refs = [];
 
     function createStorage(options = {}) {
-        return new Storage(Object.assign({ dataDirectory }, options));
+        const newStorage = new Storage(Object.assign({ dataDirectory }, options));
+        refs.push(newStorage);
+        return newStorage;
+    }
+
+    function createReader(options = {}) {
+        const newStorage = new Storage.ReadOnly(Object.assign({ dataDirectory }, options));
+        refs.push(newStorage);
+        return newStorage;
     }
 
     beforeEach(function () {
@@ -25,6 +34,8 @@ describe('Storage', function() {
     });
 
     afterEach(function () {
+        refs.forEach(ref => ref.close());
+        refs = [];
         if (storage) storage.close();
         storage = null;
     });
@@ -696,13 +707,13 @@ describe('Storage', function() {
         });
 
         it('allows only a single writer', function(){
-            storage = createStorage();
-            storage.open();
+            let storage2 = createStorage();
+            storage2.open();
             expect(() => {
-                let storage2 = createStorage();
-                storage2.open();
-                storage2.close();
+                storage = createStorage();
+                storage.open();
             }).to.throwError(/is locked/);
+            storage2.close();
         });
 
         it('releases write lock after closing', function(){
@@ -723,11 +734,11 @@ describe('Storage', function() {
             }
             storage.flush();
 
-            let reader1 = new Storage.ReadOnly({dataDirectory});
+            let reader1 = createReader();
             reader1.open();
             expect(reader1.length).to.be(storage.length);
 
-            let reader2 = new Storage.ReadOnly({dataDirectory});
+            let reader2 = createReader();
             reader2.open();
             expect(reader2.length).to.be(storage.length);
 
@@ -747,7 +758,7 @@ describe('Storage', function() {
             }
             storage.flush();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             reader.on('index-add', () => expect(this).to.be(false));
             reader.on('wrote', (doc, entry, position) => {
@@ -771,7 +782,7 @@ describe('Storage', function() {
             }
             storage.flush();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             reader.openIndex('foo');
             reader.on('index-add', (name, number, doc) => {
@@ -795,7 +806,7 @@ describe('Storage', function() {
             }
             storage.flush();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             reader.on('truncate', (prevLength, newLength) => {
                 expect(prevLength).to.be(10);
@@ -817,7 +828,7 @@ describe('Storage', function() {
             }
             storage.flush();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             reader.on('truncate', (prevLength, newLength) => {
                 expect(prevLength).to.be(10);
@@ -836,7 +847,7 @@ describe('Storage', function() {
             storage = createStorage({ syncOnFlush: true, partitioner:  (document, number) => document.type });
             storage.open();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             reader.on('index-created', (name) => {
                 expect(name.substr(-9, 3)).to.be('one');
@@ -858,7 +869,7 @@ describe('Storage', function() {
             storage = new Storage('other-storage', { dataDirectory, syncOnFlush: true, partitioner:  (document, number) => document.type });
             storage.open();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             reader.on('index-created', (name) => {
                 expect(this).to.be(false);
@@ -878,7 +889,7 @@ describe('Storage', function() {
             storage = createStorage({ syncOnFlush: true, partitioner:  (document, number) => document.type });
             storage.open();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             reader.on('partition-created', (id) => {
                 expect(reader.getPartition(id).name.substr(-3)).to.be('one');
@@ -898,7 +909,7 @@ describe('Storage', function() {
             storage = new Storage('other-storage', { dataDirectory, syncOnFlush: true, partitioner:  (document, number) => document.type });
             storage.open();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             reader.on('partition-created', (name) => {
                 expect(this).to.be(false);
@@ -917,7 +928,7 @@ describe('Storage', function() {
             storage = createStorage();
             storage.open();
 
-            let reader = new Storage.ReadOnly({ dataDirectory });
+            let reader = createReader();
             reader.open();
             expect(reader.open()).to.be(true);
             reader.close();
