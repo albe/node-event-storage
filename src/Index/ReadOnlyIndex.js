@@ -1,4 +1,3 @@
-const path = require('path');
 const ReadableIndex = require('./ReadableIndex');
 const WatchesFile = require('../WatchesFile');
 
@@ -22,6 +21,7 @@ class ReadOnlyIndex extends WatchesFile(ReadableIndex) {
      * @param {string} filename
      */
     onChange(eventType, filename) {
+        /* istanbul ignore if */
         if (!this.fd) {
             return;
         }
@@ -30,7 +30,7 @@ class ReadOnlyIndex extends WatchesFile(ReadableIndex) {
             const length = this.readFileLength();
             this.data.length = length;
             this.emitFileChange(prevLength, length);
-        } else if (eventType === 'rename' && filename) {
+        } else if (eventType === 'rename') {
             this.close();
         }
     }
