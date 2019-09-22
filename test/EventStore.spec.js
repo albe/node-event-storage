@@ -2,12 +2,14 @@ const expect = require('expect.js');
 const fs = require('fs-extra');
 const EventStore = require('../src/EventStore');
 
+const storageDirectory = __dirname + '/data';
+
 describe('EventStore', function() {
 
     let eventstore;
 
     beforeEach(function () {
-        fs.emptyDirSync('test/data');
+        fs.emptyDirSync(storageDirectory);
     });
 
     afterEach(function () {
@@ -17,7 +19,7 @@ describe('EventStore', function() {
 
     it('basically works', function(done) {
         eventstore = new EventStore({
-            storageDirectory: 'test/data'
+            storageDirectory
         });
 
         let events = [{foo: 'bar'}, {foo: 'baz'}, {foo: 'quux'}];
@@ -39,28 +41,28 @@ describe('EventStore', function() {
         fs.readdir = (dir, callback) => callback(new Error('Something went wrong!'), null);
 
         expect(() => new EventStore({
-            storageDirectory: 'test/data'
+            storageDirectory
         })).to.throwError(/Something went wrong!/);
         fs.readdir = originalReaddir;
     });
 
     it('throws when trying to open non-existing store read-only', function() {
         expect(() => new EventStore({
-            storageDirectory: 'test/data',
+            storageDirectory,
             readOnly: true
         })).to.throwError();
     });
 
     it('can open read-only', function(done) {
         eventstore = new EventStore({
-            storageDirectory: 'test/data'
+            storageDirectory
         });
 
         let events = [{foo: 'bar'}, {foo: 'baz'}, {foo: 'quux'}];
         eventstore.on('ready', () => {
             eventstore.commit('foo-bar', events, () => {
                 let readstore = new EventStore({
-                    storageDirectory: 'test/data',
+                    storageDirectory,
                     readOnly: true
                 });
 
@@ -81,7 +83,7 @@ describe('EventStore', function() {
 
         it('throws when no stream name specified', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             expect(() => eventstore.commit({ foo: 'bar' })).to.throwError();
@@ -89,7 +91,7 @@ describe('EventStore', function() {
 
         it('throws when no events specified', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             expect(() => eventstore.commit('foo-bar')).to.throwError();
@@ -97,12 +99,12 @@ describe('EventStore', function() {
 
         it('throws when opened in read-only mode', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
             eventstore.close();
 
             eventstore = new EventStore({
-                storageDirectory: 'test/data',
+                storageDirectory,
                 readOnly: true
             });
 
@@ -111,7 +113,7 @@ describe('EventStore', function() {
 
         it('can commit a single event', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', { foo: 'bar' });
@@ -120,7 +122,7 @@ describe('EventStore', function() {
 
         it('can commit multiple events at once', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }, { bar: 'baz' }, { baz: 'quux' }]);
@@ -129,7 +131,7 @@ describe('EventStore', function() {
 
         it('invokes callback when finished', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }], (commit) => {
@@ -143,7 +145,7 @@ describe('EventStore', function() {
 
         it('invokes callback when finished with optimistic concurrency check', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }], EventStore.ExpectedVersion.EmptyStream, (commit) => {
@@ -157,7 +159,7 @@ describe('EventStore', function() {
 
         it('invokes callback when finished with optimistic concurrency check and metdata', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }], EventStore.ExpectedVersion.EmptyStream, {}, (commit) => {
@@ -171,7 +173,7 @@ describe('EventStore', function() {
 
         it('invokes "commit" event when finished', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.on('commit', (commit) => {
@@ -186,7 +188,7 @@ describe('EventStore', function() {
 
         it('throws an optimistic concurrency error if stream version does not match', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             expect(() => eventstore.commit('foo-bar', { foo: 'bar' }, 1)).to.throwError(
@@ -206,7 +208,7 @@ describe('EventStore', function() {
 
         it('does not throw an optimistic concurrency error if stream version matches', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             expect(() => eventstore.commit('foo-bar', { foo: 'bar' }, EventStore.ExpectedVersion.EmptyStream)).to.not.throwError();
@@ -220,7 +222,7 @@ describe('EventStore', function() {
 
         it('uses metadata from argument for commit', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }], { commitId: 1, committedAt: 12345, quux: 'quux' }, (commit) => {
@@ -243,7 +245,7 @@ describe('EventStore', function() {
 
         it('throws when trying to recreate existing stream', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ type: 'foo' }], () => {
@@ -254,7 +256,7 @@ describe('EventStore', function() {
 
         it('can create new streams on existing events', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ type: 'foo' }], () => {
@@ -271,14 +273,14 @@ describe('EventStore', function() {
 
         it('can open existing streams', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }]);
             eventstore.close();
 
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
             eventstore.on('ready', () => {
                 const stream = eventstore.getEventStream('foo-bar');
@@ -294,7 +296,7 @@ describe('EventStore', function() {
 
         it('throws when not specifying a join stream name', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             expect(() => eventstore.fromStreams()).to.throwError();
@@ -302,7 +304,7 @@ describe('EventStore', function() {
 
         it('throws when not specifying an array of stream names to join', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             expect(() => eventstore.fromStreams('join-foo-bar')).to.throwError();
@@ -310,7 +312,7 @@ describe('EventStore', function() {
 
         it('throws when specifying a non-existing stream to join', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             expect(() => eventstore.fromStreams('join-foo-bar', ['foo-bar', 'baz'])).to.throwError(/does not exist/);
@@ -318,7 +320,7 @@ describe('EventStore', function() {
 
         it('iterates events from multiple streams in correct order', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo', { key: 1 }, () => {
@@ -345,11 +347,11 @@ describe('EventStore', function() {
 
         it('throws in read-only mode', function () {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             let readstore = new EventStore({
-                storageDirectory: 'test/data',
+                storageDirectory,
                 readOnly: true
             });
             expect(() => readstore.createEventStream('foo-bar', () => true)).to.throwError();
@@ -358,7 +360,7 @@ describe('EventStore', function() {
 
         it('throws when trying to re-create stream', function () {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
             eventstore.createEventStream('foo-bar', () => true)
 
@@ -370,12 +372,12 @@ describe('EventStore', function() {
 
         it('throws in read-only mode', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
             eventstore.createEventStream('foo-bar', () => true);
 
             let readstore = new EventStore({
-                storageDirectory: 'test/data',
+                storageDirectory,
                 readOnly: true
             });
             readstore.on('ready', () => {
@@ -387,21 +389,21 @@ describe('EventStore', function() {
 
         it('removes the stream persistently', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
-                expect(fs.existsSync('test/data/streams/eventstore.stream-foo-bar.index')).to.be(true);
+                expect(fs.existsSync(storageDirectory + '/streams/eventstore.stream-foo-bar.index')).to.be(true);
                 eventstore.deleteEventStream('foo-bar');
                 expect(eventstore.getEventStream('foo-bar')).to.be(false);
-                expect(fs.existsSync('test/data/streams/eventstore.stream-foo-bar.index')).to.be(false);
+                expect(fs.existsSync(storageDirectory + '/streams/eventstore.stream-foo-bar.index')).to.be(false);
                 done();
             });
         });
 
         it('is noop for non-existing stream', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
@@ -423,7 +425,7 @@ describe('EventStore', function() {
 
         it('returns empty iterator if no commits in store', function() {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
 
             const commits = eventstore.getCommits(0);
@@ -432,7 +434,7 @@ describe('EventStore', function() {
 
         it('returns a list of all commits', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
             const events = [
                 [{ foo: 1 }, { foo: 2 }],
@@ -456,7 +458,7 @@ describe('EventStore', function() {
 
         it('returns only commits after the given revision', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
             const events = [
                 [{ foo: 1 }, { foo: 2 }],
@@ -480,7 +482,7 @@ describe('EventStore', function() {
 
         it('returns the full commit if given revision is within a single commit', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
             const events = [
                 [{ foo: 1 }, { foo: 2 }],
@@ -508,7 +510,7 @@ describe('EventStore', function() {
 
         it('returns a consumer for the given stream', function(done) {
             eventstore = new EventStore({
-                storageDirectory: 'test/data'
+                storageDirectory
             });
             eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
 

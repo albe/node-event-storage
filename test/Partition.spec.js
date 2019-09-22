@@ -2,17 +2,18 @@ const expect = require('expect.js');
 const fs = require('fs-extra');
 const Partition = require('../src/Partition');
 
+const dataDirectory = __dirname + '/data';
+
 describe('Partition', function() {
 
-    const dataDir = 'test/data';
     /** @type {WritablePartition} */
     let partition;
     /** @type {Array<ReadOnlyPartition>} */
     let readers = [];
 
     beforeEach(function () {
-        fs.emptyDirSync(dataDir);
-        partition = new Partition('.part', { dataDirectory: dataDir, readBufferSize: 4*1024 });
+        fs.emptyDirSync(dataDirectory);
+        partition = new Partition('.part', { dataDirectory, readBufferSize: 4*1024 });
     });
 
     afterEach(function () {
@@ -26,7 +27,7 @@ describe('Partition', function() {
      * @returns {ReadOnlyPartition}
      */
     function createReader() {
-        const reader = new Partition.ReadOnly(partition.name, { dataDirectory: dataDir });
+        const reader = new Partition.ReadOnly(partition.name, { dataDirectory });
         readers[readers.length] = reader;
         return reader;
     }
@@ -41,9 +42,9 @@ describe('Partition', function() {
     }
 
     it('creates the storage directory if it does not exist', function() {
-        fs.removeSync(dataDir);
-        partition = new Partition('.part', { dataDirectory: dataDir });
-        expect(fs.existsSync(dataDir)).to.be(true);
+        fs.removeSync(dataDirectory);
+        partition = new Partition('.part', { dataDirectory });
+        expect(fs.existsSync(dataDirectory)).to.be(true);
     });
 
     it('is not opened automatically on construct', function() {
@@ -141,7 +142,7 @@ describe('Partition', function() {
         });
 
         it('works with small write buffer', function() {
-            partition = new Partition('.part', { dataDirectory: 'test/data', writeBufferSize: 64 });
+            partition = new Partition('.part', { dataDirectory, writeBufferSize: 64 });
             partition.open();
             fillPartition(50, i => 'foo-' + i.toString());
             partition.close();
@@ -174,7 +175,7 @@ describe('Partition', function() {
         });
 
         it('can disable dirty reads', function() {
-            partition = new Partition('.part', { dataDirectory: 'test/data', dirtyReads: false });
+            partition = new Partition('.part', { dataDirectory, dirtyReads: false });
             partition.open();
             let position = partition.write('foobar');
             expect(partition.readFrom(position, 6)).to.be(false);

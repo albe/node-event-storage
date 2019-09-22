@@ -2,12 +2,14 @@ const expect = require('expect.js');
 const fs = require('fs-extra');
 const Index = require('../src/Index');
 
+const dataDirectory = __dirname + '/data';
+
 describe('Index', function() {
 
     let index, counter = 1, readers = [];
 
     beforeEach(function() {
-        fs.emptyDirSync('test/data');
+        fs.emptyDirSync(dataDirectory);
     });
 
     afterEach(function() {
@@ -18,7 +20,7 @@ describe('Index', function() {
     });
 
     function createIndex(name = 'test.index', options = {}) {
-        return new Index(name, Object.assign({ dataDirectory: 'test/data' }, options));
+        return new Index(name, Object.assign({ dataDirectory }, options));
     }
 
     function setupIndexWithEntries(num, indexMapper, options) {
@@ -35,71 +37,76 @@ describe('Index', function() {
     }
 
     function createReader(name, options) {
-        let reader = new Index.ReadOnly(name, Object.assign({ dataDirectory: 'test/data' }, options));
+        let reader = new Index.ReadOnly(name, Object.assign({ dataDirectory }, options));
         readers[readers.length] = reader;
         return reader;
     }
 
-    it('is opened on instanciation', function() {
+    it('is opened on instantiation', function() {
         index = setupIndexWithEntries();
         expect(index.isOpen()).to.be(true);
     });
 
     it('defaults name to ".index"', function() {
-        index = new Index({ dataDirectory: 'test/data' });
+        index = new Index({ dataDirectory });
         expect(index.name).to.be('.index');
     });
 
     it('recovers metadata on reopening', function() {
-        index = new Index('test/data/.index', { metadata: { test: 'valueStays' } });
+        index = createIndex('.index', { metadata: { test: 'valueStays' } });
         expect(index.metadata.test).to.be('valueStays');
         index.close();
-        index = new Index(index.name);
+        index = createIndex(index.name);
         expect(index.metadata.test).to.be('valueStays');
     });
 
     it('throws on opening an non-index file', function() {
-        fs.writeFileSync('test/data/.index', 'foo');
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid file header/);
+        const indexFile = dataDirectory + '/.index';
+        fs.writeFileSync(indexFile, 'foo');
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid file header/);
     });
 
     it('throws on opening an index file with different version', function() {
-        fs.writeFileSync('test/data/.index', 'nesidx00');
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid file version/);
+        const indexFile = dataDirectory + '/.index';
+        fs.writeFileSync(indexFile, 'nesidx00');
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid file version/);
     });
 
     it('throws on opening an index file with wrong metadata size', function() {
+        const indexFile = dataDirectory + '/.index';
         const metadataBuffer = Buffer.allocUnsafe(8 + 4);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(0, 8);
-        fs.writeFileSync('test/data/.index', metadataBuffer);
+        fs.writeFileSync(indexFile, metadataBuffer);
 
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata size/);
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid metadata size/);
     });
 
     it('throws on opening an index file with too large metadata size', function() {
+        const indexFile = dataDirectory + '/.index';
         const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(255, 8);
         metadataBuffer.write("{}\n", 12, 3, 'utf8');
-        fs.writeFileSync('test/data/.index', metadataBuffer);
+        fs.writeFileSync(indexFile, metadataBuffer);
 
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid index file/);
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid index file/);
     });
 
     it('throws on opening an index file with invalid metadata', function() {
+        const indexFile = dataDirectory + '/.index';
         const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(255, 8);
         metadataBuffer.write("{x$", 12, 3, 'utf8');
-        fs.writeFileSync('test/data/.index', metadataBuffer);
+        fs.writeFileSync(indexFile, metadataBuffer);
 
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata/);
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid metadata/);
     });
 
     it('throws on reopening with altered metadata', function() {
-        index = new Index('test/data/.index', { metadata: { test: 'valueStays' } });
-        expect(() => index = new Index(index.name, { metadata: { test: 'anotherValue' } })).to.throwError(/Index metadata mismatch/);
+        index = createIndex('.index', { metadata: { test: 'valueStays' } });
+        expect(() => index = createIndex(index.name, { metadata: { test: 'anotherValue' } })).to.throwError(/Index metadata mismatch/);
     });
 
     it('throws on opening with altered file', function() {
@@ -171,7 +178,7 @@ describe('Index', function() {
         });
 
         it('calls callback eventually', function(done) {
-            index = new Index('test/data/.index', { flushDelay: 1 });
+            index = createIndex('.index', { flushDelay: 1 });
             let position = index.add(new Index.Entry(1, 0), (number) => {
                 expect(number).to.be(position);
                 done();
@@ -184,12 +191,12 @@ describe('Index', function() {
         });
 
         it('throws with invalid entry object', function() {
-            index = new Index('test/data/.index');
+            index = createIndex();
             expect(() => index.add([1,2,3,4])).to.throwError(/Wrong entry object/);
         });
 
         it('throws with invalid entry size', function() {
-            index = new Index('test/data/.index');
+            index = createIndex();
             class Entry extends Index.Entry {
                 static get size() {
                     return 20;
@@ -462,8 +469,9 @@ describe('Index', function() {
 
         it('completely deletes the file', function(){
             index = setupIndexWithEntries(5);
+            const fileName = index.fileName;
             index.destroy();
-            expect(fs.existsSync('test/data/.index')).to.be(false);
+            expect(fs.existsSync(fileName)).to.be(false);
         });
 
     });
@@ -485,10 +493,6 @@ describe('Index', function() {
     });
 
     describe('concurrency', function(){
-
-        it('allows only a single writer for a index', function(){
-            // t.b.d.
-        });
 
         it('allows multiple readers for a single index', function(){
             index = setupIndexWithEntries(5);
