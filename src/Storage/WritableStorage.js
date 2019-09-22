@@ -174,9 +174,6 @@ class WritableStorage extends ReadableStorage {
         }
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
         this.forEachSecondaryIndex((index, name) => {
-            if (!(index instanceof WritableIndex)) {
-                return;
-            }
             if (!index.isOpen()) {
                 index.open();
             }
@@ -238,7 +235,7 @@ class WritableStorage extends ReadableStorage {
      */
     flush() {
         let result = this.index.flush();
-        this.forEachPartition(partition => result = result || partition.flush());
+        this.forEachPartition(partition => result = result | partition.flush());
         this.forEachSecondaryIndex(index => index.flush());
         return result;
     }
