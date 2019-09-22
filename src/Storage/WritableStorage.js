@@ -42,18 +42,18 @@ class WritableStorage extends ReadableStorage {
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
             syncOnFlush: false,
-            dirtyReads: true
+            dirtyReads: true,
+            dataDirectory: '.'
         };
         config = Object.assign(defaults, config);
         config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush }, config.indexOptions);
-        super(storageName, config);
-        if (!fs.existsSync(this.dataDirectory)) {
+        if (!fs.existsSync(config.dataDirectory)) {
             try {
-                mkdirpSync(this.dataDirectory);
+                mkdirpSync(config.dataDirectory);
             } catch (e) {
             }
         }
-
+        super(storageName, config);
         this.partitioner = config.partitioner;
     }
 

@@ -492,7 +492,30 @@ describe('Index', function() {
 
     });
 
-    describe('concurrency', function(){
+    describe('ReadOnly', function(){
+
+        it('can be created without explicit name', function(){
+            expect(() => {
+                index = createIndex('.index');
+                let reader = new Index.ReadOnly({ dataDirectory });
+                reader.close();
+            }).to.not.throwError();
+        });
+
+        it('can be opened and closed multiple times', function(){
+            index = createIndex('.index');
+            let reader = new Index.ReadOnly({ dataDirectory });
+            expect(reader.open()).to.be(false);
+            reader.close();
+            reader.close();
+        });
+
+        it('throws when opening an empty file', function(){
+            index = createIndex('.index');
+            index.close();
+            fs.truncateSync(index.fileName, 0);
+            expect(() => createReader(index.name)).to.throwError(/empty/);
+        });
 
         it('allows multiple readers for a single index', function(){
             index = setupIndexWithEntries(5);
@@ -508,7 +531,7 @@ describe('Index', function() {
             expect(reader2.lastEntry.number).to.be(index.lastEntry.number);
         });
 
-        it('updates reader when writer flushes', function(done){
+        it('updates when writer flushes', function(done){
             index = setupIndexWithEntries(5);
             let reader1 = createReader(index.name);
 
@@ -524,7 +547,7 @@ describe('Index', function() {
             fs.fdatasync(index.fd);
         });
 
-        it('updates reader when writer truncates', function(done){
+        it('updates when writer truncates', function(done){
             index = setupIndexWithEntries(5);
             let reader1 = createReader(index.name);
 

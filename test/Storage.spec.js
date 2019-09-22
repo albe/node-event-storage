@@ -35,6 +35,13 @@ describe('Storage', function() {
         expect(fs.existsSync(dataDirectory)).to.be(true);
     });
 
+    it('can be opened multiple times', function(){
+        storage = createStorage();
+        storage.open();
+        expect(() => {
+            storage.open();
+        }).to.not.throwError();
+    });
 
     describe('write', function() {
 
