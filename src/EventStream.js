@@ -27,7 +27,7 @@ class EventStream extends stream.Readable {
      */
     constructor(name, eventStore, minRevision = 0, maxRevision = -1) {
         super({ objectMode: true });
-        if (typeof name !== 'string') {
+        if (typeof name !== 'string' || !name) {
             throw new Error('Need to specify a stream name.');
         }
         if (!eventStore) {
