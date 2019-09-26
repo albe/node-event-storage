@@ -100,7 +100,7 @@ class Watcher {
         if (this.handlers.change.length === 0) {
             return;
         }
-        if (!this.fileFilter(filename)) {
+        if (!filename || !this.fileFilter(filename)) {
             return;
         }
         this.handlers.change
@@ -115,7 +115,7 @@ class Watcher {
         if (this.handlers.rename.length === 0) {
             return;
         }
-        if (!this.fileFilter(filename)) {
+        if (!filename || !this.fileFilter(filename)) {
             return;
         }
         this.handlers.rename
