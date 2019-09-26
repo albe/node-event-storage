@@ -41,10 +41,9 @@ class ReadOnlyStorage extends ReadableStorage {
 
     /**
      * @private
-     * @param {string} eventType
      * @param {string} filename
      */
-    onStorageFileChanged(eventType, filename) {
+    onStorageFileChanged(filename) {
         if (filename.substr(-6) === '.index') {
             // New indexes are not automatically opened in the reader
             this.emit('index-created', filename);
