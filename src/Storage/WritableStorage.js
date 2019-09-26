@@ -62,11 +62,23 @@ class WritableStorage extends ReadableStorage {
      * @returns {boolean}
      */
     open() {
-        if (this.lockFd) {
+        if (!this.lock()) {
             return true;
         }
+        return super.open();
+    }
+
+    /**
+     * Attempt to lock this storage by means of a lock directory.
+     * @returns {boolean} True if the lock was created or false if the lock is already in place.
+     */
+    lock() {
+        if (this.locked) {
+            return false;
+        }
         try {
-            this.lockFd = fs.openSync(path.resolve(this.dataDirectory, this.storageFile + '.lock'), 'wx');
+            fs.mkdirSync(path.resolve(this.dataDirectory, this.storageFile + '.lock'));
+            this.locked = true;
         } catch (e) {
             /* istanbul ignore if */
             if (e.code !== 'EEXIST') {
@@ -74,7 +86,7 @@ class WritableStorage extends ReadableStorage {
             }
             throw new Error(`Storage ${this.storageFile} is locked by another process`);
         }
-        return super.open();
+        return true;
     }
 
     /**
@@ -83,16 +95,15 @@ class WritableStorage extends ReadableStorage {
      * Current implementation just deletes a lock file that is named like the storage.
      */
     unlock() {
-        fs.unlinkSync(path.resolve(this.dataDirectory, this.storageFile + '.lock'));
+        fs.rmdirSync(path.resolve(this.dataDirectory, this.storageFile + '.lock'));
+        this.locked = false;
     }
 
     /**
      * @inheritDoc
      */
     close() {
-        if (this.lockFd) {
-            fs.closeSync(this.lockFd);
-            this.lockFd = null;
+        if (this.locked) {
             this.unlock();
         }
         super.close();
