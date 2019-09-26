@@ -1,6 +1,6 @@
-const fs = require('fs');
 const ReadableStorage = require('./ReadableStorage');
 const ReadablePartition = require('../Partition/ReadablePartition');
+const Watcher = require('../Watcher');
 
 /**
  * An append-only storage with highly performant positional range scans.
@@ -16,6 +16,15 @@ class ReadOnlyStorage extends ReadableStorage {
     }
 
     /**
+     * Returns true if the given filename belongs to this storage.
+     * @param {string} filename
+     * @returns {boolean}
+     */
+    storageFilesFilter(filename) {
+        return filename.substr(-7) !== '.branch' && filename.substr(0, this.storageFile.length) === this.storageFile;
+    }
+
+    /**
      * Open the storage and indexes and create read and write buffers eagerly.
      * Will emit an 'opened' event if finished.
      *
@@ -24,7 +33,8 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     open() {
         if (!this.watcher) {
-            this.watcher = fs.watch(this.dataDirectory, {persistent: false}, this.onDirectoryContentsChanged.bind(this));
+            this.watcher = new Watcher(this.dataDirectory, this.storageFilesFilter.bind(this));
+            this.watcher.on('change', this.onStorageFileChanged.bind(this));
         }
         return super.open();
     }
@@ -34,19 +44,7 @@ class ReadOnlyStorage extends ReadableStorage {
      * @param {string} eventType
      * @param {string} filename
      */
-    onDirectoryContentsChanged(eventType, filename) {
-        if (eventType === 'change') {
-            return;
-        }
-
-        if (filename.substr(-7) === '.branch') {
-            return;
-        }
-        // Ignore files not belonging to this storage
-        if (filename.substr(0, this.storageFile.length) !== this.storageFile) {
-            return;
-        }
-
+    onStorageFileChanged(eventType, filename) {
         if (filename.substr(-6) === '.index') {
             // New indexes are not automatically opened in the reader
             this.emit('index-created', filename);

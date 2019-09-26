@@ -1,4 +1,4 @@
-const fs = require('fs');
+const Watcher = require('./Watcher');
 
 /**
  * A mixin that provides a file watcher for this.fileName which triggers a method `onChange` on the class, that needs to be implemented.
@@ -14,7 +14,9 @@ const WatchesFile = Base => class extends Base {
      */
     watchFile() {
         this.stopWatching();
-        this.watcher = fs.watch(this.fileName, { persistent: false }, this.onChange.bind(this));
+        this.watcher = new Watcher(this.fileName);
+        this.watcher.on('change', this.onChange.bind(this));
+        this.watcher.on('rename', this.onRename.bind(this));
     }
 
     /**
