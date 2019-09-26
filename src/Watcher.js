@@ -17,6 +17,7 @@ class DirectoryWatcher extends EventEmitter {
      */
     constructor(directory, options = {}) {
         directory = path.normalize(directory);
+        /* istanbul ignore if */
         if (!fs.existsSync(directory)) {
             throw new Error('Can not watch a non-existing directory.');
         }

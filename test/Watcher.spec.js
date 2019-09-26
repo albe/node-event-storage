@@ -28,6 +28,21 @@ describe('Watcher', function() {
         expect(() => createWatcher('.file')).to.throwError();
     });
 
+    it('throws if directory doesnt exist', function(){
+        expect(() => createWatcher('foo/')).to.throwError();
+    });
+
+    it('can be closed multiple times safely', function(){
+        const watcher = createWatcher('');
+        watcher.close();
+        expect(() => watcher.close()).to.not.throwError();
+    });
+
+    it('throws when trying to bind to invalid event', function(){
+        const watcher = createWatcher('');
+        expect(() => watcher.on('foo', () => null)).to.throwError();
+    });
+
     it('detects changes to files inside a directory', function(done){
         const fd = fs.openSync(dataDirectory + '/.file', 'w');
         const watcher = createWatcher('');
