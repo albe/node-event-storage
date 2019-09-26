@@ -76,8 +76,9 @@ class WritableStorage extends ReadableStorage {
         if (this.locked) {
             return false;
         }
+        this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         try {
-            fs.mkdirSync(path.resolve(this.dataDirectory, this.storageFile + '.lock'));
+            fs.mkdirSync(this.lockFile);
             this.locked = true;
         } catch (e) {
             /* istanbul ignore if */
@@ -95,7 +96,7 @@ class WritableStorage extends ReadableStorage {
      * Current implementation just deletes a lock file that is named like the storage.
      */
     unlock() {
-        fs.rmdirSync(path.resolve(this.dataDirectory, this.storageFile + '.lock'));
+        fs.rmdirSync(this.lockFile);
         this.locked = false;
     }
 

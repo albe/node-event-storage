@@ -127,14 +127,14 @@ class Watcher {
      * @api
      */
     close() {
-        if (!this.watcher) {
+        if (!(this.watcher instanceof EventEmitter)) {
             return;
         }
         this.watcher.off('change', this.onChange);
         this.watcher.off('rename', this.onRename);
         this.watcher.close();
         this.watcher = null;
-        this.handlers = {};
+        this.handlers = { change: [], rename: [] };
     }
 
 }
