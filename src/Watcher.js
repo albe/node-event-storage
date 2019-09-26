@@ -130,8 +130,8 @@ class Watcher {
         if (!(this.watcher instanceof EventEmitter)) {
             return;
         }
-        this.watcher.off('change', this.onChange);
-        this.watcher.off('rename', this.onRename);
+        this.watcher.removeListener('change', this.onChange);
+        this.watcher.removeListener('rename', this.onRename);
         this.watcher.close();
         this.watcher = null;
         this.handlers = { change: [], rename: [] };
