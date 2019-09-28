@@ -269,6 +269,35 @@ describe('EventStore', function() {
 
     });
 
+    describe('getStreamVersion', function() {
+
+        it('returns -1 if the stream does not exist', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            expect(eventstore.getStreamVersion('foo')).to.be(-1);
+        });
+
+        it('returns 0 if the stream is empty', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo', () => true);
+            expect(eventstore.getStreamVersion('foo')).to.be(0);
+        });
+
+        it('returns the version of the stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo', [{ type: 'foo' }], () => {
+                expect(eventstore.getStreamVersion('foo')).to.be(1);
+                done();
+            });
+        });
+
+    });
+
     describe('getEventStream', function() {
 
         it('can open existing streams', function(done) {

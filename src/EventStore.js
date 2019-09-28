@@ -230,6 +230,18 @@ class EventStore extends EventEmitter {
     }
 
     /**
+     * @api
+     * @param {string} streamName The name of the stream to get the version for.
+     * @returns {number} The version that the given stream is at currently, or -1 if the stream does not exist.
+     */
+    getStreamVersion(streamName) {
+        if (!(streamName in this.streams)) {
+            return -1;
+        }
+        return this.streams[streamName].index.length;
+    }
+
+    /**
      * Get an event stream for the given stream name within the revision boundaries.
      *
      * @api
