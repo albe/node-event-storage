@@ -3,15 +3,15 @@ const fs = require('fs-extra');
 const Storage = require('../src/Storage');
 const Consumer = require('../src/Consumer');
 
-const dataDir = __dirname + '/data';
+const dataDirectory = __dirname + '/data';
 
 describe('Consumer', function() {
 
     let consumer, storage;
 
     beforeEach(function () {
-        fs.emptyDirSync(dataDir);
-        storage = new Storage({ dataDirectory: dataDir });
+        fs.emptyDirSync(dataDirectory);
+        storage = new Storage({ dataDirectory });
         storage.ensureIndex('foobar', (doc) => doc.type === 'Foobar');
         storage.ensureIndex('bazinga', (doc) => doc.type === 'Bazinga');
     });
@@ -20,8 +20,8 @@ describe('Consumer', function() {
         if (storage) {
             storage.close();
         }
-        storage = undefined;
-        consumer = undefined;
+        storage = null;
+        consumer = null;
     });
 
     it('throws when instanciated without a storage', function() {
@@ -38,7 +38,7 @@ describe('Consumer', function() {
 
     it('creates consumer directory if not existing', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer1');
-        expect(fs.existsSync(dataDir + '/consumers')).to.be(true);
+        expect(fs.existsSync(dataDirectory + '/consumers')).to.be(true);
     });
 
     it('emits event when catching up', function(done){
@@ -198,7 +198,7 @@ describe('Consumer', function() {
             consumer.stop();
 
             consumer.on('data', document => {
-                expect(false).to.be(true);
+                expect(this).to.be(false);
             });
             setTimeout(done, 10);
         });

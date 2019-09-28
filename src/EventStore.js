@@ -21,6 +21,7 @@ class EventUnwrapper extends stream.Transform {
     }
 
     _transform(data, encoding, callback) {
+        /* istanbul ignore else */
         if (data.stream && data.payload) {
             this.push(data.payload);
         } else {
@@ -44,30 +45,49 @@ class EventStore extends EventEmitter {
      * @param {string} [config.storageDirectory] The directory where the data should be stored. Default './data'.
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {Object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
+     * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
-        if (typeof storeName === 'object') {
+        if (typeof storeName !== 'string') {
             config = storeName;
-            storeName = undefined;
+            storeName = 'eventstore';
         }
 
         this.storageDirectory = path.resolve(config.storageDirectory || './data');
         let defaults = {
             dataDirectory: this.storageDirectory,
             indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
-            partitioner: (event) => event.stream
+            partitioner: (event) => event.stream,
+            readOnly: config.readOnly || false
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
 
-        this.streams = {};
-        this.storeName = storeName || 'eventstore';
-        this.storage = new Storage(this.storeName, storageConfig);
+        this.storeName = storeName;
+        this.storage = this.createStorage(this.storeName, storageConfig);
         this.storage.open();
-        this.streams['_all'] = { index: this.storage.index };
+        this.streams = { _all: { index: this.storage.index } };
 
-        this.scanStreams(() => this.emit('ready'));
+        this.scanStreams((err) => {
+            if (err) {
+                this.storage.close();
+                throw err;
+            }
+            this.emit('ready');
+        });
+    }
+
+    /**
+     * @param {string} name
+     * @param {Object} config
+     * @returns {ReadableStorage|WritableStorage}
+     */
+    createStorage(name, config) {
+        if (config.readOnly === true) {
+            return new Storage.ReadOnly(name, config);
+        }
+        return new Storage(name, config);
     }
 
     /**
@@ -77,24 +97,25 @@ class EventStore extends EventEmitter {
      * @param {function} callback A callback that will be called when all existing streams are found.
      */
     scanStreams(callback) {
+        /* istanbul ignore if */
+        if (typeof callback !== 'function') {
+            callback = () => {};
+        }
         // Find existing streams by scanning dir for filenames starting with 'stream-'
         fs.readdir(this.streamsDirectory, (err, files) => {
             if (err) {
-                if (typeof callback === 'function') {
-                    return callback(err);
-                }
-                throw err;
+                return callback(err);
             }
             let matches;
             for (let file of files) {
                 if ((matches = file.match(/(stream-(.*))\.index$/)) !== null) {
                     const streamName = matches[2];
-                    const index = this.storage.ensureIndex(matches[1]);
+                    const index = this.storage.openIndex(matches[1]);
                     this.streams[streamName] = { index };
                     this.emit('stream-available', streamName);
                 }
             }
-            if (typeof callback === 'function') return callback();
+            callback();
         });
     }
 
@@ -114,7 +135,40 @@ class EventStore extends EventEmitter {
      * @returns {number}
      */
     get length() {
-        return this.storage.index.length;
+        return this.storage.length;
+    }
+
+    /**
+     * This method makes it so the last three arguments can be given either as:
+     *  - expectedVersion, metadata, callback
+     *  - expectedVersion, callback
+     *  - metadata, callback
+     *  - callback
+     *
+     * @private
+     * @param {Array<Object>|Object} events
+     * @param {number} [expectedVersion]
+     * @param {Object} [metadata]
+     * @param {Function} [callback]
+     * @returns {{events: Array<Object>, metadata: object, callback: Function, expectedVersion: number}}
+     */
+    static fixArgumentTypes(events, expectedVersion, metadata, callback) {
+        if (!(events instanceof Array)) {
+            events = [events];
+        }
+        if (typeof expectedVersion !== 'number') {
+            callback = metadata;
+            metadata = expectedVersion;
+            expectedVersion = ExpectedVersion.Any;
+        }
+        if (typeof metadata !== 'object') {
+            callback = metadata;
+            metadata = {};
+        }
+        if (typeof callback !== 'function') {
+            callback = () => {};
+        }
+        return { events, expectedVersion, metadata, callback };
     }
 
     /**
@@ -127,32 +181,20 @@ class EventStore extends EventEmitter {
      * @param {Array<Object>|Object} events The events to commit or a single event.
      * @param {number} [expectedVersion] One of ExpectedVersion constants or a positive version number that the stream is supposed to be at before commit.
      * @param {Object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
-     * @param {function} [callback] A function that will be executed when all events have been committed.
+     * @param {Function} [callback] A function that will be executed when all events have been committed.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
+        if (this.storage instanceof Storage.ReadOnly) {
+            throw new Error('The storage was opened in read-only mode. Can not commit to it.');
+        }
         if (typeof streamName !== 'string') {
             throw new Error('Must specify a stream name for commit.');
         }
         if (!events) {
             throw new Error('No events specified for commit.');
         }
-        if (!(events instanceof Array)) {
-            events = [events];
-        }
-        if (typeof expectedVersion === 'object') {
-            callback = metadata;
-            metadata = expectedVersion;
-            expectedVersion = ExpectedVersion.Any;
-        }
-        if (typeof expectedVersion === 'function') {
-            callback = expectedVersion;
-            metadata = undefined;
-            expectedVersion = ExpectedVersion.Any;
-        } else if (typeof metadata === 'function') {
-            callback = metadata;
-            metadata = undefined;
-        }
+        ({ events, expectedVersion, metadata, callback } = EventStore.fixArgumentTypes(events, expectedVersion, metadata, callback));
 
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName });
@@ -175,7 +217,7 @@ class EventStore extends EventEmitter {
         });
         const commitCallback = () => {
             this.emit('commit', commit);
-            if (typeof callback === 'function') return callback(commit);
+            callback(commit);
         };
         for (let event of events) {
             const eventMetadata = Object.assign({ commitId, committedAt }, metadata, { commitVersion, streamVersion });
@@ -249,6 +291,9 @@ class EventStore extends EventEmitter {
      * @throws {Error} If the stream could not be created.
      */
     createEventStream(streamName, matcher) {
+        if (this.storage instanceof Storage.ReadOnly) {
+            throw new Error('The storage was opened in read-only mode. Can not create new stream on it.');
+        }
         if (streamName in this.streams) {
             throw new Error('Can not recreate stream!');
         }
@@ -273,6 +318,9 @@ class EventStore extends EventEmitter {
      * @returns void
      */
     deleteEventStream(streamName) {
+        if (this.storage instanceof Storage.ReadOnly) {
+            throw new Error('The storage was opened in read-only mode. Can not delete a stream on it.');
+        }
         if (!(streamName in this.streams)) {
             return;
         }

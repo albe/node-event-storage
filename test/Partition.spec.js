@@ -2,30 +2,59 @@ const expect = require('expect.js');
 const fs = require('fs-extra');
 const Partition = require('../src/Partition');
 
+const dataDirectory = __dirname + '/data';
+
 describe('Partition', function() {
 
+    /** @type {WritablePartition} */
     let partition;
+    /** @type {Array<ReadOnlyPartition>} */
+    let readers = [];
 
     beforeEach(function () {
-        fs.emptyDirSync('test/data');
-        partition = new Partition('.part', { dataDirectory: 'test/data' });
+        fs.emptyDirSync(dataDirectory);
+        partition = new Partition('.part', { dataDirectory, readBufferSize: 4*1024 });
     });
 
     afterEach(function () {
         if (partition) partition.close();
-        partition = undefined;
+        for (let reader of readers) reader.close();
+        readers = [];
+        partition = null;
     });
 
-    function fillPartition(num, documentBuilder) {
-        let lastposition;
-        for (let i = 1; i <= num; i++) {
-            lastposition = partition.write(documentBuilder && documentBuilder(i) || 'foobar');
-        }
-        return lastposition;
+    /**
+     * @returns {ReadOnlyPartition}
+     */
+    function createReader() {
+        const reader = new Partition.ReadOnly(partition.name, { dataDirectory });
+        readers[readers.length] = reader;
+        return reader;
     }
+
+    function fillPartition(num, documentBuilder) {
+        let lastPosition;
+        for (let i = 1; i <= num; i++) {
+            lastPosition = partition.write(documentBuilder && documentBuilder(i) || 'foobar');
+        }
+        partition.flush();
+        return lastPosition;
+    }
+
+    it('creates the storage directory if it does not exist', function() {
+        fs.removeSync(dataDirectory);
+        partition = new Partition('.part', { dataDirectory });
+        expect(fs.existsSync(dataDirectory)).to.be(true);
+    });
 
     it('is not opened automatically on construct', function() {
         expect(partition.isOpen()).to.be(false);
+    });
+
+    it('does nothing on reopening', function() {
+        partition.open();
+        expect(partition.isOpen()).to.be(true);
+        expect(() => partition.open()).to.not.throwError();
     });
 
     it('throws when not providing partition name', function() {
@@ -47,6 +76,13 @@ describe('Partition', function() {
         fs.closeSync(fd);
 
         expect(() => partition.open()).to.throwError();
+    });
+
+    it('can be opened and closed multiple times', function() {
+        partition.open();
+        expect(partition.open()).to.be(true);
+        partition.close();
+        partition.close();
     });
 
     describe('write', function() {
@@ -106,7 +142,7 @@ describe('Partition', function() {
         });
 
         it('works with small write buffer', function() {
-            partition = new Partition('.part', { dataDirectory: 'test/data', writeBufferSize: 64 });
+            partition = new Partition('.part', { dataDirectory, writeBufferSize: 64 });
             partition.open();
             fillPartition(50, i => 'foo-' + i.toString());
             partition.close();
@@ -139,7 +175,7 @@ describe('Partition', function() {
         });
 
         it('can disable dirty reads', function() {
-            partition = new Partition('.part', { dataDirectory: 'test/data', dirtyReads: false });
+            partition = new Partition('.part', { dataDirectory, dirtyReads: false });
             partition.open();
             let position = partition.write('foobar');
             expect(partition.readFrom(position, 6)).to.be(false);
@@ -190,6 +226,19 @@ describe('Partition', function() {
             expect(() => partition.readFrom(0)).to.throwError((e) => {
                 expect(e).to.be.a(Partition.CorruptFileError);
             });
+        });
+
+        it('can read more documents than fit into a single read buffer', function() {
+            partition.open();
+            fillPartition(1000);
+            partition.close();
+            partition.open();
+
+            let pos = 0;
+            for (let i = 0; i < 1000; i++) {
+                expect(partition.readFrom(pos)).to.be('foobar');
+                pos += 'foobar'.length + 11;
+            }
         });
 
         it('can read large documents', function() {
@@ -266,4 +315,71 @@ describe('Partition', function() {
 
     });
 
+    describe('concurrency', function(){
+
+        it('allows multiple readers for a partition', function(){
+            partition.open();
+            fillPartition(10);
+            expect(partition.size).to.be.greaterThan(0);
+
+            let reader1 = createReader();
+            reader1.open();
+            expect(reader1.size).to.be(partition.size);
+            let reader2 = createReader();
+            reader2.open();
+            expect(reader2.size).to.be(partition.size);
+        });
+
+        it('updates reader when writer appends', function(done){
+            partition.open();
+            fillPartition(10);
+            const size = partition.size;
+
+            let reader = createReader();
+            reader.open();
+            reader.on('append', (prevSize, newSize) => {
+                expect(prevSize).to.be(size);
+                expect(newSize).to.be(partition.size);
+                done();
+            });
+
+            partition.write('foo');
+            expect(partition.size).to.be.greaterThan(reader.size);
+            partition.flush();
+            fs.fdatasync(partition.fd);
+        });
+
+        it('updates reader when writer truncates', function(done){
+            partition.open();
+            fillPartition(10);
+            const size = partition.size;
+
+            let reader = createReader();
+            reader.open();
+            reader.on('truncate', (prevSize, newSize) => {
+                expect(prevSize).to.be(size);
+                expect(newSize).to.be(partition.size);
+                reader.close();
+                done();
+            });
+
+            partition.truncate(0);
+            fs.fdatasync(partition.fd);
+        });
+
+        it('recognizes file renames and closes', function(done){
+            partition.open();
+            fillPartition(10);
+            partition.close();
+
+            let reader = createReader();
+            reader.open();
+            fs.rename(reader.fileName, reader.fileName + '2', () => {
+                setTimeout(() => {
+                    expect(reader.isOpen()).to.be(false);
+                    done();
+                }, 5);
+            });
+        });
+    });
 });

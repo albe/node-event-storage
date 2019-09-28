@@ -1,6 +1,19 @@
 const stream = require('stream');
 
 /**
+ * Adjusts a revision number from the EventStore/EventStream interface range into the underlying storage item number.
+ *
+ * @param {number} rev A zero-based revision number, or a negative number to denote a "from the end" position
+ * @returns {number} A one-based storage item number
+ */
+function adjustedRevision(rev) {
+    if (rev >= 0) {
+        return rev + 1;
+    }
+    return rev;
+}
+
+/**
  * An event stream is a simple wrapper around an iterator over storage documents.
  * It implements a node readable stream interface.
  */
@@ -14,7 +27,7 @@ class EventStream extends stream.Readable {
      */
     constructor(name, eventStore, minRevision = 0, maxRevision = -1) {
         super({ objectMode: true });
-        if (!name) {
+        if (typeof name !== 'string' || !name) {
             throw new Error('Need to specify a stream name.');
         }
         if (!eventStore) {
@@ -24,8 +37,8 @@ class EventStream extends stream.Readable {
         this.name = name;
         if (eventStore.streams[name]) {
             const streamIndex = eventStore.streams[name].index;
-            if (minRevision >= 0) minRevision++;
-            if (maxRevision >= 0) maxRevision++;
+            minRevision = adjustedRevision(minRevision);
+            maxRevision = adjustedRevision(maxRevision);
             this.iterator = eventStore.storage.readRange(minRevision, maxRevision, streamIndex);
         } else {
             this.iterator = { next() { return { done: true }; } };
@@ -73,7 +86,6 @@ class EventStream extends stream.Readable {
     }
 
     /**
-     * @private
      * @returns {Object|boolean} The next event or false if no more events in the stream.
      */
     next() {

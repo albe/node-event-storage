@@ -2,98 +2,118 @@ const expect = require('expect.js');
 const fs = require('fs-extra');
 const Index = require('../src/Index');
 
+const dataDirectory = __dirname + '/data';
+
 describe('Index', function() {
 
-    let index;
+    let index, counter = 1, readers = [];
 
     beforeEach(function() {
-        fs.emptyDirSync('test/data');
+        fs.emptyDirSync(dataDirectory);
     });
 
     afterEach(function() {
         if (index) index.close();
-        index = undefined;
+        for (let reader of readers) reader.close();
+        readers = [];
+        index = null;
     });
+
+    function createIndex(name = 'test.index', options = {}) {
+        return new Index(name, Object.assign({ dataDirectory }, options));
+    }
 
     function setupIndexWithEntries(num, indexMapper, options) {
         if (typeof indexMapper === 'object') {
             options = indexMapper;
-            indexMapper = undefined;
+            indexMapper = null;
         }
-        index = new Index('test.index', Object.assign({ dataDirectory: 'test/data' }, options));
+        index = createIndex('test' + (counter++) + '.index', options);
         for (let i = 1; i <= num; i++) {
             index.add(new Index.Entry(indexMapper && indexMapper(i) || i, i));
         }
+        index.flush();
         return index;
     }
 
-    it('is opened on instanciation', function() {
+    function createReader(name, options) {
+        let reader = new Index.ReadOnly(name, Object.assign({ dataDirectory }, options));
+        readers[readers.length] = reader;
+        return reader;
+    }
+
+    it('is opened on instantiation', function() {
         index = setupIndexWithEntries();
         expect(index.isOpen()).to.be(true);
     });
 
     it('defaults name to ".index"', function() {
-        index = new Index({ dataDirectory: 'test/data' });
+        index = new Index({ dataDirectory });
         expect(index.name).to.be('.index');
     });
 
     it('recovers metadata on reopening', function() {
-        index = new Index('test/data/.index', { metadata: { test: 'valueStays' } });
+        index = createIndex('.index', { metadata: { test: 'valueStays' } });
         expect(index.metadata.test).to.be('valueStays');
         index.close();
-        index = new Index('test/data/.index');
+        index = createIndex(index.name);
         expect(index.metadata.test).to.be('valueStays');
     });
 
     it('throws on opening an non-index file', function() {
-        fs.writeFileSync('test/data/.index', 'foo');
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid file header/);
+        const indexFile = dataDirectory + '/.index';
+        fs.writeFileSync(indexFile, 'foo');
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid file header/);
     });
 
     it('throws on opening an index file with different version', function() {
-        fs.writeFileSync('test/data/.index', 'nesidx00');
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid file version/);
+        const indexFile = dataDirectory + '/.index';
+        fs.writeFileSync(indexFile, 'nesidx00');
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid file version/);
     });
 
     it('throws on opening an index file with wrong metadata size', function() {
+        const indexFile = dataDirectory + '/.index';
         const metadataBuffer = Buffer.allocUnsafe(8 + 4);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(0, 8);
-        fs.writeFileSync('test/data/.index', metadataBuffer);
+        fs.writeFileSync(indexFile, metadataBuffer);
 
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata size/);
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid metadata size/);
     });
 
     it('throws on opening an index file with too large metadata size', function() {
+        const indexFile = dataDirectory + '/.index';
         const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(255, 8);
         metadataBuffer.write("{}\n", 12, 3, 'utf8');
-        fs.writeFileSync('test/data/.index', metadataBuffer);
+        fs.writeFileSync(indexFile, metadataBuffer);
 
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid index file/);
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid index file/);
     });
 
     it('throws on opening an index file with invalid metadata', function() {
+        const indexFile = dataDirectory + '/.index';
         const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 3);
         metadataBuffer.write("nesidx01", 0, 8, 'utf8');
         metadataBuffer.writeUInt32BE(255, 8);
         metadataBuffer.write("{x$", 12, 3, 'utf8');
-        fs.writeFileSync('test/data/.index', metadataBuffer);
+        fs.writeFileSync(indexFile, metadataBuffer);
 
-        expect(() => index = new Index('test/data/.index')).to.throwError(/Invalid metadata/);
+        expect(() => index = new Index(indexFile)).to.throwError(/Invalid metadata/);
     });
 
     it('throws on reopening with altered metadata', function() {
-        index = new Index('test/data/.index', { metadata: { test: 'valueStays' } });
-        expect(() => index = new Index('test/data/.index', { metadata: { test: 'anotherValue' } })).to.throwError(/Index metadata mismatch/);
+        index = createIndex('.index', { metadata: { test: 'valueStays' } });
+        expect(() => index = createIndex(index.name, { metadata: { test: 'anotherValue' } })).to.throwError(/Index metadata mismatch/);
     });
 
     it('throws on opening with altered file', function() {
         index = setupIndexWithEntries(5);
         index.close();
-        fs.appendFileSync('test/data/test.index', 'foo');
-        expect(() => index = new Index('test/data/test.index')).to.throwError(/Index file is corrupt/);
+        fs.appendFileSync(index.fileName, 'foo');
+        expect(() => index = createIndex(index.name)).to.throwError(/Index file is corrupt/);
     });
 
     describe('Entry', function() {
@@ -158,7 +178,7 @@ describe('Index', function() {
         });
 
         it('calls callback eventually', function(done) {
-            index = new Index('test/data/.index', { flushDelay: 1 });
+            index = createIndex('.index', { flushDelay: 1 });
             let position = index.add(new Index.Entry(1, 0), (number) => {
                 expect(number).to.be(position);
                 done();
@@ -171,12 +191,12 @@ describe('Index', function() {
         });
 
         it('throws with invalid entry object', function() {
-            index = new Index('test/data/.index');
+            index = createIndex();
             expect(() => index.add([1,2,3,4])).to.throwError(/Wrong entry object/);
         });
 
         it('throws with invalid entry size', function() {
-            index = new Index('test/data/.index');
+            index = createIndex();
             class Entry extends Index.Entry {
                 static get size() {
                     return 20;
@@ -449,8 +469,9 @@ describe('Index', function() {
 
         it('completely deletes the file', function(){
             index = setupIndexWithEntries(5);
+            const fileName = index.fileName;
             index.destroy();
-            expect(fs.existsSync('test/data/.index')).to.be(false);
+            expect(fs.existsSync(fileName)).to.be(false);
         });
 
     });
@@ -469,5 +490,99 @@ describe('Index', function() {
             expect(index.flush()).to.be(false);
         });
 
+    });
+
+    describe('ReadOnly', function(){
+
+        it('can be created without explicit name', function(){
+            expect(() => {
+                index = createIndex('.index');
+                let reader = new Index.ReadOnly({ dataDirectory });
+                reader.close();
+            }).to.not.throwError();
+        });
+
+        it('can be opened and closed multiple times', function(){
+            index = createIndex('.index');
+            let reader = new Index.ReadOnly({ dataDirectory });
+            expect(reader.open()).to.be(false);
+            reader.close();
+            reader.close();
+        });
+
+        it('throws when opening an empty file', function(){
+            index = createIndex('.index');
+            index.close();
+            fs.truncateSync(index.fileName, 0);
+            expect(() => createReader(index.name)).to.throwError(/empty/);
+        });
+
+        it('allows multiple readers for a single index', function(){
+            index = setupIndexWithEntries(5);
+
+            let reader1 = createReader(index.name);
+            expect(reader1.isOpen()).to.be(true);
+            expect(reader1.length).to.be(index.length);
+            expect(reader1.lastEntry.number).to.be(index.lastEntry.number);
+
+            let reader2 = createReader(index.name);
+            expect(reader2.isOpen()).to.be(true);
+            expect(reader2.length).to.be(index.length);
+            expect(reader2.lastEntry.number).to.be(index.lastEntry.number);
+        });
+
+        it('updates when writer flushes', function(done){
+            index = setupIndexWithEntries(5);
+            let reader1 = createReader(index.name);
+
+            reader1.on('append', (prev, next) => {
+                expect(prev).to.be(5);
+                expect(next).to.be(6);
+                expect(reader1.get(next).number).to.be(index.get(next).number);
+                done();
+            });
+
+            index.add(new Index.Entry(6, 6));
+            index.flush();
+            fs.fdatasync(index.fd);
+        });
+
+        it('updates when writer truncates', function(done){
+            index = setupIndexWithEntries(5);
+            let reader1 = createReader(index.name);
+
+            reader1.on('truncate', (prev, next) => {
+                expect(prev).to.be(5);
+                expect(next).to.be(0);
+                expect(reader1.length).to.be(0);
+                done();
+            });
+
+            index.truncate(0);
+            fs.fdatasync(index.fd);
+        });
+
+        it('closes when file renamed', function(done){
+            index = setupIndexWithEntries(5);
+            index.close();
+            let reader = createReader(index.name);
+            expect(reader.isOpen()).to.be(true);
+
+            fs.rename(reader.fileName, reader.fileName + '2', () => {
+                expect(reader.isOpen()).to.be(false);
+                done();
+            });
+        });
+
+        it('does not trigger handler when index closed', function(done){
+            index = setupIndexWithEntries(5);
+
+            let reader = createReader(index.name);
+            reader.on('truncate', () => expect(this).to.be(false));
+
+            index.truncate(0);
+            reader.close();
+            fs.fdatasync(index.fd, () => done());
+        });
     });
 });

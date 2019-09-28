@@ -4,39 +4,67 @@ const Storage = require('../src/Storage');
 const zlib = require('zlib');
 //const lz4 = require('lz4');
 
-const dataDir = __dirname + '/data';
+const dataDirectory = __dirname + '/data';
 
 describe('Storage', function() {
 
+    /**
+     * @var {WritableStorage}
+     */
     let storage;
+    let refs = [];
+
+    function createStorage(options = {}) {
+        const newStorage = new Storage(Object.assign({ dataDirectory }, options));
+        refs.push(newStorage);
+        return newStorage;
+    }
+
+    function createReader(options = {}) {
+        const newStorage = new Storage.ReadOnly(Object.assign({ dataDirectory }, options));
+        refs.push(newStorage);
+        return newStorage;
+    }
 
     beforeEach(function () {
-        fs.emptyDirSync(dataDir);
+        try {
+            fs.emptyDirSync(dataDirectory);
+        } catch (e) {
+        }
     });
 
     afterEach(function () {
+        refs.forEach(ref => ref.close());
+        refs = [];
         if (storage) storage.close();
-        storage = undefined;
+        storage = null;
     });
 
     it('creates the storage directory if it does not exist', function() {
-        fs.removeSync(dataDir);
-        storage = new Storage({ dataDirectory: dataDir });
-        expect(fs.existsSync(dataDir)).to.be(true);
+        fs.removeSync(dataDirectory);
+        storage = createStorage();
+        expect(fs.existsSync(dataDirectory)).to.be(true);
     });
 
+    it('can be opened multiple times', function(){
+        storage = createStorage();
+        storage.open();
+        expect(() => {
+            storage.open();
+        }).to.not.throwError();
+    });
 
     describe('write', function() {
 
         it('writes objects', function(done) {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             storage.write({ foo: 'bar' }, done);
         });
 
         it('writes documents sequentially', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -46,7 +74,7 @@ describe('Storage', function() {
         });
 
         it('can write durable', function(done) {
-            storage = new Storage({ dataDirectory: dataDir, maxWriteBufferDocuments: 1, syncOnFlush: true });
+            storage = createStorage({ maxWriteBufferDocuments: 1, syncOnFlush: true });
             storage.open();
 
             storage.write({ foo: 'bar' }, () => {
@@ -57,7 +85,7 @@ describe('Storage', function() {
         });
 
         it('reopens partition if partition was closed', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             const part = storage.getPartition('');
@@ -67,7 +95,7 @@ describe('Storage', function() {
         });
 
         it('can partition writes', function(done) {
-            storage = new Storage({ dataDirectory: dataDir, partitioner: (doc, number) => 'part-' + ((number-1) % 4) });
+            storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number-1) % 4) });
             storage.open();
 
             for (let i = 1; i <= 4; i++) {
@@ -82,7 +110,7 @@ describe('Storage', function() {
         });
 
         it('can open secondary indexes lazily', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
             storage.close();
 
@@ -98,7 +126,7 @@ describe('Storage', function() {
     describe('length', function() {
 
         it('returns the amount of documents in the storage', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -117,7 +145,7 @@ describe('Storage', function() {
     describe('read', function() {
 
         it('returns false when trying to read out of bounds', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             storage.write({ foo: 'bar' });
@@ -125,7 +153,7 @@ describe('Storage', function() {
         });
 
         it('can read back written documents', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             storage.write({ foo: 'bar' });
@@ -138,7 +166,7 @@ describe('Storage', function() {
         });
 
         it('can read back random documents', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -154,7 +182,7 @@ describe('Storage', function() {
         });
 
         it('can read back from partitioned storage', function() {
-            storage = new Storage({ dataDirectory: dataDir, partitioner: (doc, number) => 'part-' + ((number-1) % 4) });
+            storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number-1) % 4) });
             storage.open();
 
             for (let i = 1; i <= 8; i++) {
@@ -173,7 +201,7 @@ describe('Storage', function() {
             }
 
             storage.close();
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 8; i++) {
@@ -182,7 +210,7 @@ describe('Storage', function() {
         });
 
         it('can read with using secondary index', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             let odd = storage.ensureIndex('odd', (doc) => (doc.foo % 2) === 1);
 
@@ -199,7 +227,7 @@ describe('Storage', function() {
         });
 
         it('can open secondary indexes lazily', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
             for (let i = 1; i <= 10; i++) {
                 storage.write({ type: (i % 3) ? 'bar' : 'foo' });
@@ -216,7 +244,7 @@ describe('Storage', function() {
     describe('readRange', function() {
 
         it('can read full range', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -234,7 +262,7 @@ describe('Storage', function() {
         });
 
         it('can read a sub range', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -252,7 +280,7 @@ describe('Storage', function() {
         });
 
         it('can read a range from end', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -270,7 +298,7 @@ describe('Storage', function() {
         });
 
         it('can read a range until a position from end', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -288,7 +316,7 @@ describe('Storage', function() {
         });
 
         it('can read a range from secondary index', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             let odd = storage.ensureIndex('odd', (doc) => (doc.foo % 2) === 1);
 
@@ -308,7 +336,7 @@ describe('Storage', function() {
         });
 
         it('throws on invalid range', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -324,7 +352,7 @@ describe('Storage', function() {
         });
 
         it('can open secondary indexes lazily', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
             for (let i = 1; i <= 10; i++) {
                 storage.write({ type: (i % 3) ? 'bar' : 'foo' });
@@ -341,7 +369,7 @@ describe('Storage', function() {
     describe('ensureIndex', function() {
 
         it('creates non-existing indexes', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             storage.ensureIndex('foo', () => true);
@@ -349,7 +377,7 @@ describe('Storage', function() {
         });
 
         it('can be called multiple times', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             const index1 = storage.ensureIndex('foo', () => true);
@@ -358,14 +386,14 @@ describe('Storage', function() {
         });
 
         it('throws when calling for non-existing index without matcher', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             expect(() => storage.ensureIndex('foo')).to.throwError(/matcher/);
         });
 
         it('indexes documents by function matcher', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
             storage.write({type: 'Bar'});
@@ -375,7 +403,7 @@ describe('Storage', function() {
         });
 
         it('indexes documents by property object matcher', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foo', { type: 'Foo' });
             storage.write({type: 'Bar'});
@@ -385,14 +413,14 @@ describe('Storage', function() {
         });
 
         it('reopens existing indexes', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foo', () => true);
             storage.write({foo: 'bar'});
             expect(index.length).to.be(1);
             storage.close();
 
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             index = storage.ensureIndex('foo', () => true);
@@ -400,14 +428,14 @@ describe('Storage', function() {
         });
 
         it('restores matcher from existing index', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
             storage.write({type: 'Foo'});
             expect(index.length).to.be(1);
             storage.close();
 
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             index = storage.ensureIndex('foo');
@@ -416,31 +444,31 @@ describe('Storage', function() {
         });
 
         it('throws when hmac does not validate matcher from existing index', function() {
-            storage = new Storage({ dataDirectory: dataDir, hmacSecret: 'foo' });
+            storage = createStorage({ hmacSecret: 'foo' });
             storage.open();
-            storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
+            storage.ensureIndex('foo-hmac', (doc) => doc.type === 'Foo');
             storage.close();
 
-            storage = new Storage({ dataDirectory: dataDir, hmacSecret: 'bar' });
+            storage = createStorage({ hmacSecret: 'bar' });
             storage.open();
 
-            expect(() => storage.ensureIndex('foo', (doc) => doc.type === 'Foo')).to.throwError();
+            expect(() => storage.ensureIndex('foo-hmac', (doc) => doc.type === 'Foo')).to.throwError();
         });
 
         it('throws when reopening with different matcher', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
-            storage.ensureIndex('foo', () => true);
+            storage.ensureIndex('foo-matcher', () => true);
             storage.close();
 
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
-            expect(() => storage.ensureIndex('foo', (doc) => doc.type === 'Foo')).to.throwError();
+            expect(() => storage.ensureIndex('foo-matcher', (doc) => doc.type === 'Foo')).to.throwError();
         });
 
         it('does not create an index when filling it fails', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             storage.write({type: 'Foo'});
 
@@ -448,9 +476,9 @@ describe('Storage', function() {
             const originalAdd = Index.prototype.add;
             Index.prototype.add = () => { throw new Error('Failure'); };
             try {
-                storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
+                storage.ensureIndex('foo-new', (doc) => doc.type === 'Foo');
             } catch (e) {}
-            expect(fs.existsSync('test/data/storage.foo.index')).to.be(false);
+            expect(fs.existsSync('test/data/storage.foo-new.index')).to.be(false);
             Index.prototype.add = originalAdd;
         });
 
@@ -459,31 +487,31 @@ describe('Storage', function() {
     describe('openIndex', function() {
 
         it('throws on non-existing indexes', function () {
-            storage = new Storage({dataDirectory: dataDir});
+            storage = createStorage();
             storage.open();
 
             expect(() => storage.openIndex('foo')).to.throwError(/does not exist/);
         });
 
         it('throws when hmac does not validate matcher from existing index', function () {
-            storage = new Storage({dataDirectory: dataDir, hmacSecret: 'foo'});
+            storage = createStorage({ hmacSecret: 'foo'});
             storage.open();
             storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
             storage.close();
 
-            storage = new Storage({dataDirectory: dataDir, hmacSecret: 'bar'});
+            storage = createStorage({ hmacSecret: 'bar'});
             storage.open();
             expect(() => storage.openIndex('foo')).to.throwError(/HMAC/);
         });
 
         it('opens existing indexes', function () {
-            storage = new Storage({dataDirectory: dataDir});
+            storage = createStorage();
             storage.open();
             storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
             storage.write({type: 'Foo'});
             storage.close();
 
-            storage = new Storage({dataDirectory: dataDir});
+            storage = createStorage();
             storage.open();
             const index = storage.openIndex('foo');
             expect(index.length).to.be(1);
@@ -494,7 +522,7 @@ describe('Storage', function() {
     describe('truncate', function() {
 
         it('does nothing if truncating after the current position', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -509,7 +537,7 @@ describe('Storage', function() {
         });
 
         it('correctly truncates to empty', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -524,7 +552,7 @@ describe('Storage', function() {
         });
 
         it('truncates after the given document number', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
@@ -546,8 +574,7 @@ describe('Storage', function() {
         });
 
         it('truncates after the given document number on each partition', function() {
-            storage = new Storage({
-                dataDirectory: dataDir,
+            storage = createStorage({
                 partitioner: (doc, number) => 'part-' + (parseInt((number - 1) / 4) % 4)
             });
             storage.open();
@@ -572,7 +599,7 @@ describe('Storage', function() {
         });
 
         it('truncates secondary indexes correctly', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
 
@@ -598,7 +625,7 @@ describe('Storage', function() {
         });
 
         it('keeps truncated secondary indexes closed', function() {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
 
@@ -643,10 +670,10 @@ describe('Storage', function() {
     describe('forEachDocument', function() {
 
         it('does nothing when called on empty storage', function(done) {
-            storage = new Storage({ dataDirectory: dataDir });
+            storage = createStorage();
             storage.open();
 
-            storage.forEachDocument((doc) => expect(false).to.be(true));
+            storage.forEachDocument((doc) => expect(this).to.be(false));
             setTimeout(done, 1);
         });
 
@@ -654,7 +681,7 @@ describe('Storage', function() {
 
     it('works with compression applied in serializer', function() {
         const dictionary = Buffer.from('"metadata":{"committedAt":,"commitId":,"commitVersion":,"streamVersion":{"stream":"Event-0f0da93d-260a-4ffd-94a0-126bd67ee8ff","payload":{"type":,"metadata":{"occuredAt":');
-        storage = new Storage({ dataDirectory: dataDir, serializer: {
+        storage = createStorage({ serializer: {
             serialize: (doc) => {
                 return zlib.deflateRawSync(Buffer.from(JSON.stringify(doc)), { dictionary }).toString('binary');
                 //return lz4.encode(Buffer.from(JSON.stringify(doc))).toString('binary');
@@ -673,4 +700,240 @@ describe('Storage', function() {
         expect(storage.read(2)).to.be.eql(doc);
     });
 
+    describe('concurrency', function() {
+
+        it('allows multiple writers to different partitions', function () {
+            // t.b.d. - only possible if there is no storage global index
+        });
+
+        it('allows only a single writer', function(){
+            let storage2 = createStorage();
+            storage2.open();
+            expect(() => {
+                storage = createStorage();
+                storage.open();
+            }).to.throwError(/is locked/);
+            storage2.close();
+        });
+
+        it('releases write lock after closing', function(){
+            const storage2 = createStorage();
+            storage2.open();
+            storage2.close();
+            expect(() => {
+                storage = createStorage();
+                storage.open();
+            }).to.not.throwError();
+        });
+
+        it('allows multiple readers for one storage', function () {
+            storage = createStorage();
+            storage.open();
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i});
+            }
+            storage.flush();
+
+            let reader1 = createReader();
+            reader1.open();
+            expect(reader1.length).to.be(storage.length);
+
+            let reader2 = createReader();
+            reader2.open();
+            expect(reader2.length).to.be(storage.length);
+
+            reader1.close();
+            reader2.close();
+        });
+
+    });
+
+    describe('ReadOnly', function(){
+
+        it('triggers event when writer appends', function(done){
+            storage = createStorage({ syncOnFlush: true });
+            storage.open();
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i});
+            }
+            storage.flush();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('index-add', () => expect(this).to.be(false));
+            reader.on('wrote', (doc, entry, position) => {
+                expect(entry.number).to.be(11);
+                expect(doc).to.eql({foo: 11});
+                reader.close();
+                done();
+            });
+            expect(reader.length).to.be(storage.length);
+
+            storage.write({ foo: 11 });
+            storage.flush();
+        });
+
+        it('updates secondary indexes when writer appends', function(done){
+            storage = createStorage({ syncOnFlush: true });
+            storage.open();
+            storage.ensureIndex('foo', doc => doc.type === 'foo');
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i, type: 'foo'});
+            }
+            storage.flush();
+
+            let reader = createReader();
+            reader.open();
+            reader.openIndex('foo');
+            reader.on('index-add', (name, number, doc) => {
+                expect(name).to.be('foo');
+                expect(number).to.be(11);
+                expect(doc).to.eql({foo: 11, type: 'foo'});
+                reader.close();
+                done();
+            });
+            expect(reader.length).to.be(storage.length);
+
+            storage.write({ foo: 11, type: 'foo' });
+            storage.flush();
+        });
+
+        it('triggers event when writer truncates', function(done){
+            storage = createStorage({ syncOnFlush: true });
+            storage.open();
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i});
+            }
+            storage.flush();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('truncate', (prevLength, newLength) => {
+                expect(prevLength).to.be(10);
+                expect(newLength).to.be(4);
+                reader.close();
+                done();
+            });
+            expect(reader.length).to.be(storage.length);
+
+            storage.truncate(4);
+        });
+
+        it('does not trigger truncate for secondary indexes', function(done){
+            storage = createStorage({ syncOnFlush: true });
+            storage.open();
+            storage.ensureIndex('foo', doc => doc.type === 'foo');
+            for (let i = 1; i <= 10; i++) {
+                storage.write({foo: i, type: i > 5 ? 'foo' : 'bar'});
+            }
+            storage.flush();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('truncate', (prevLength, newLength) => {
+                expect(prevLength).to.be(10);
+                expect(newLength).to.be(4);
+                setTimeout(() => {
+                    reader.close();
+                    done();
+                }, 5);
+            });
+            expect(reader.length).to.be(storage.length);
+
+            storage.truncate(4);
+        });
+
+        it('recognizes new indexes created by writer', function(done){
+            storage = createStorage({ syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('index-created', (name) => {
+                expect(name.substr(-9, 3)).to.be('one');
+                expect(reader.secondaryIndexes[name]).to.be(undefined);
+                reader.close();
+                done();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.ensureIndex('one', doc => doc.type === 'one');
+            storage.flush();
+        });
+
+        it('ignores new indexes created by other storage', function(done){
+            storage = createStorage();
+            storage.open();
+            storage.close();
+
+            storage = new Storage('other-storage', { dataDirectory, syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('index-created', (name) => {
+                expect(this).to.be(false);
+                reader.close();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.ensureIndex('one', doc => doc.type === 'one');
+            storage.flush();
+            setTimeout(() => {
+                reader.close();
+                done();
+            }, 5);
+        });
+
+        it('recognizes new partitions created by writer', function(done){
+            storage = createStorage({ syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('partition-created', (id) => {
+                expect(reader.getPartition(id).name.substr(-3)).to.be('one');
+                reader.close();
+                done();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.flush();
+        });
+
+        it('ignores new partitions created by other storage', function(done){
+            storage = createStorage();
+            storage.open();
+            storage.close();
+
+            storage = new Storage('other-storage', { dataDirectory, syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('partition-created', (name) => {
+                expect(this).to.be(false);
+                reader.close();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.flush();
+            setTimeout(() => {
+                reader.close();
+                done();
+            }, 5);
+        });
+
+        it('can be opened and closed multiple times', function(){
+            storage = createStorage();
+            storage.open();
+
+            let reader = createReader();
+            reader.open();
+            expect(reader.open()).to.be(true);
+            reader.close();
+            reader.close();
+        });
+
+    });
 });

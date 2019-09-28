@@ -32,11 +32,15 @@ describe('EventStream', function() {
     });
 
     it('throws if no name specified in constructor', function(){
-        expect(() => new EventStream()).to.throwError();
+        expect(() => new EventStream()).to.throwError(/stream name/);
+    });
+
+    it('throws if empty name specified in constructor', function(){
+        expect(() => new EventStream('')).to.throwError(/stream name/);
     });
 
     it('throws if no EventStore specified in constructor', function(){
-        expect(() => new EventStream('foo')).to.throwError();
+        expect(() => new EventStream('foo')).to.throwError(/EventStore/);
     });
 
     it('makes all events accessible as array', function(){
@@ -71,6 +75,7 @@ describe('EventStream', function() {
 
     it('leaves negative revisions untouched', function(){
         stream = new EventStream('foo', mockEventStore, -1, -1);
+        // read all and convert to array
         const events = stream.events;
 
         expect(mockEventStore.storage.from).to.be(-1);

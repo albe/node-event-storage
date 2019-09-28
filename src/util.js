@@ -2,7 +2,7 @@ const crypto = require('crypto');
 
 /**
  * @param {string} secret The secret to use for calculating further HMACs
- * @returns {Function(string)} A function that calculates the HMAC for a given string
+ * @returns {function(string)} A function that calculates the HMAC for a given string
  */
 const createHmac = secret => string => {
         const hmac = crypto.createHmac('sha256', secret);
@@ -35,8 +35,8 @@ function matches(document, matcher) {
 
 /**
  * @param {Object|function} matcher The matcher object or function that should be serialized.
- * @param {Function(string)} hmac A function that calculates a HMAC of the given string.
- * @returns {{matcher: string, hmac: string}}
+ * @param {function(string)} hmac A function that calculates a HMAC of the given string.
+ * @returns {{matcher: string|object, hmac?: string}}
  */
 function buildMetadataForMatcher(matcher, hmac) {
     if (!matcher) {
@@ -50,9 +50,9 @@ function buildMetadataForMatcher(matcher, hmac) {
 }
 
 /**
- * @param {{matcher: string, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
- * @param {Function(string)} hmac A function that calculates a HMAC of the given string.
- * @returns {Object|function}The matcher object or function.
+ * @param {{matcher: string|Object, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
+ * @param {function(string)} hmac A function that calculates a HMAC of the given string.
+ * @returns {Object|function} The matcher object or function.
  */
 function buildMatcherFromMetadata(matcherMetadata, hmac) {
     let matcher;
