@@ -10,6 +10,27 @@ An optimized embedded event store for modern node.js, written in ES6.
 
 > **Disclaimer:** This is currently under heavy development and not production ready. See [issues/29](https://github.com/albe/node-event-storage/issues/29) for more information.
 
+# Contents
+
+- [Why?](#why)
+- [Use cases](#use-cases)
+- [Event storage specifics](#event-storage-and-its-specifics)
+- [Installation](#installation)
+- [Usage](#usage)
+  * [Creating additional streams](#creating-additional-streams)
+  * [Optimistic concurrency](#optimistic-concurrency)
+- [Consumers](#consumers)
+  * [Exactly-once](#exactly-once-semantics)
+- [Read-Only](#read-only)
+- [Implementation details](#implementation-details)
+  * [ACID](#acid)
+  * [Global order](#global-order)
+  * [Event streams](#event-streams)
+  * [Partitioning](#partitioning)
+  * [Custom serialization](#custom-serialization)
+  * [Compression](#compression)
+  * [Security](#security)
+
 ## Why?
 
 There is currently only a single embedded event store implementation for node/javascript, namely https://github.com/adrai/node-eventstore
@@ -24,7 +45,7 @@ It is a nice project, but has a few drawbacks though:
   - events are fixed onto one stream and it's not possible to create multiple streams that partially contain
       the same events. This makes creating projections hard and/or slow.
 
-## Use Cases
+## Use cases
 
 Event sourced client applications running on node.js (electron, node-webkit, etc.).
 Small event sourced single-server applications that want to get near-optimal write performance.
@@ -39,8 +60,8 @@ sequential (range) reading (possibly with some filtering applied):
 This means a couple of things:
 
   - no write-ahead log or transaction log required - the storage itself is the transaction log!
-  - therefore writes are as fast as they can get, but you only can have a single writer
-  - durability comes for free if write caches are avoided
+  - therefore writes are as fast as they can get, but you only can have a single writer (without implementing complex distributed log with RAFT or Paxos)
+  - durability comes for free (in complexity) if write caches are avoided
   - reads and writes can happen lock-free, reads don't block writes and are always consistent (natural MVCC)
   - indexes are append-only and hence gain the same benefits
   - since only sequential reading is needed, indexes are simple file position lists - no fancy B+-Tree/fractal tree required
@@ -79,6 +100,8 @@ eventstore.on('ready', () => {
 
 ### Creating additional streams
 
+Create additional streams that contain only part of another stream, or even a combination of events of other streams.
+
 ```javascript
 ...
 let myProjectionStream = eventstore.createStream('my-projection-stream', (event) => ['FooHappened', 'BarHappened'].includes(event.type));
@@ -90,9 +113,25 @@ for (let event of myProjectionStream) {
 
 ### Optimistic concurrency
 
+Optimistic concurrency is required when multiple sources generate events concurrently.
+
+> Note that having the producer of events behind a HTTP interface automatically implies concurrent operation.
+
+To handle those cases but still guarantee all those producers can have their own consistent view of the current state,
+you need to track the last `streamVersion` the producer was at when he generated the event, then send that as `expectedVersion`
+with the commit.
+
 ```javascript
+let expectedVersion = EventStore.ExpectedVersion.EmptyStream;
+const model = new MyConsistencyModel();
+eventstore.getEventStream('my-stream').forEach((event, { streamVersion }) => {
+    model.apply(event);
+    expectedVersion = streamVersion;
+});
+// generate new events from the current model, by applying an incoming command
+const events = model.handle(command);
 try {
-    eventstore.commit('my-stream', [{ foo: 'bar' }], expectedVersion, () => {
+    eventstore.commit('my-stream', events, expectedVersion, () => {
         ...
     });
 } catch (e) {
@@ -104,8 +143,10 @@ try {
 ```
 
 Where `expectedVersion` is either `EventStore.ExpectedVersion.Any` (no optimistic concurrency check),
-`EventStore.ExpectedVersion.EmptyStream` or any version number > 0 that the 'my-stream' is expected to be at.
+`EventStore.ExpectedVersion.EmptyStream` or any version number > 0 that the stream is expected to be at.
 It will throw an OptimisticConcurrencyError if the given stream version does not match the expected.
+In that case you should either signal that back to the upstream source, or replay state and reattempt application
+of the command.
 
 ### Consumers
 
@@ -119,6 +160,9 @@ myConsumer.on('data', event => {
     // do something with event, but be sure to de-duplicate or have idempotent handling
 });
 ```
+
+Since a consumer is always bound to a specific stream, you need to create a stream for the specific consumer first,
+if it needs to listen to events from different [write-streams](#event-streams).
 
 **Note**
 > The consuming of events will start as soon as a handler for the `data` event is registered and suspended
@@ -152,6 +196,34 @@ transaction. So anything you can wrap inside a transaction with storing the posi
 However, for example sending an email exactly once for every event is not achievable with this, because you can't
 wrap a transaction around sending an e-mail and persisting the consumer position in a local file easily.
 
+### Read-Only
+
+The `EventStore` can also be opened in read-only mode since 0.7, by specifying the constructor option `readOnly: true`.
+In this mode, any writes to the store are prevented, while all reads and consumers work as normal. The read-only storage
+will watch the files that back it and automatically update internal state on changes, so the reader is asynchronously fully
+consistent to the writer state. You can open as many readers as needed and the main use case is to use it for consumers running
+in a different process than the writer. This way, you can have different processes create projections from the events for
+different use cases and serve their state out to other systems, e.g. through an HTTP interface or whatever deems useful.
+
+```javascript
+const EventStore = require('event-storage');
+
+const eventstore = new EventStore('my-event-store', { storageDirectory: './data', readOnly: true });
+eventstore.on('ready', () => {
+    let myConsumer = eventstore.getConsumer('my-stream', 'my-stream-consumer1');
+    myConsumer.on('data', event => {
+        const newState = { ...myConsumer.state, projectedValue: myConsumer.state.projectedValue + event.someValue };
+        myConsumer.setState(newState);
+    });
+});
+```
+
+In theory, it would even be possible with this, to scale the storage to multiple machines, if they are all backed by a common
+file system. The biggest issue preventing this is, that the nodejs file watcher needs to work on that filesystem.
+See https://nodejs.org/api/fs.html#fs_availability for more information.
+Also, you could rsync the files that back the storage to another machine and have a read-only instance running on that.
+See https://linux.die.net/man/1/rsync and the `--append` option.
+
 ## Implementation details
 
 ### ACID
@@ -175,9 +247,11 @@ Since the storage is append-only, consistency is automatically guaranteed.
 #### Isolation
 
 The storage is supposed to only work with a single writer, therefore writes do not influence each other obviously. The single
-writer is not yet guaranteed by the storage itself however.
+writer is only guaranteed with a simple lock-directory mechanic, which works on NFS. This is of course not a hard guarantee, just
+a helper to prevent accidentally opening two writers.
 Reads are guaranteed to be isolated due to the append-only nature and a read only ever seeing writes that have finished
-(not necessarily flushed - i.e. Dirty Reads) at the point of the read. Multiple reads can happen without blocking writes.
+(not necessarily flushed - i.e. Dirty Reads) at the point of the read. In a read-only instance, dirty reads are technically
+impossible, because the reader has no access to the unfinished writes. Multiple reads can happen without blocking writes.
 
 If Dirty Reads are not wanted, they can be disabled with the storage configuration option `dirtyReads` set to false. That
 way you will only ever be able to read back documents that where flushed to disk.
@@ -195,6 +269,12 @@ options. For strict durability, you can set the option `syncOnFlush` which will 
 but comes at a very high performance penalty of course.
 
 Note: If there are any misconceptions on my side to the ACID semantics, let me know.
+
+### Global order
+
+Currently, the `storage` guarantees a consistent global ordering on all events by managing a global primary index. This makes
+sure that streams that are made up of multiple write-streams will stay consistent when re-reading all events. This has some
+issues though, like not being able to consistently reindex a storage, which is discussed in https://github.com/albe/node-event-storage/issues/24. Therefore, this guarantee may be relaxed in later versions.
 
 ### Event Streams
 
@@ -220,7 +300,7 @@ This has several consequences:
 
   - subsequent reads from a single write stream are faster, because the events share more locality
   - every write stream has it's own write and read buffer, hence interleaved writes/reads will not trash the buffers
-  - since writes are buffered, only writes within a single write stream will be flushed together, hence transactionality is not spread over streams
+  - since writes are buffered, only writes within a single write stream will be flushed together, hence "transactionality" is not spread over streams
   - the amount of write streams is limited by the amount of files the filesystem can handle inside a single folder
   - if hard disk is configured for file based RAID, this will most likely lead to unbalanced load
 
@@ -230,7 +310,37 @@ i.e. it maps a document and it's sequence number to a partition name. That way y
 equally among a fixed number of arbitrary partitions by doing `(document, sequenceNumber) => 'partition-' + (sequenceNumber % maxPartitions)`.
 This is not recommended in the generic case though, since it contradicts the consistency boundary that a single stream should give.
 Many databases partition the data into Chunks (striding) of a fixed size, which helps with disk performance especially in RAID setups.
-However, since SSDs become more the standard, the benefit of chunking data is becoming more limited.
+However, since SSDs become more the standard, the benefit of chunking data is becoming more limited. It does help with incremental
+backup strategies, or for use cases where old data needs to be archived or even deleted. For those cases, the partitioner could look
+like `(document, sequenceNumber) -> 'partition' + (sequenceNumber / documentsPerChunk) >> 0`, which will write documents into an ever
+increasing number of partitions. Or you partition by the document timestamp, which for an `EventStore` document could be taken from the `committedAt` field, which is a javascript timestamp. Optimally, you might want to make sure a commit is not spread among partitions though, so those partitioners are not fool-proof.
+
+### Custom Serialization
+
+By default, the serialization will be achieved through `JSON.stringify` and `JSON.parse`. Those are plenty fast on recent nodejs 
+versions, but JSON serialization takes more space than more optimized formats. You could use some other library, like `@msgpack/msgpack`
+to have performant, but space-safing data format. In benchmarks, `@msgpack/msgpack` even turns out faster than `JSON.parse` for
+deserialization and pretty much on par with `JSON.stringify` for serialization. The drawback is that the storage files are no longer
+human readable.
+
+
+```javascript
+const { encode, decode } = require('@msgpack/msgpack');
+const eventstore = new EventStore('my-event-store', {
+	storageDirectory: './data',
+	storageConfig: {
+		serializer: {
+			serialize: (doc) => {
+				const encoded = encode(doc);
+				return Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength).toString('binary');
+			},
+			deserialize: (string) => {
+				return decode(Buffer.from(string, 'binary'));
+			}
+		}
+	}
+});
+```
 
 ### Compression
 
@@ -260,9 +370,10 @@ to allow fully random access of single documents without having to read a large 
 If available, use a dictionary for the compression library and fill it with common words that describe
 your event/document schema and the following terms:
 
-- "metadata":{"committedAt":
-- ,"commitId":
+- "metadata":{"commitId":
+- ,"committedAt":
 - ,"commitVersion":
+- ,"commitSize":
 - ,"streamVersion":
 
 ### Security
