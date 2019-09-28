@@ -569,8 +569,10 @@ describe('Index', function() {
             expect(reader.isOpen()).to.be(true);
 
             fs.rename(reader.fileName, reader.fileName + '2', () => {
-                expect(reader.isOpen()).to.be(false);
-                done();
+                setTimeout(() => {
+                    expect(reader.isOpen()).to.be(false);
+                    done();
+                }, 1);
             });
         });
 

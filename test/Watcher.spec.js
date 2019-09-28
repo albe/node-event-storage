@@ -51,7 +51,8 @@ describe('Watcher', function() {
             fs.closeSync(fd);
             done();
         });
-        fs.write(fd, 'foobar', () => fs.fdatasync(fd));
+        fs.writeSync(fd, 'foobar');
+        fs.fdatasyncSync(fd);
     });
 
     it('detects file creations inside a directory', function(done){
@@ -92,8 +93,10 @@ describe('Watcher', function() {
             fs.closeSync(fd2);
             done();
         });
-        fs.write(fd2, 'foobar', () => fs.fdatasync(fd2));
-        fs.write(fd, 'foobar', () => fs.fdatasync(fd));
+        fs.writeSync(fd2, 'foobar');
+        fs.fdatasyncSync(fd2);
+        fs.writeSync(fd, 'foobar');
+        fs.fdatasyncSync(fd);
     });
 
     it('can create multiple instances', function(done){
@@ -115,7 +118,8 @@ describe('Watcher', function() {
                 done();
             }
         });
-        fs.write(fd, 'foobar', () => fs.fdatasync(fd));
+        fs.writeSync(fd, 'foobar');
+        fs.fdatasyncSync(fd);
     });
 
 });
