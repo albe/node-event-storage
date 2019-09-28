@@ -856,7 +856,6 @@ describe('Storage', function() {
                 done();
             });
 
-            storage.write({ foo: 1, type: 'one' });
             storage.ensureIndex('one', doc => doc.type === 'one');
             storage.flush();
         });

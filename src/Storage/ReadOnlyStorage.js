@@ -34,7 +34,7 @@ class ReadOnlyStorage extends ReadableStorage {
     open() {
         if (!this.watcher) {
             this.watcher = new Watcher(this.dataDirectory, this.storageFilesFilter.bind(this));
-            this.watcher.on('change', this.onStorageFileChanged.bind(this));
+            this.watcher.on('rename', this.onStorageFileChanged.bind(this));
         }
         return super.open();
     }
