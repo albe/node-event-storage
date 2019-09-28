@@ -11,7 +11,10 @@ describe('EventStream', function() {
         mockEventStore = {
             streams: {
                 'foo': {
-                    index: 'foo-index'
+                    index: {
+                        name: 'foo-index',
+                        length: events.length
+                    }
                 }
             },
             storage: {
@@ -29,6 +32,20 @@ describe('EventStream', function() {
 
     it('makes the name available', function(){
         expect(stream.name).to.be('foo');
+    });
+
+    it('has version -1 if stream does not exist', function(){
+        stream = new EventStream('foo-bar-baz', mockEventStore);
+        expect(stream.version).to.be(-1);
+    });
+
+    it('makes the version available', function(){
+        expect(stream.version).to.be(events.length);
+    });
+
+    it('adjusts the version to given maxRevision constraint', function(){
+        stream = new EventStream('foo', mockEventStore, 0, -2);
+        expect(stream.version).to.be(events.length - 1);
     });
 
     it('throws if no name specified in constructor', function(){

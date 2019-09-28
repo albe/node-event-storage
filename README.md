@@ -86,8 +86,9 @@ const EventStore = require('event-storage');
 
 const eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
 eventstore.on('ready', () => {
+    const streamVersion = eventstore.getStreamVersion('my-stream');
     ...
-    eventstore.commit('my-stream', [{ foo: 'bar' }], () => {
+    eventstore.commit('my-stream', [{ foo: 'bar' }], streamVersion, () => {
         ...
     });
 
@@ -97,6 +98,9 @@ eventstore.on('ready', () => {
     }
 });
 ```
+
+The `streamVersion` is needed if you do any async work in between the `getStreamVersion` and `commit`, that
+potentially involves other commits to the same stream. See [Optimistic Concurrency](#optimistic-concurrency).
 
 ### Creating additional streams
 
@@ -122,16 +126,19 @@ you need to track the last `streamVersion` the producer was at when he generated
 with the commit.
 
 ```javascript
-let expectedVersion = EventStore.ExpectedVersion.EmptyStream;
 const model = new MyConsistencyModel();
-eventstore.getEventStream('my-stream').forEach((event, { streamVersion }) => {
+const stream = eventstore.getEventStream('my-stream');
+stream.forEach((event, metadata) => {
     model.apply(event);
-    expectedVersion = streamVersion;
 });
+const expectedVersion = stream.version;
+// Provide model state and expectedVersion to some state change API or UI that returns a command
+...
 // generate new events from the current model, by applying an incoming command
-const events = model.handle(command);
+const events = model.handle(command.payload);
 try {
-    eventstore.commit('my-stream', events, expectedVersion, () => {
+    // The expectedVersion is supposed to be given back through the command
+    eventstore.commit('my-stream', events, command.expectedVersion, () => {
         ...
     });
 } catch (e) {
@@ -142,7 +149,7 @@ try {
 }
 ```
 
-Where `expectedVersion` is either `EventStore.ExpectedVersion.Any` (no optimistic concurrency check),
+Where `expectedVersion` is either `EventStore.ExpectedVersion.Any` (no optimistic concurrency check, the default),
 `EventStore.ExpectedVersion.EmptyStream` or any version number > 0 that the stream is expected to be at.
 It will throw an OptimisticConcurrencyError if the given stream version does not match the expected.
 In that case you should either signal that back to the upstream source, or replay state and reattempt application

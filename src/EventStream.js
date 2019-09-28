@@ -14,6 +14,16 @@ function adjustedRevision(rev) {
 }
 
 /**
+ * Return the lower absolute version given a version and a maxVersion constraint.
+ * @param {number} version
+ * @param {number} maxVersion
+ * @returns {number}
+ */
+function minVersion(version, maxVersion) {
+    return Math.min(version, maxVersion < 0 ? version + maxVersion + 1 : maxVersion);
+}
+
+/**
  * An event stream is a simple wrapper around an iterator over storage documents.
  * It implements a node readable stream interface.
  */
@@ -37,10 +47,12 @@ class EventStream extends stream.Readable {
         this.name = name;
         if (eventStore.streams[name]) {
             const streamIndex = eventStore.streams[name].index;
+            this.version = minVersion(streamIndex.length, maxRevision);
             minRevision = adjustedRevision(minRevision);
             maxRevision = adjustedRevision(maxRevision);
             this.iterator = eventStore.storage.readRange(minRevision, maxRevision, streamIndex);
         } else {
+            this.version = -1;
             this.iterator = { next() { return { done: true }; } };
         }
     }
