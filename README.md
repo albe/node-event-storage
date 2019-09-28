@@ -264,13 +264,21 @@ The storage engine is not strictly designed to follow ACID semantics. However, i
 
 #### Atomicity
 
-A single document write is guaranteed to be atomic. Unless specifically configured, atomicity spreads to all subsequent
-writes until the write buffer is flushed, which happens either if the current document doesn't fully fit into the write
-buffer or on the next node event loop.
-This can be (ab)used to create a reduced form of transactional behaviour: All writes that happen within a single event loop
-and still fit into the write buffer will all happen together or not at all.
-If strict atomicity for single documents is required, you can configure the option `maxWriteBufferDocuments` to 1, which
-leads to every single document being flushed directly.
+A single document write is guaranteed to be atomic through the deserializer. Incomplete writes can not be deserialized due
+to the nature of JSON. If you use a custom serialization format, e.g. msgpack or protobuf, you should make use of a checksum.
+If deserialization of the last document fails on startup, the storage will be truncated and hence repair itself. This covers
+cases of "torn writes", where not all blocks are written by the disk, due to powerfail.
+
+Multi document writes (a commit of multiple events) is guaranteed to be atomic by checking the last commit to have been fully
+finished during startup. If the last `commitId` does not match the `commitSize`, then this last commit was incomplete and will
+be rolled back, by truncating the storage to the position before the commit.
+
+Due to the write buffering applied, writes typically also happen in batches of multiple documents. So logical atomicity spreads
+over multiple documents. This can be controlled through the options `maxWriteBufferDocuments`, which defines how many documents
+may at maximum sit inside a single write buffer before being flushed, and the `writeBufferSize` which gives a size limit to the
+write buffer. For optimal performance, a write buffer of 16kb has turned out to be good, at least on the SSD I use, but YMMV.
+Generally, not limiting the write buffer filling through `maxWriteBufferDocuments` is recommended, since flushing only a part of
+a full page size (typically 4kb) will increase write amplification.
 
 #### Consistency
 

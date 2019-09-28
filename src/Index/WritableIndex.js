@@ -182,6 +182,11 @@ class WritableIndex extends ReadableIndex {
         assertEqual(entry.constructor.name, this.EntryClass.name, `Wrong entry object.`);
         assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size.`);
 
+        const lastEntry = this.lastEntry;
+        if (lastEntry !== false && lastEntry.number >= entry.number) {
+            throw new Error('Consistency error. Tried to add an index that should come before existing last entry.');
+        }
+
         if (this.readUntil === this.data.length - 1) {
             this.readUntil++;
         }

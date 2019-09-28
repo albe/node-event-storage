@@ -50,8 +50,8 @@ class ReadableStorage extends EventEmitter {
 
         this.dataDirectory = path.resolve(config.dataDirectory);
 
-        this.initializeIndexes(config);
         this.scanPartitions(config);
+        this.initializeIndexes(config);
     }
 
     /**
@@ -325,3 +325,4 @@ class ReadableStorage extends EventEmitter {
 
 module.exports = ReadableStorage;
 module.exports.matches = matches;
+module.exports.CorruptFileError = Partition.CorruptFileError;
