@@ -14,6 +14,7 @@ An optimized embedded event store for modern node.js, written in ES6.
 
 - [Why?](#why)
 - [Use cases](#use-cases)
+- [Design goals](#design-goals)
 - [Event storage specifics](#event-storage-and-its-specifics)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -50,6 +51,29 @@ It is a nice project, but has a few drawbacks though:
 Event sourced client applications running on node.js (electron, node-webkit, etc.).
 Small event sourced single-server applications that want to get near-optimal write performance.
 Using it as queryable log storage.
+
+## Design goals
+
+- single node scalability
+  * opening/writing to an existing store with millions of events should be as fast as opening/writing an empty store
+  * write performance should not be constrained by locking or distributed transaction costs, i.e. single-writer (at least per transaction boundary = stream), so no horizontal write scaling
+  * read performance should be optimized for sequential read-forward style reads starting at arbitrary position
+  * reads should be scalable to as many readers as necessary (but typically one reader per projection)
+  * it should be possible to create high number (thousands) of streams without high resource (memory,cpu) usage
+  * re-reading (replaying) an arbitrary stream should be optimized for and cost no more than visiting every document in that stream (no full database scan)
+- consistency
+  * writes to a single stream need to be able to guarantee consistency (i.e. every write happens only as of the state immediately before that write)
+  * reads from a stream need to be consistent every time, i.e. repeatable read isolation (guaranteed order, read-committed for read-only but read-uncommitted/read your own writes for writers)
+- simplicity
+  * the architecture and design should be straight-forward, not more complex than dictated by the goals
+  * creating new streams (from existing data) should be easily doable with language-level methods
+
+### Non-Goals
+
+- distributed storage/distributed transactions
+- therefore: no network API
+- cross-stream transactions
+- arbitrary querying capabilities - only range scans per stream
 
 ## Event-Storage and it's specifics
 
@@ -235,6 +259,8 @@ See https://linux.die.net/man/1/rsync and the `--append` option.
 
 ### ACID
 
+> Note: All following explanations talk about a single transaction boundary, which is a single write-stream, AKA a storage partition.
+
 The storage engine is not strictly designed to follow ACID semantics. However, it has following properties:
 
 #### Atomicity
@@ -261,9 +287,11 @@ Reads are guaranteed to be isolated due to the append-only nature and a read onl
 impossible, because the reader has no access to the unfinished writes. Multiple reads can happen without blocking writes.
 
 If Dirty Reads are not wanted, they can be disabled with the storage configuration option `dirtyReads` set to false. That
-way you will only ever be able to read back documents that where flushed to disk.
+way you will only ever be able to read back documents that where flushed to disk, even on writers. Note though, that this should
+only be done with in-memory models that keep their own (uncommitted) state, or else you might suffer from inconsistency.
 
-t.b.d. Lost Updates, Non-Repeatable Reads, Phantom Read
+There are no lost updates due to the append-only nature. Phantom reads can be prevented by specifying the `maxRevision` for 
+streams explicitly (MVCC). All reads are repeatable, as long as no manual truncation happens.
 
 #### Durability
 
