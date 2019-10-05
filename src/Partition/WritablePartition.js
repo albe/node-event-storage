@@ -4,15 +4,17 @@ const ReadablePartition = require('./ReadablePartition');
 const { buildMetadataHeader } = require('../util');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
+const DOCUMENT_HEADER_SIZE = 16;
+const DOCUMENT_ALIGNMENT = 4;
+const DOCUMENT_PAD = ' '.repeat(15) + "\n";
 
 /**
- * @param {string} str
- * @param {number} len
- * @param {string} [char]
- * @returns {string}
+ * @param {number} dataSize
+ * @returns {string} The data padded to 16 bytes alignment and ended with a line break.
  */
-function pad(str, len, char = ' ') {
-    return len > str.length ? char.repeat(len - str.length) + str : str;
+function padData(dataSize) {
+    const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 1) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
+    return DOCUMENT_PAD.substr(-padSize - 1);
 }
 
 /**
@@ -93,6 +95,7 @@ class WritablePartition extends ReadablePartition {
     close() {
         if (this.fd) {
             this.flush();
+            fs.fsyncSync(this.fd);
         }
         if (this.writeBuffer) {
             this.writeBuffer = null;
@@ -163,6 +166,15 @@ class WritablePartition extends ReadablePartition {
         }
     }
 
+    writeDocumentHeader(buffer, offset, dataSize) {
+        buffer.writeUInt32BE(dataSize, offset);
+        // TODO: Write other document metadata
+        buffer.writeUInt32BE(0, offset + 4);
+        buffer.writeUInt32BE(0, offset + 8);
+        buffer.writeUInt32BE(0, offset + 12);
+        return DOCUMENT_HEADER_SIZE;
+    }
+
     /**
      * @api
      * @param {string} data The data to write to storage.
@@ -173,19 +185,26 @@ class WritablePartition extends ReadablePartition {
         if (!this.fd) {
             return false;
         }
-        let dataSize = Buffer.byteLength(data, 'utf8');
-        const dataToWrite = pad(dataSize.toString(), 10) + data.toString() + "\n";
-        dataSize += 11;
+        const dataSize = Buffer.byteLength(data, 'utf8');
+        const dataPad = padData(dataSize);
+        const padSize = Buffer.byteLength(dataPad, 'utf8');
+        const writeSize = dataSize + padSize;
 
-        this.flushIfWriteBufferTooSmall(dataSize);
-        if (dataSize > this.writeBuffer.byteLength) {
+        this.flushIfWriteBufferTooSmall(writeSize + DOCUMENT_HEADER_SIZE);
+        if (writeSize + DOCUMENT_HEADER_SIZE > this.writeBuffer.byteLength) {
+            const dataHeader = Buffer.alloc(DOCUMENT_HEADER_SIZE);
+            this.writeDocumentHeader(dataHeader, 0, dataSize);
             //console.log('unbuffered write!');
-            fs.writeSync(this.fd, dataToWrite);
+            fs.writeSync(this.fd, dataHeader);
+            fs.writeSync(this.fd, data);
+            fs.writeSync(this.fd, dataPad);
             if (typeof callback === 'function') {
                 process.nextTick(callback);
             }
         } else {
-            this.writeBufferCursor += this.writeBuffer.write(dataToWrite, this.writeBufferCursor, dataSize, 'utf8');
+            this.writeBufferCursor += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize);
+            this.writeBufferCursor += this.writeBuffer.write(data, this.writeBufferCursor, dataSize, 'utf8');
+            this.writeBufferCursor += this.writeBuffer.write(dataPad, this.writeBufferCursor, padSize, 'utf8');
             this.writeBufferDocuments++;
             if (typeof callback === 'function') {
                 this.flushCallbacks.push(callback);
@@ -193,7 +212,7 @@ class WritablePartition extends ReadablePartition {
             this.flushIfWriteBufferDocumentsFull();
         }
         const dataPosition = this.size;
-        this.size += dataSize;
+        this.size += writeSize + DOCUMENT_HEADER_SIZE;
         return dataPosition;
     }
 
@@ -205,10 +224,10 @@ class WritablePartition extends ReadablePartition {
      * @returns {Object} A reader object with properties `buffer`, `cursor` and `length`.
      */
     prepareReadBuffer(position) {
-        if (position + 10 >= this.size) {
+        if (position + DOCUMENT_HEADER_SIZE >= this.size) {
             return { buffer: null, cursor: 0, length: 0 };
         }
-        let bufferPos = this.size - this.writeBufferCursor;
+        const bufferPos = this.size - this.writeBufferCursor;
         // Handle the case when data that is still in write buffer is supposed to be read
         if (this.dirtyReads && this.writeBufferCursor > 0 && position >= bufferPos) {
             return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
@@ -254,7 +273,7 @@ class WritablePartition extends ReadablePartition {
         deletedBranch.open();
         while (data) {
             deletedBranch.write(data);
-            position += Buffer.byteLength(data, 'utf8') + 11;
+            position += this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
             data = this.readFrom(position);
         }
         deletedBranch.close();

@@ -3,6 +3,8 @@ const path = require('path');
 const EventEmitter = require('events');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
+const DOCUMENT_HEADER_SIZE = 16;
+const DOCUMENT_ALIGNMENT = 4;
 
 // node-event-store partition V02
 const HEADER_MAGIC = "nesprt02";
@@ -32,17 +34,12 @@ function hash(str) {
 }
 
 /**
- * Parse a string containing the data length of the following serialized document.
- *
- * @param {string} dataLengthStr The string containing the document size, left padded with whitespace.
- * @returns {number|boolean} The size of the following document or false on error.
+ * Assert that the condition holds and if not, throw an error with the given message.
  */
-function parseDataLength(dataLengthStr) {
-    const dataLength = parseInt(dataLengthStr, 10);
-    if (!dataLength || isNaN(dataLength) || !/^\s+[0-9]+$/.test(dataLengthStr)) {
-        return false;
+function assert(condition, errorMessage) {
+    if (!condition) {
+        throw new Error(errorMessage);
     }
-    return dataLength;
 }
 
 /**
@@ -112,11 +109,12 @@ class ReadablePartition extends EventEmitter {
         this.fd = fs.openSync(this.fileName, this.fileMode);
 
         // allocUnsafeSlow because we don't need buffer pooling for these relatively long-lived buffers
-        this.readBuffer = Buffer.allocUnsafeSlow(this.readBufferSize);
+        this.readBuffer = Buffer.alloc(this.readBufferSize);
         // Where inside the file the read buffer starts
         this.readBufferPos = -1;
         this.readBufferLength = 0;
 
+        this.headerSize = 0;
         this.size = this.readFileSize();
         if (this.size <= 0) {
             return false;
@@ -136,21 +134,19 @@ class ReadablePartition extends EventEmitter {
      * @throws {Error} if the metadata size in the header is invalid.
      */
     readMetadata() {
+        assert(this.size >= 16, `Invalid file.`);
+
         const headerBuffer = Buffer.allocUnsafe(8 + 4);
         fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
-        if (headerMagic !== HEADER_MAGIC) {
-            if (headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6)) {
-                this.header = headerMagic;
-                throw new Error(`Invalid file version. The partition ${this.name} was created with a different library version.`);
-            }
-            throw new Error(`Invalid file header in partition ${this.name}.`);
-        }
+
+        assert(headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6), `Invalid file header in partition ${this.name}.`);
+
         this.header = headerMagic;
+        assert(headerMagic === HEADER_MAGIC, `Invalid file version. The partition ${this.name} was created with a different library version (${headerMagic.substr(6)}).`);
+
         const metadataSize = headerBuffer.readUInt32BE(8);
-        if (metadataSize < 3) {
-            throw new Error('Invalid metadata size.');
-        }
+        assert(metadataSize > 2 && metadataSize <= 4096, 'Invalid metadata size.');
 
         const metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
         metadataBuffer.fill(" ");
@@ -163,6 +159,17 @@ class ReadablePartition extends EventEmitter {
         }
         this.headerSize = 8 + 4 + metadataSize;
         return this.headerSize;
+    }
+
+    /**
+     * Get the storage size for a document of a given size.
+     *
+     * @param {number} dataSize The actual data size of the document.
+     * @returns {number} The size of the data including header, padded to 16 bytes alignment and ended with a line break.
+     */
+    documentWriteSize(dataSize) {
+        const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 1) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
+        return dataSize + 1 + padSize + DOCUMENT_HEADER_SIZE;
     }
 
     /**
@@ -215,17 +222,17 @@ class ReadablePartition extends EventEmitter {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readDataLength(buffer, offset, position, size) {
-        const dataLengthStr = buffer.toString('utf8', offset, offset + 10);
-        const dataLength = parseDataLength(dataLengthStr);
-        if (dataLength === false) {
-            throw new Error(`Error reading document size from ${position}, got ${dataLengthStr}.`);
+        const dataLength = buffer.readUInt32BE(offset);
+        if (dataLength === 0 || dataLength >= 0x3fffffe7) {
+            console.log(offset, this.readBufferPos, this.readBuffer.slice(offset, offset + 64).toString('utf8'));
+            throw new Error(`Error reading document size from ${position}, got ${dataLength}.`);
         }
 
         if (size && dataLength !== size) {
             throw new InvalidDataSizeError(`Invalid document size ${dataLength} at position ${position}, expected ${size}.`);
         }
 
-        if (position + dataLength + 11 > this.size) {
+        if (position + dataLength + DOCUMENT_HEADER_SIZE > this.size) {
             throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
         }
 
@@ -237,23 +244,18 @@ class ReadablePartition extends EventEmitter {
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading from.
-     * @returns {Object} A reader object with properties `buffer`, `cursor` and `length`.
+     * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object with properties `buffer`, `cursor` and `length`.
      */
     prepareReadBuffer(position) {
-        if (position + 10 >= this.size) {
+        if (position + DOCUMENT_HEADER_SIZE >= this.size) {
             return { buffer: null, cursor: 0, length: 0 };
         }
-        let buffer = this.readBuffer;
-        let bufferPos = this.readBufferPos;
-        let bufferLength = this.readBufferLength;
-        let bufferCursor = position - bufferPos;
-        if (bufferPos < 0 || bufferCursor < 0 || bufferCursor + 10 > bufferLength) {
+        let bufferCursor = position - this.readBufferPos;
+        if (this.readBufferPos < 0 || bufferCursor < 0 || bufferCursor + DOCUMENT_HEADER_SIZE + DOCUMENT_ALIGNMENT > this.readBufferLength) {
             this.fillBuffer(position);
             bufferCursor = 0;
-            buffer = this.readBuffer;
-            bufferLength = this.readBufferLength;
         }
-        return { buffer, cursor: bufferCursor, length: bufferLength };
+        return { buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength };
     }
 
     /**
@@ -273,23 +275,23 @@ class ReadablePartition extends EventEmitter {
         }
 
         const reader = this.prepareReadBuffer(position);
-        if (reader.length < size + 10) {
+        if (reader.length < size + DOCUMENT_HEADER_SIZE) {
             return false;
         }
 
-        let dataPosition = reader.cursor + 10;
+        let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
         const dataLength = this.readDataLength(reader.buffer, reader.cursor, position, size);
 
-        if (dataLength + 10 > reader.buffer.byteLength) {
+        if (dataLength + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);
             const tempReadBuffer = Buffer.allocUnsafe(dataLength);
-            fs.readSync(this.fd, tempReadBuffer, 0, dataLength, this.headerSize + position + 10);
+            fs.readSync(this.fd, tempReadBuffer, 0, dataLength, this.headerSize + position + DOCUMENT_HEADER_SIZE);
             return tempReadBuffer.toString('utf8');
         }
 
         if (reader.cursor > 0 && dataPosition + dataLength > reader.length) {
             this.fillBuffer(position);
-            dataPosition = 10;
+            dataPosition = DOCUMENT_HEADER_SIZE;
         }
 
         return reader.buffer.toString('utf8', dataPosition, dataPosition + dataLength);
@@ -304,7 +306,7 @@ class ReadablePartition extends EventEmitter {
         let data;
         while ((data = this.readFrom(position)) !== false) {
             yield data;
-            position += Buffer.byteLength(data, 'utf8') + 11;
+            position += this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
         }
     }
 

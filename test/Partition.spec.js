@@ -213,12 +213,11 @@ describe('Partition', function() {
 
         it('throws when an unfinished write is found', function() {
             partition.open();
-            partition.write('foobar');
+            const position = partition.write('foobar');
             partition.close();
 
             let fd = fs.openSync('test/data/.part', 'r+');
-            let stat = fs.fstatSync(fd);
-            fs.ftruncateSync(fd, stat.size - 3);
+            fs.ftruncateSync(fd, partition.headerSize + position + partition.documentWriteSize('foobar'.length) - 4);
             fs.closeSync(fd);
 
             partition.open();
@@ -237,7 +236,7 @@ describe('Partition', function() {
             let pos = 0;
             for (let i = 0; i < 1000; i++) {
                 expect(partition.readFrom(pos)).to.be('foobar');
-                pos += 'foobar'.length + 11;
+                pos += partition.documentWriteSize('foobar'.length);
             }
         });
 
