@@ -1,10 +1,7 @@
 const fs = require('fs');
 const mkdirpSync = require('mkdirp').sync;
 const ReadableIndex = require('./ReadableIndex');
-const { assertEqual } = require('../util');
-
-// node-event-store-index V01
-const HEADER_MAGIC = "nesidx01";
+const { assertEqual, buildMetadataHeader } = require('../util');
 
 /**
  * An index is a simple append-only file that stores an ordered list of entry elements pointing to the actual file position
@@ -105,17 +102,9 @@ class WritableIndex extends ReadableIndex {
         if (!this.metadata) {
             this.metadata = {entryClass: this.EntryClass.name, entrySize: this.EntryClass.size};
         }
-        let metadata = JSON.stringify(this.metadata);
-        let metadataSize = Buffer.byteLength(metadata, 'utf8');
-        const pad = (16 - ((8 + 4 + metadataSize + 1) % 16)) % 16;
-        metadata += ' '.repeat(pad) + "\n";
-        metadataSize += pad + 1;
-        const metadataBuffer = Buffer.allocUnsafe(8 + 4 + metadataSize);
-        metadataBuffer.write(HEADER_MAGIC, 0, 8, 'utf8');
-        metadataBuffer.writeUInt32BE(metadataSize, 8);
-        metadataBuffer.write(metadata, 8 + 4, metadataSize, 'utf8');
+        const metadataBuffer = buildMetadataHeader(ReadableIndex.HEADER_MAGIC, this.metadata);
         fs.writeSync(this.fd, metadataBuffer, 0, metadataBuffer.byteLength, 0);
-        this.headerSize = 8 + 4 + metadataSize;
+        this.headerSize = metadataBuffer.byteLength;
     }
 
     /**

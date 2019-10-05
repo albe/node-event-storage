@@ -4,8 +4,8 @@ const EventEmitter = require('events');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
-// node-event-store partition V01
-const HEADER_MAGIC = "nesprt01";
+// node-event-store partition V02
+const HEADER_MAGIC = "nesprt02";
 
 class CorruptFileError extends Error {}
 class InvalidDataSizeError extends Error {}
@@ -81,9 +81,10 @@ class ReadablePartition extends EventEmitter {
         this.dataDirectory = path.resolve(config.dataDirectory);
 
         this.name = name;
-        this.id = hash(name);
+        this.id = ReadablePartition.idFor(name);
         this.fileName = path.resolve(this.dataDirectory, this.name);
         this.fileMode = 'r';
+        this.headerSize = 0;
 
         this.readBufferSize = config.readBufferSize >>> 0;
     }
@@ -111,20 +112,57 @@ class ReadablePartition extends EventEmitter {
         this.fd = fs.openSync(this.fileName, this.fileMode);
 
         // allocUnsafeSlow because we don't need buffer pooling for these relatively long-lived buffers
-        this.readBuffer = Buffer.allocUnsafeSlow(10 + this.readBufferSize);
+        this.readBuffer = Buffer.allocUnsafeSlow(this.readBufferSize);
         // Where inside the file the read buffer starts
         this.readBufferPos = -1;
         this.readBufferLength = 0;
 
-        const stat = fs.statSync(this.fileName);
-        this.headerSize = HEADER_MAGIC.length + 1;
-        if (stat.size === 0) {
+        this.size = this.readFileSize();
+        if (this.size <= 0) {
             return false;
         }
 
-        this.size = this.readFileSize();
+        this.size -= this.readMetadata();
 
         return true;
+    }
+
+    /**
+     * Read the partition metadata from the file.
+     *
+     * @private
+     * @returns {number} The size of the metadata header.
+     * @throws {Error} if the file header magic value is invalid.
+     * @throws {Error} if the metadata size in the header is invalid.
+     */
+    readMetadata() {
+        const headerBuffer = Buffer.allocUnsafe(8 + 4);
+        fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
+        const headerMagic = headerBuffer.toString('utf8', 0, 8);
+        if (headerMagic !== HEADER_MAGIC) {
+            if (headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6)) {
+                this.header = headerMagic;
+                throw new Error(`Invalid file version. The partition ${this.name} was created with a different library version.`);
+            }
+            throw new Error(`Invalid file header in partition ${this.name}.`);
+        }
+        this.header = headerMagic;
+        const metadataSize = headerBuffer.readUInt32BE(8);
+        if (metadataSize < 3) {
+            throw new Error('Invalid metadata size.');
+        }
+
+        const metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
+        metadataBuffer.fill(" ");
+        fs.readSync(this.fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
+        const metadata = metadataBuffer.toString('utf8').trim();
+        try {
+            this.metadata = JSON.parse(metadata);
+        } catch (e) {
+            throw new Error('Invalid metadata.');
+        }
+        this.headerSize = 8 + 4 + metadataSize;
+        return this.headerSize;
     }
 
     /**
@@ -133,15 +171,6 @@ class ReadablePartition extends EventEmitter {
      */
     readFileSize() {
         const stat = fs.statSync(this.fileName);
-        const headerBuffer = Buffer.allocUnsafe(HEADER_MAGIC.length);
-        fs.readSync(this.fd, headerBuffer, 0, HEADER_MAGIC.length, 0);
-        if (headerBuffer.toString() !== HEADER_MAGIC) {
-            this.close();
-            if (headerBuffer.toString().substr(0, 6) === HEADER_MAGIC.substr(0, 6)) {
-                throw new Error(`Invalid file version. The partition ${this.name} was created with a different library version.`);
-            }
-            throw new Error(`Invalid file header in partition ${this.name}.`);
-        }
         return stat.size - this.headerSize;
     }
 

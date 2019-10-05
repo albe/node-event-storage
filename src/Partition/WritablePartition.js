@@ -1,6 +1,7 @@
 const fs = require('fs');
 const mkdirpSync = require('mkdirp').sync;
 const ReadablePartition = require('./ReadablePartition');
+const { buildMetadataHeader } = require('../util');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
@@ -29,13 +30,15 @@ class WritablePartition extends ReadablePartition {
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
+     * @param {Object} [config.metadata] A metadata object that will be written to the file header.
      */
     constructor(name, config = {}) {
         let defaults = {
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
             syncOnFlush: false,
-            dirtyReads: true
+            dirtyReads: true,
+            metadata: {}
         };
         config = Object.assign(defaults, config);
         super(name, config);
@@ -47,6 +50,7 @@ class WritablePartition extends ReadablePartition {
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0;
         this.syncOnFlush = !!config.syncOnFlush;
         this.dirtyReads = !!config.dirtyReads;
+        this.metadata = config.metadata;
     }
 
     /**
@@ -70,8 +74,10 @@ class WritablePartition extends ReadablePartition {
         if (super.open() === false) {
             const stat = fs.statSync(this.fileName);
             if (stat.size === 0) {
-                fs.writeSync(this.fd, ReadablePartition.HEADER_MAGIC + "\n");
+                this.writeMetadata();
                 this.size = 0;
+            } else {
+                return false;
             }
         }
 
@@ -94,6 +100,18 @@ class WritablePartition extends ReadablePartition {
             this.writeBufferDocuments = 0;
         }
         super.close();
+    }
+
+    /**
+     * Write the header and metadata to the file.
+     *
+     * @private
+     * @returns void
+     */
+    writeMetadata() {
+        const metadataBuffer = buildMetadataHeader(ReadablePartition.HEADER_MAGIC, this.metadata);
+        fs.writeSync(this.fd, metadataBuffer, 0, metadataBuffer.byteLength, 0);
+        this.headerSize = metadataBuffer.byteLength;
     }
 
     /**

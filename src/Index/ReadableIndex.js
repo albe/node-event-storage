@@ -392,3 +392,4 @@ class ReadableIndex extends EventEmitter {
 
 module.exports = ReadableIndex;
 module.exports.Entry = Entry;
+module.exports.HEADER_MAGIC = HEADER_MAGIC;

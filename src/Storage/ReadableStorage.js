@@ -25,6 +25,7 @@ class ReadableStorage extends EventEmitter {
      * @param {number} [config.readBufferSize] Size of the read buffer in bytes. Default 4096.
      * @param {Object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
+     * @param {Object} [config.metadata] A metadata object to be stored in all partitions belonging to this storage.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -39,7 +40,8 @@ class ReadableStorage extends EventEmitter {
             dataDirectory: '.',
             indexFile: this.storageFile + '.index',
             indexOptions: {},
-            hmacSecret: ''
+            hmacSecret: '',
+            metadata: {}
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
