@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
 
-const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
+const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
 
