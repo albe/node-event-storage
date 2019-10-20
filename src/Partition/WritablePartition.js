@@ -166,6 +166,13 @@ class WritablePartition extends ReadablePartition {
         }
     }
 
+    /**
+     * @private
+     * @param {Buffer} buffer The buffer to write the document header to
+     * @param {number} offset The offset inside the buffer to start writing at
+     * @param {number} dataSize The size of the document
+     * @returns {number} The size of the document header
+     */
     writeDocumentHeader(buffer, offset, dataSize) {
         buffer.writeUInt32BE(dataSize, offset);
         // TODO: Write other document metadata
