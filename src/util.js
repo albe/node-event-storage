@@ -18,11 +18,11 @@ function assertEqual(actual, expected, message) {
  *
  * @param {boolean} condition
  * @param {string} message
- * @param {typeof Error} errorType
+ * @param {typeof Error} ErrorType
  */
-function assert(condition, message, errorType = Error) {
+function assert(condition, message, ErrorType = Error) {
     if (!condition) {
-        throw new errorType(message);
+        throw new ErrorType(message);
     }
 }
 

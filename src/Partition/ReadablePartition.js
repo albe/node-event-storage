@@ -213,7 +213,7 @@ class ReadablePartition extends EventEmitter {
      */
     readDataLength(buffer, offset, position, size) {
         const dataLength = buffer.readUInt32BE(offset);
-        assert(dataLength > 0 && dataLength <= 0x3ffffff, `Error reading document size from ${position}, got ${dataLength}.`);
+        assert(dataLength > 0 && dataLength <= 64 * 1024 * 1024, `Error reading document size from ${position}, got ${dataLength}.`);
 
         if (size && dataLength !== size) {
             throw new InvalidDataSizeError(`Invalid document size ${dataLength} at position ${position}, expected ${size}.`);

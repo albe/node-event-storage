@@ -186,7 +186,7 @@ class WritablePartition extends ReadablePartition {
             return false;
         }
         const dataSize = Buffer.byteLength(data, 'utf8');
-        assert(dataSize <= 0x3ffffff, 'Document is too large! Maximum is 64 MB');
+        assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
         const dataPad = padData(dataSize);
         const padSize = Buffer.byteLength(dataPad, 'utf8');
