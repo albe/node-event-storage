@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 
 /**
- * Assert that actual and expected match or throw an Error with the given message.
+ * Assert that actual and expected match or throw an Error with the given message appended by information about expected and actual value.
  *
  * @param {*} actual
  * @param {*} expected
@@ -9,7 +9,20 @@ const crypto = require('crypto');
  */
 function assertEqual(actual, expected, message) {
     if (actual !== expected) {
-        throw new Error(message + `, got ${actual}, expected ${expected}.`);
+        throw new Error(message + (message ? ' ' : '') + `Expected "${expected}" but got "${actual}".`);
+    }
+}
+
+/**
+ * Assert that the condition holds and if not, throw an error with the given message.
+ *
+ * @param {boolean} condition
+ * @param {string} message
+ * @param {typeof Error} errorType
+ */
+function assert(condition, message, errorType = Error) {
+    if (!condition) {
+        throw new errorType(message);
     }
 }
 
@@ -88,7 +101,7 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
  * @returns {Buffer} A buffer containing the header data
  */
 function buildMetadataHeader(magic, metadata) {
-    assertEqual(magic.length, 8, 'The header magic bytes length is wrong');
+    assertEqual(magic.length, 8, 'The header magic bytes length is wrong.');
     let metadataString = JSON.stringify(metadata);
     let metadataSize = Buffer.byteLength(metadataString, 'utf8');
     // 8 byte MAGIC, 4 byte metadata size, 1 byte line break
@@ -156,6 +169,7 @@ function wrapAndCheck(index, length) {
 }
 
 module.exports = {
+    assert,
     assertEqual,
     wrapAndCheck,
     binarySearch,

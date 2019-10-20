@@ -179,8 +179,8 @@ class WritableIndex extends ReadableIndex {
      * @returns {number} The index position for the entry. It matches the index size after the insertion.
      */
     add(entry, callback) {
-        assertEqual(entry.constructor.name, this.EntryClass.name, `Wrong entry object. Expected "${this.EntryClass.name}" but got "${entry.constructor.name}".`);
-        assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size. Expected ${this.EntryClass.size} but got ${entry.constructor.size}.`);
+        assertEqual(entry.constructor.name, this.EntryClass.name, `Wrong entry object.`);
+        assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size.`);
 
         if (this.readUntil === this.data.length - 1) {
             this.readUntil++;

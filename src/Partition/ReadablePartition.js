@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
+const { assert } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
@@ -34,15 +35,6 @@ function hash(str) {
 }
 
 /**
- * Assert that the condition holds and if not, throw an error with the given message.
- */
-function assert(condition, errorMessage) {
-    if (!condition) {
-        throw new Error(errorMessage);
-    }
-}
-
-/**
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
  * In the case of an event store, this is most likely the (write) streams.
  */
@@ -66,9 +58,7 @@ class ReadablePartition extends EventEmitter {
      */
     constructor(name, config = {}) {
         super();
-        if (!name || typeof name !== 'string') {
-            throw new Error('Must specify a partition name.');
-        }
+        assert(typeof name === 'string' && name !== '', 'Must specify a partition name.');
 
         let defaults = {
             dataDirectory: '.',
@@ -223,10 +213,7 @@ class ReadablePartition extends EventEmitter {
      */
     readDataLength(buffer, offset, position, size) {
         const dataLength = buffer.readUInt32BE(offset);
-        if (dataLength === 0 || dataLength >= 0x3fffffe7) {
-            console.log(offset, this.readBufferPos, this.readBuffer.slice(offset, offset + 64).toString('utf8'));
-            throw new Error(`Error reading document size from ${position}, got ${dataLength}.`);
-        }
+        assert(dataLength > 0 && dataLength <= 0x3ffffff, `Error reading document size from ${position}, got ${dataLength}.`);
 
         if (size && dataLength !== size) {
             throw new InvalidDataSizeError(`Invalid document size ${dataLength} at position ${position}, expected ${size}.`);
@@ -248,14 +235,14 @@ class ReadablePartition extends EventEmitter {
      */
     prepareReadBuffer(position) {
         if (position + DOCUMENT_HEADER_SIZE >= this.size) {
-            return { buffer: null, cursor: 0, length: 0 };
+            return ({ buffer: null, cursor: 0, length: 0 });
         }
         let bufferCursor = position - this.readBufferPos;
         if (this.readBufferPos < 0 || bufferCursor < 0 || bufferCursor + DOCUMENT_HEADER_SIZE + DOCUMENT_ALIGNMENT > this.readBufferLength) {
             this.fillBuffer(position);
             bufferCursor = 0;
         }
-        return { buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength };
+        return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
     }
 
     /**

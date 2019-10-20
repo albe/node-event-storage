@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
 const Entry = require('../IndexEntry');
-const { wrapAndCheck, binarySearch } = require('../util');
+const { assert, wrapAndCheck, binarySearch } = require('../util');
 
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";
@@ -112,16 +112,13 @@ class ReadableIndex extends EventEmitter {
             return -1;
         } else {
             stat.size -= this.readMetadata();
-            if (stat.size < 0) {
-                throw new Error('Invalid index file!');
-            }
+            assert(stat.size >= 0, 'Invalid index file!');
         }
 
         const length = Math.floor(stat.size / this.EntryClass.size);
-        if (stat.size > length * this.EntryClass.size) {
-            // Corrupt index file
-            throw new Error('Index file is corrupt!');
-        }
+        // Corrupt index file
+        assert(stat.size === length * this.EntryClass.size, 'Index file is corrupt!');
+
         return length;
     }
 
@@ -162,9 +159,7 @@ class ReadableIndex extends EventEmitter {
         let length;
         try {
             length = this.checkFile();
-            if (length < 0) {
-                throw new Error('Index file was truncated to empty!');
-            }
+            assert(length >= 0, 'Index file was truncated to empty!');
         } catch (e) {
             this.close();
             throw e;
@@ -203,16 +198,12 @@ class ReadableIndex extends EventEmitter {
         const headerBuffer = Buffer.allocUnsafe(8 + 4);
         fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
-        if (headerMagic !== HEADER_MAGIC) {
-            if (headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6)) {
-                throw new Error(`Invalid file version. The index ${this.fileName} was created with a different library version.`);
-            }
-            throw new Error('Invalid file header.');
-        }
+
+        assert(headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6), 'Invalid file header.');
+        assert(headerMagic === HEADER_MAGIC, `Invalid file version. The index ${this.fileName} was created with a different library version (${headerMagic.substr(6)}).`);
+
         const metadataSize = headerBuffer.readUInt32BE(8);
-        if (metadataSize < 3) {
-            throw new Error('Invalid metadata size.');
-        }
+        assert(metadataSize >= 3, 'Invalid metadata size.');
 
         const metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
         metadataBuffer.fill(" ");

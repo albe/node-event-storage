@@ -1,7 +1,7 @@
 const fs = require('fs');
 const mkdirpSync = require('mkdirp').sync;
 const ReadablePartition = require('./ReadablePartition');
-const { buildMetadataHeader } = require('../util');
+const { assert, buildMetadataHeader } = require('../util');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
@@ -186,6 +186,8 @@ class WritablePartition extends ReadablePartition {
             return false;
         }
         const dataSize = Buffer.byteLength(data, 'utf8');
+        assert(dataSize <= 0x3ffffff, 'Document is too large! Maximum is 64 MB');
+
         const dataPad = padData(dataSize);
         const padSize = Buffer.byteLength(dataPad, 'utf8');
         const writeSize = dataSize + padSize;

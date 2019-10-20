@@ -1,4 +1,5 @@
 const stream = require('stream');
+const { assert } = require('./util');
 
 /**
  * Adjusts a revision number from the EventStore/EventStream interface range into the underlying storage item number.
@@ -37,12 +38,8 @@ class EventStream extends stream.Readable {
      */
     constructor(name, eventStore, minRevision = 0, maxRevision = -1) {
         super({ objectMode: true });
-        if (typeof name !== 'string' || !name) {
-            throw new Error('Need to specify a stream name.');
-        }
-        if (!eventStore) {
-            throw new Error(`Need to provide EventStore instance to create EventStream ${name}.`);
-        }
+        assert(typeof name === 'string' && name !== '', 'Need to specify a stream name.');
+        assert( typeof eventStore === 'object' && eventStore !== null, `Need to provide EventStore instance to create EventStream ${name}.`);
 
         this.name = name;
         if (eventStore.streams[name]) {
