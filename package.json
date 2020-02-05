@@ -47,7 +47,7 @@
     "node": ">=6.0"
   },
   "dependencies": {
-    "mkdirp": "^0.5.1"
+    "mkdirp": "^1.0.3"
   },
   "devDependencies": {
     "coveralls": "^3.0.2",
