@@ -1,0 +1,14 @@
+site_name: node-event-storage
+repo_url: https://github.com/albe/node-event-storage
+
+theme: readthedocs
+
+strict: true
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - toc:
+      permalink: True
+  - mdx_sections
+  - pymdownx.superfences
