@@ -5,8 +5,3 @@ theme: readthedocs
 
 markdown_extensions:
   - admonition
-  - codehilite:
-      linenums: true
-  - toc:
-      permalink: True
-  - mdx_sections
