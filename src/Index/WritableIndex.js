@@ -50,10 +50,10 @@ class WritableIndex extends ReadableIndex {
         }
 
         this.fileMode = 'a+';
-        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0);
+        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0); // jshint ignore:line
         this.writeBufferCursor = 0;
         this.flushCallbacks = [];
-        this.flushDelay = options.flushDelay >>> 0;
+        this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
         this.syncOnFlush = !!options.syncOnFlush;
     }
 

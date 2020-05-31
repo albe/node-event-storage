@@ -2,11 +2,14 @@ const fs = require('fs');
 const mkdirpSync = require('mkdirp').sync;
 const ReadablePartition = require('./ReadablePartition');
 const { assert, buildMetadataHeader } = require('../util');
+const Clock = require('../Clock');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
 const DOCUMENT_PAD = ' '.repeat(15) + "\n";
+
+const NES_EPOCH = new Date('2020-01-01T00:00:00');
 
 /**
  * @param {number} dataSize
@@ -33,6 +36,7 @@ class WritablePartition extends ReadablePartition {
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {Object} [config.metadata] A metadata object that will be written to the file header.
+     * @param {typeof Clock} [config.clock] The constructor to a clock interface
      */
     constructor(name, config = {}) {
         let defaults = {
@@ -40,7 +44,10 @@ class WritablePartition extends ReadablePartition {
             maxWriteBufferDocuments: 0,
             syncOnFlush: false,
             dirtyReads: true,
-            metadata: {}
+            metadata: {
+                epoch: Date.now()
+            },
+            clock: Clock
         };
         config = Object.assign(defaults, config);
         super(name, config);
@@ -48,11 +55,13 @@ class WritablePartition extends ReadablePartition {
             mkdirpSync(this.dataDirectory);
         }
         this.fileMode = 'a+';
-        this.writeBufferSize = config.writeBufferSize >>> 0;
-        this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0;
+        this.writeBufferSize = config.writeBufferSize >>> 0; // jshint ignore:line
+        this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0; // jshint ignore:line
         this.syncOnFlush = !!config.syncOnFlush;
         this.dirtyReads = !!config.dirtyReads;
         this.metadata = config.metadata;
+        assert(typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function', 'Clock needs to implement the method time()');
+        this.ClockConstructor = config.clock;
     }
 
     /**
@@ -76,12 +85,14 @@ class WritablePartition extends ReadablePartition {
         if (super.open() === false) {
             const stat = fs.statSync(this.fileName);
             if (stat.size === 0) {
+                this.metadata.epoch = Date.now();
                 this.writeMetadata();
                 this.size = 0;
             } else {
                 return false;
             }
         }
+        this.clock = new this.ClockConstructor(this.metadata.epoch || NES_EPOCH.getTime());
 
         return true;
     }
@@ -171,26 +182,40 @@ class WritablePartition extends ReadablePartition {
      * @param {Buffer} buffer The buffer to write the document header to
      * @param {number} offset The offset inside the buffer to start writing at
      * @param {number} dataSize The size of the document
+     * @param {number|null} [sequenceNumber] The external sequence number for this document
+     * @param {number|null} [time64] The number of microseconds relative to the partition base since the creation of the document
      * @returns {number} The size of the document header
      */
-    writeDocumentHeader(buffer, offset, dataSize) {
+    writeDocumentHeader(buffer, offset, dataSize, sequenceNumber = null, time64 = null) {
+        if (sequenceNumber === null) {
+            sequenceNumber = 0;
+        }
+        if (time64 === null) {
+            time64 = this.clock.time();
+        }
+        if (time64 < 0) {
+            throw new Error('Time may not be negative!');
+        }
         buffer.writeUInt32BE(dataSize, offset);
-        // TODO: Write other document metadata
-        buffer.writeUInt32BE(0, offset + 4);
-        buffer.writeUInt32BE(0, offset + 8);
-        buffer.writeUInt32BE(0, offset + 12);
+        buffer.writeUInt32BE(sequenceNumber, offset + 4);
+        buffer.writeDoubleBE(time64, offset + 8);
         return DOCUMENT_HEADER_SIZE;
     }
 
     /**
      * @api
      * @param {string} data The data to write to storage.
+     * @param {number} [sequenceNumber] The external sequence number to store with the document.
      * @param {function} [callback] A function that will be called when the document is written to disk.
      * @returns {number|boolean} The file position at which the data was written or false on error.
      */
-    write(data, callback) {
+    write(data, sequenceNumber, callback) {
         if (!this.fd) {
             return false;
+        }
+        if (typeof sequenceNumber === 'function') {
+            callback = sequenceNumber;
+            sequenceNumber = null;
         }
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
@@ -198,22 +223,19 @@ class WritablePartition extends ReadablePartition {
         const dataPad = padData(dataSize);
         const padSize = Buffer.byteLength(dataPad, 'utf8');
         const writeSize = dataSize + padSize;
-
         this.flushIfWriteBufferTooSmall(writeSize + DOCUMENT_HEADER_SIZE);
         if (writeSize + DOCUMENT_HEADER_SIZE > this.writeBuffer.byteLength) {
             const dataHeader = Buffer.alloc(DOCUMENT_HEADER_SIZE);
-            this.writeDocumentHeader(dataHeader, 0, dataSize);
-            //console.log('unbuffered write!');
+            this.writeDocumentHeader(dataHeader, 0, dataSize, sequenceNumber);
+
             fs.writeSync(this.fd, dataHeader);
-            fs.writeSync(this.fd, data);
-            fs.writeSync(this.fd, dataPad);
+            fs.writeSync(this.fd, data + dataPad);
             if (typeof callback === 'function') {
                 process.nextTick(callback);
             }
         } else {
-            this.writeBufferCursor += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize);
-            this.writeBufferCursor += this.writeBuffer.write(data, this.writeBufferCursor, dataSize, 'utf8');
-            this.writeBufferCursor += this.writeBuffer.write(dataPad, this.writeBufferCursor, padSize, 'utf8');
+            this.writeBufferCursor += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
+            this.writeBufferCursor += this.writeBuffer.write(data + dataPad, this.writeBufferCursor, writeSize, 'utf8');
             this.writeBufferDocuments++;
             if (typeof callback === 'function') {
                 this.flushCallbacks.push(callback);

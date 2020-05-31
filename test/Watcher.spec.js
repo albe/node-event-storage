@@ -32,6 +32,12 @@ describe('Watcher', function() {
         expect(() => createWatcher('foo/')).to.throwError();
     });
 
+    it('is singleton per directory', function(){
+        const watcher1 = createWatcher('');
+        const watcher2 = createWatcher('');
+        expect(watcher1.watcher).to.equal(watcher2.watcher);
+    });
+
     it('can be closed multiple times safely', function(){
         const watcher = createWatcher('');
         watcher.close();

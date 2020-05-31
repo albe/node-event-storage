@@ -20,18 +20,20 @@ class InvalidDataSizeError extends Error {}
  * @returns {number}
  */
 function hash(str) {
-    if (str.length === 0) return 0;
+    if (str.length === 0) {
+        return 0;
+    }
     let hash = 5381,
         i    = str.length;
 
     while(i) {
-        hash = ((hash << 5) + hash) ^ str.charCodeAt(--i);
+        hash = ((hash << 5) + hash) ^ str.charCodeAt(--i); // jshint ignore:line
     }
 
     /* JavaScript does bitwise operations (like XOR, above) on 32-bit signed
      * integers. Since we want the results to be always positive, convert the
      * signed int to an unsigned by doing an unsigned bitshift. */
-    return hash >>> 0;
+    return hash >>> 0; // jshint ignore:line
 }
 
 /**
@@ -73,7 +75,7 @@ class ReadablePartition extends EventEmitter {
         this.fileMode = 'r';
         this.headerSize = 0;
 
-        this.readBufferSize = config.readBufferSize >>> 0;
+        this.readBufferSize = config.readBufferSize >>> 0;  // jshint ignore:line
     }
 
     /**
@@ -99,7 +101,7 @@ class ReadablePartition extends EventEmitter {
         this.fd = fs.openSync(this.fileName, this.fileMode);
 
         // allocUnsafeSlow because we don't need buffer pooling for these relatively long-lived buffers
-        this.readBuffer = Buffer.alloc(this.readBufferSize);
+        this.readBuffer = Buffer.allocUnsafeSlow(this.readBufferSize);
         // Where inside the file the read buffer starts
         this.readBufferPos = -1;
         this.readBufferLength = 0;
@@ -206,24 +208,26 @@ class ReadablePartition extends EventEmitter {
      * @param {number} offset The position inside the buffer to start reading from.
      * @param {number} position The file position to start reading from.
      * @param {number} [size] The expected byte size of the document at the given position.
-     * @returns {number} The length of the document at the given position.
+     * @returns {{ dataSize: number, sequenceNumber, number, time64: number }} The metadata fields of the document
      * @throws {Error} if the storage entry at the given position is corrupted.
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
-    readDataLength(buffer, offset, position, size) {
-        const dataLength = buffer.readUInt32BE(offset);
-        assert(dataLength > 0 && dataLength <= 64 * 1024 * 1024, `Error reading document size from ${position}, got ${dataLength}.`);
+    readDocumentHeader(buffer, offset, position, size) {
+        const dataSize = buffer.readUInt32BE(offset + 0);
+        assert(dataSize > 0 && dataSize <= 64 * 1024 * 1024, `Error reading document size from ${position}, got ${dataSize}.`);
 
-        if (size && dataLength !== size) {
-            throw new InvalidDataSizeError(`Invalid document size ${dataLength} at position ${position}, expected ${size}.`);
+        if (size && dataSize !== size) {
+            throw new InvalidDataSizeError(`Invalid document size ${dataSize} at position ${position}, expected ${size}.`);
         }
 
-        if (position + dataLength + DOCUMENT_HEADER_SIZE > this.size) {
+        if (position + dataSize + DOCUMENT_HEADER_SIZE > this.size) {
             throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
         }
 
-        return dataLength;
+        const sequenceNumber = buffer.readUInt32BE(offset + 4);
+        const time64 = buffer.readDoubleBE(offset + 8);
+        return { dataSize, sequenceNumber, time64 };
     }
 
     /**
@@ -267,21 +271,21 @@ class ReadablePartition extends EventEmitter {
         }
 
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
-        const dataLength = this.readDataLength(reader.buffer, reader.cursor, position, size);
+        const { dataSize } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
 
-        if (dataLength + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
+        if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);
-            const tempReadBuffer = Buffer.allocUnsafe(dataLength);
-            fs.readSync(this.fd, tempReadBuffer, 0, dataLength, this.headerSize + position + DOCUMENT_HEADER_SIZE);
+            const tempReadBuffer = Buffer.allocUnsafe(dataSize);
+            fs.readSync(this.fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
             return tempReadBuffer.toString('utf8');
         }
 
-        if (reader.cursor > 0 && dataPosition + dataLength > reader.length) {
+        if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
             this.fillBuffer(position);
             dataPosition = DOCUMENT_HEADER_SIZE;
         }
 
-        return reader.buffer.toString('utf8', dataPosition, dataPosition + dataLength);
+        return reader.buffer.toString('utf8', dataPosition, dataPosition + dataSize);
     }
 
     /**

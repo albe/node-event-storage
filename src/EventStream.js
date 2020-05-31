@@ -39,7 +39,7 @@ class EventStream extends stream.Readable {
     constructor(name, eventStore, minRevision = 0, maxRevision = -1) {
         super({ objectMode: true });
         assert(typeof name === 'string' && name !== '', 'Need to specify a stream name.');
-        assert( typeof eventStore === 'object' && eventStore !== null, `Need to provide EventStore instance to create EventStream ${name}.`);
+        assert(typeof eventStore === 'object' && eventStore !== null, `Need to provide EventStore instance to create EventStream ${name}.`);
 
         this.name = name;
         if (eventStore.streams[name]) {

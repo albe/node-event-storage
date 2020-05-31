@@ -180,7 +180,7 @@ class WritableStorage extends ReadableStorage {
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
-        const position = partition.write(data, callback);
+        const position = partition.write(data, this.length, callback);
 
         assert(position !== false, 'Error writing document.');
 
