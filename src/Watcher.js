@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
+const { assert } = require('./util');
 
 const directoryWatchers = {};
 
@@ -17,10 +18,8 @@ class DirectoryWatcher extends EventEmitter {
      */
     constructor(directory, options = {}) {
         directory = path.normalize(directory);
-        /* istanbul ignore if */
-        if (!fs.existsSync(directory)) {
-            throw new Error('Can not watch a non-existing directory.');
-        }
+        assert(fs.existsSync(directory), 'Can not watch a non-existing directory.');
+
         if (directoryWatchers[directory]) {
             directoryWatchers[directory].references++;
             return directoryWatchers[directory];
@@ -87,9 +86,8 @@ class Watcher {
      * @api
      */
     on(eventType, handler) {
-        if (!this.handlers[eventType]) {
-            throw new Error(`Event type ${eventType} is unknown. Only 'change' and 'rename' are supported.`);
-        }
+        assert(eventType in this.handlers, `Event type ${eventType} is unknown. Only 'change' and 'rename' are supported.`);
+
         this.handlers[eventType].push(handler);
     }
 

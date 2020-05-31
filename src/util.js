@@ -1,6 +1,32 @@
 const crypto = require('crypto');
 
 /**
+ * Assert that actual and expected match or throw an Error with the given message appended by information about expected and actual value.
+ *
+ * @param {*} actual
+ * @param {*} expected
+ * @param {string} message
+ */
+function assertEqual(actual, expected, message) {
+    if (actual !== expected) {
+        throw new Error(message + (message ? ' ' : '') + `Expected "${expected}" but got "${actual}".`);
+    }
+}
+
+/**
+ * Assert that the condition holds and if not, throw an error with the given message.
+ *
+ * @param {boolean} condition
+ * @param {string} message
+ * @param {typeof Error} ErrorType
+ */
+function assert(condition, message, ErrorType = Error) {
+    if (!condition) {
+        throw new ErrorType(message);
+    }
+}
+
+/**
  * @param {string} secret The secret to use for calculating further HMACs
  * @returns {function(string)} A function that calculates the HMAC for a given string
  */
@@ -68,6 +94,28 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
 }
 
 /**
+ * Build a buffer containing the file magic header and a JSON stringified metadata block, padded to be a multiple of 16 bytes long.
+ *
+ * @param {string} magic
+ * @param {object} metadata
+ * @returns {Buffer} A buffer containing the header data
+ */
+function buildMetadataHeader(magic, metadata) {
+    assertEqual(magic.length, 8, 'The header magic bytes length is wrong.');
+    let metadataString = JSON.stringify(metadata);
+    let metadataSize = Buffer.byteLength(metadataString, 'utf8');
+    // 8 byte MAGIC, 4 byte metadata size, 1 byte line break
+    const pad = (16 - ((8 + 4 + metadataSize + 1) % 16)) % 16;
+    metadataString += ' '.repeat(pad) + "\n";
+    metadataSize += pad + 1;
+    const metadataBuffer = Buffer.allocUnsafe(8 + 4 + metadataSize);
+    metadataBuffer.write(magic, 0, 8, 'utf8');
+    metadataBuffer.writeUInt32BE(metadataSize, 8);
+    metadataBuffer.write(metadataString, 8 + 4, metadataSize, 'utf8');
+    return metadataBuffer;
+}
+
+/**
  * Do a binary search for number in the range 1-length with values retrieved via a provided getter.
  *
  * @param {number} number The value to search for
@@ -102,19 +150,6 @@ function binarySearch(number, length, get) {
 }
 
 /**
- * Assert that actual and expected match or throw an Error with the given message.
- *
- * @param {*} actual
- * @param {*} expected
- * @param {string} message
- */
-function assertEqual(actual, expected, message) {
-    if (actual !== expected) {
-        throw new Error(message + `, got ${actual}, expected ${expected}.`);
-    }
-}
-
-/**
  * @param {number} index The 1-based index position to wrap around if < 0 and check against the bounds.
  * @param {number} length The length of the index and upper bound.
  * @returns {number|boolean} The wrapped index or false if index out of bounds.
@@ -133,4 +168,14 @@ function wrapAndCheck(index, length) {
     return index;
 }
 
-module.exports = { assertEqual, wrapAndCheck, binarySearch, createHmac, matches, buildMetadataForMatcher, buildMatcherFromMetadata };
+module.exports = {
+    assert,
+    assertEqual,
+    wrapAndCheck,
+    binarySearch,
+    createHmac,
+    matches,
+    buildMetadataForMatcher,
+    buildMatcherFromMetadata,
+    buildMetadataHeader
+};

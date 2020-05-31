@@ -712,7 +712,7 @@ describe('Storage', function() {
             expect(() => {
                 storage = createStorage();
                 storage.open();
-            }).to.throwError(/is locked/);
+            }).to.throwError(e => e instanceof Storage.StorageLockedError);
             storage2.close();
         });
 

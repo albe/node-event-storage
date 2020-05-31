@@ -35,7 +35,7 @@ describe('Partition', function() {
     function fillPartition(num, documentBuilder) {
         let lastPosition;
         for (let i = 1; i <= num; i++) {
-            lastPosition = partition.write(documentBuilder && documentBuilder(i) || 'foobar');
+            lastPosition = partition.write(documentBuilder && documentBuilder(i) || 'foobar', i);
         }
         partition.flush();
         return lastPosition;
@@ -199,7 +199,7 @@ describe('Partition', function() {
             partition.close();
             partition.open();
 
-            expect(() => console.log(partition.readFrom(4))).to.throwError();
+            expect(() => console.log(partition.readFrom(3))).to.throwError();
         });
 
         it('throws when reading unexpected document size', function() {
@@ -213,12 +213,11 @@ describe('Partition', function() {
 
         it('throws when an unfinished write is found', function() {
             partition.open();
-            partition.write('foobar');
+            const position = partition.write('foobar');
             partition.close();
 
             let fd = fs.openSync('test/data/.part', 'r+');
-            let stat = fs.fstatSync(fd);
-            fs.ftruncateSync(fd, stat.size - 3);
+            fs.ftruncateSync(fd, partition.headerSize + position + partition.documentWriteSize('foobar'.length) - 4);
             fs.closeSync(fd);
 
             partition.open();
@@ -237,7 +236,7 @@ describe('Partition', function() {
             let pos = 0;
             for (let i = 0; i < 1000; i++) {
                 expect(partition.readFrom(pos)).to.be('foobar');
-                pos += 'foobar'.length + 11;
+                pos += partition.documentWriteSize('foobar'.length);
             }
         });
 

@@ -4,9 +4,11 @@ const path = require('path');
 const WritablePartition = require('../Partition/WritablePartition');
 const WritableIndex = require('../Index/WritableIndex');
 const ReadableStorage = require('./ReadableStorage');
-const { matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('../util');
+const { assert, matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('../util');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
+
+class StorageLockedError extends Error {}
 
 /**
  * An append-only storage with highly performant positional range scans.
@@ -85,7 +87,7 @@ class WritableStorage extends ReadableStorage {
             if (e.code !== 'EEXIST') {
                 throw new Error(`Error creating lock for storage ${this.storageFile}: ` + e.message);
             }
-            throw new Error(`Storage ${this.storageFile} is locked by another process`);
+            throw new StorageLockedError(`Storage ${this.storageFile} is locked by another process`);
         }
         return true;
     }
@@ -178,12 +180,10 @@ class WritableStorage extends ReadableStorage {
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
-        const position = partition.write(data, callback);
+        const position = partition.write(data, this.length, callback);
 
-        /* istanbul ignore next  */
-        if (position === false) {
-            throw new Error('Error writing document.');
-        }
+        assert(position !== false, 'Error writing document.');
+
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
         this.forEachSecondaryIndex((index, name) => {
             if (!index.isOpen()) {
@@ -216,9 +216,7 @@ class WritableStorage extends ReadableStorage {
             return this.openIndex(name, matcher);
         }
 
-        if (!matcher) {
-            throw new Error('Need to specify a matcher.');
-        }
+        assert((typeof matcher === 'object' || typeof matcher === 'function') && matcher !== null, 'Need to specify a matcher.');
 
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
         const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
@@ -365,3 +363,4 @@ class WritableStorage extends ReadableStorage {
 }
 
 module.exports = WritableStorage;
+module.exports.StorageLockedError = StorageLockedError;

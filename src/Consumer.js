@@ -2,8 +2,9 @@ const stream = require('stream');
 const fs = require('fs');
 const path = require('path');
 const mkdirpSync = require('mkdirp').sync;
+const { assert } = require('./util');
 
-const Storage = require('./Storage');
+const Storage = require('./Storage/ReadableStorage');
 const MAX_CATCHUP_BATCH = 10;
 
 /**
@@ -20,15 +21,9 @@ class Consumer extends stream.Readable {
     constructor(storage, indexName, identifier, startFrom = 0) {
         super({ objectMode: true });
 
-        if (!(storage instanceof Storage)) {
-            throw new Error('Must provide a storage for the consumer.');
-        }
-        if (!indexName) {
-            throw new Error('Must specify an index name for the consumer.');
-        }
-        if (!identifier) {
-            throw new Error('Must specify an identifier name for the consumer.');
-        }
+        assert(storage instanceof Storage, 'Must provide a storage for the consumer.');
+        assert(typeof indexName === 'string' && indexName !== '', 'Must specify an index name for the consumer.');
+        assert(typeof identifier === 'string' && identifier !== '', 'Must specify an identifier name for the consumer.');
 
         this.initializeStorage(storage, indexName, identifier);
         this.restoreState(startFrom);
@@ -83,9 +78,8 @@ class Consumer extends stream.Readable {
      * @api
      */
     setState(newState) {
-        if (!this.handleDocument) {
-            throw new Error('Called setState outside of document handler!');
-        }
+        assert(this.handleDocument, 'Called setState outside of document handler!');
+
         this.state = Object.freeze(newState);
     }
 

@@ -6,6 +6,7 @@ const EventEmitter = require('events');
 const Storage = require('./Storage');
 const Consumer = require('./Consumer');
 const stream = require('stream');
+const { assert } = require('./util');
 
 const ExpectedVersion = {
     Any: -1,
@@ -185,15 +186,10 @@ class EventStore extends EventEmitter {
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
-        if (this.storage instanceof Storage.ReadOnly) {
-            throw new Error('The storage was opened in read-only mode. Can not commit to it.');
-        }
-        if (typeof streamName !== 'string') {
-            throw new Error('Must specify a stream name for commit.');
-        }
-        if (!events) {
-            throw new Error('No events specified for commit.');
-        }
+        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not commit to it.');
+        assert(typeof streamName === 'string' && streamName !== '', 'Must specify a stream name for commit.');
+        assert(typeof events !== 'undefined' && events !== null, 'No events specified for commit.');
+
         ({ events, expectedVersion, metadata, callback } = EventStore.fixArgumentTypes(events, expectedVersion, metadata, callback));
 
         if (!(streamName in this.streams)) {
@@ -281,13 +277,10 @@ class EventStore extends EventEmitter {
      * @throws {Error} if any of the streams doesn't exist.
      */
     fromStreams(streamName, streamNames, minRevision = 0, maxRevision = -1) {
-        if (!(streamNames instanceof Array)) {
-            throw new Error('Must specify an array of stream names.');
-        }
+        assert(streamNames instanceof Array, 'Must specify an array of stream names.');
+
         for (let stream of streamNames) {
-            if (!(stream in this.streams)) {
-                throw new Error(`Stream "${stream}" does not exist.`);
-            }
+            assert(stream in this.streams, `Stream "${stream}" does not exist.`);
         }
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision);
     }
@@ -303,17 +296,13 @@ class EventStore extends EventEmitter {
      * @throws {Error} If the stream could not be created.
      */
     createEventStream(streamName, matcher) {
-        if (this.storage instanceof Storage.ReadOnly) {
-            throw new Error('The storage was opened in read-only mode. Can not create new stream on it.');
-        }
-        if (streamName in this.streams) {
-            throw new Error('Can not recreate stream!');
-        }
+        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not create new stream on it.');
+        assert(!(streamName in this.streams), 'Can not recreate stream!');
+
         const streamIndexName = 'stream-' + streamName;
         const index = this.storage.ensureIndex(streamIndexName, matcher);
-        if (!index) {
-            throw new Error(`Error creating stream index ${streamName}.`);
-        }
+        assert(index !== null, `Error creating stream index ${streamName}.`);
+
         this.streams[streamName] = { index, matcher };
         this.emit('stream-created', streamName);
         return new EventStream(streamName, this);
@@ -330,9 +319,8 @@ class EventStore extends EventEmitter {
      * @returns void
      */
     deleteEventStream(streamName) {
-        if (this.storage instanceof Storage.ReadOnly) {
-            throw new Error('The storage was opened in read-only mode. Can not delete a stream on it.');
-        }
+        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not delete a stream on it.');
+
         if (!(streamName in this.streams)) {
             return;
         }

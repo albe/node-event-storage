@@ -3,7 +3,7 @@ const path = require('path');
 const EventEmitter = require('events');
 const Partition = require('../Partition');
 const Index = require('../Index');
-const { createHmac, matches, buildMetadataForMatcher } = require('../util');
+const { assert, createHmac, matches, buildMetadataForMatcher } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
@@ -25,6 +25,7 @@ class ReadableStorage extends EventEmitter {
      * @param {number} [config.readBufferSize] Size of the read buffer in bytes. Default 4096.
      * @param {Object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
+     * @param {Object} [config.metadata] A metadata object to be stored in all partitions belonging to this storage.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -39,7 +40,8 @@ class ReadableStorage extends EventEmitter {
             dataDirectory: '.',
             indexFile: this.storageFile + '.index',
             indexOptions: {},
-            hmacSecret: ''
+            hmacSecret: '',
+            metadata: {}
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
@@ -168,10 +170,7 @@ class ReadableStorage extends EventEmitter {
      * @throws {Error} If an id is given and no such partition exists.
      */
     getPartition(partitionIdentifier) {
-        /* istanbul ignore next  */
-        if (!this.partitions[partitionIdentifier]) {
-            throw new Error(`Partition #${partitionIdentifier} does not exist.`);
-        }
+        assert(partitionIdentifier in this.partitions, `Partition #${partitionIdentifier} does not exist.`);
 
         this.partitions[partitionIdentifier].open();
         return this.partitions[partitionIdentifier];
@@ -232,9 +231,8 @@ class ReadableStorage extends EventEmitter {
         }
 
         const entries = index.range(from, until);
-        if (entries === false) {
-            throw new Error(`Range scan error for range ${from} - ${until}.`);
-        }
+        assert(entries !== false, `Range scan error for range ${from} - ${until}.`);
+
         for (let entry of entries) {
             const document = this.readFrom(entry.partition, entry.position, entry.size);
             yield document;
@@ -257,9 +255,8 @@ class ReadableStorage extends EventEmitter {
         }
 
         const indexName = this.storageFile + '.' + name + '.index';
-        if (!fs.existsSync(path.join(this.indexDirectory, indexName))) {
-            throw new Error(`Index "${name}" does not exist.`);
-        }
+        assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
+
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
         let { index } = this.secondaryIndexes[name] = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
 
