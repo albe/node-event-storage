@@ -22,12 +22,12 @@ class ReadableIndex extends EventEmitter {
 
     /**
      * @param {string} [name] The name of the file to use for storing the index.
-     * @param {Object} [options] An object with additional index options.
+     * @param {object} [options] An object with additional index options.
      * @param {typeof EntryInterface} [options.EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [options.dataDirectory] The directory to store the index file in. Default '.'.
      * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
-     * @param {Object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
+     * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
     constructor(name = '.index', options = {}) {
         super();
@@ -49,7 +49,7 @@ class ReadableIndex extends EventEmitter {
 
     /**
      * @protected
-     * @param {Object} options
+     * @param {object} options
      */
     initialize(options) {
         this.data = [];

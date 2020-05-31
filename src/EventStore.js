@@ -42,10 +42,10 @@ class EventStore extends EventEmitter {
 
     /**
      * @param {string} [storeName] The name of the store which will be used as storage prefix. Default 'eventstore'.
-     * @param {Object} [config] An object with config options.
+     * @param {object} [config] An object with config options.
      * @param {string} [config.storageDirectory] The directory where the data should be stored. Default './data'.
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
-     * @param {Object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
+     * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
      */
     constructor(storeName = 'eventstore', config = {}) {
@@ -81,7 +81,7 @@ class EventStore extends EventEmitter {
 
     /**
      * @param {string} name
-     * @param {Object} config
+     * @param {object} config
      * @returns {ReadableStorage|WritableStorage}
      */
     createStorage(name, config) {
@@ -147,11 +147,11 @@ class EventStore extends EventEmitter {
      *  - callback
      *
      * @private
-     * @param {Array<Object>|Object} events
+     * @param {Array<object>|object} events
      * @param {number} [expectedVersion]
-     * @param {Object} [metadata]
-     * @param {Function} [callback]
-     * @returns {{events: Array<Object>, metadata: object, callback: Function, expectedVersion: number}}
+     * @param {object} [metadata]
+     * @param {function} [callback]
+     * @returns {{events: Array<object>, metadata: object, callback: function, expectedVersion: number}}
      */
     static fixArgumentTypes(events, expectedVersion, metadata, callback) {
         if (!(events instanceof Array)) {
@@ -179,10 +179,10 @@ class EventStore extends EventEmitter {
      *
      * @api
      * @param {string} streamName The name of the stream to commit the events to.
-     * @param {Array<Object>|Object} events The events to commit or a single event.
+     * @param {Array<object>|object} events The events to commit or a single event.
      * @param {number} [expectedVersion] One of ExpectedVersion constants or a positive version number that the stream is supposed to be at before commit.
-     * @param {Object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
-     * @param {Function} [callback] A function that will be executed when all events have been committed.
+     * @param {object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
+     * @param {function} [callback] A function that will be executed when all events have been committed.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
@@ -273,7 +273,7 @@ class EventStore extends EventEmitter {
      * @param {Array<string>} streamNames An array of the stream names to join.
      * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
-     * @return {EventStream} The joined event stream.
+     * @returns {EventStream} The joined event stream.
      * @throws {Error} if any of the streams doesn't exist.
      */
     fromStreams(streamName, streamNames, minRevision = 0, maxRevision = -1) {
@@ -290,7 +290,7 @@ class EventStore extends EventEmitter {
      *
      * @api
      * @param {string} streamName The name of the stream to create.
-     * @param {Object|function(event)} matcher A matcher object, denoting the properties that need to match on an event a function that takes the event and returns true if the event should be added.
+     * @param {object|function(event)} matcher A matcher object, denoting the properties that need to match on an event a function that takes the event and returns true if the event should be added.
      * @returns {EventStream} The EventStream with all existing events matching the matcher.
      * @throws {Error} If a stream with that name already exists.
      * @throws {Error} If the stream could not be created.
@@ -346,7 +346,7 @@ class EventStore extends EventEmitter {
      * Get all commits that happened since the given store revision.
      *
      * @param {number} [since] The event revision since when to return commits (inclusive). If since is within a commit, the full commit will be returned.
-     * @returns {Generator<Object>} A generator of commit objects, each containing the commit metadata and the array of events.
+     * @returns {Generator<object>} A generator of commit objects, each containing the commit metadata and the array of events.
      */
     *getCommits(since = 0) {
         let commit;

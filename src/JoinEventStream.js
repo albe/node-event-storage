@@ -62,7 +62,7 @@ class JoinEventStream extends EventStream {
 
     /**
      * @private
-     * @returns {Object|boolean} The next event or false if no more events in the stream.
+     * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
         let nextIndex = -1;

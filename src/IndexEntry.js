@@ -5,7 +5,7 @@
  */
 class EntryInterface {
     /**
-     * @return {Number} The byte size of this Entry.
+     * @returns {number} The byte size of this Entry.
      */
     static get size() {}
 
@@ -13,8 +13,8 @@ class EntryInterface {
      * Read a new Entry from a Buffer object at the given offset.
      *
      * @param {Buffer} buffer The buffer object to read the index data from. 
-     * @param {Number} [offset] The buffer offset to start reading from. Default 0.
-     * @return {EntryInterface} A new entry matching the values from the Buffer.
+     * @param {number} [offset] The buffer offset to start reading from. Default 0.
+     * @returns {EntryInterface} A new entry matching the values from the Buffer.
      */
     static fromBuffer(buffer, offset = 0) {}
 
@@ -22,8 +22,8 @@ class EntryInterface {
      * Write this Entry into a Buffer object at the given offset.
      *
      * @param {Buffer} buffer The buffer object to write the index entry data to.
-     * @param {Number} offset The offset to start writing into the buffer.
-     * @return {Number} The size of the data written.
+     * @param {number} offset The offset to start writing into the buffer.
+     * @returns {number} The size of the data written.
      */
     toBuffer(buffer, offset) {}
 }
@@ -48,15 +48,15 @@ function assertValidEntryClass(EntryClass) {
 
 /**
  * Default Entry item contains information about the sequence number, the file position, the document size and the partition number.
- * @type Array<Number>
+ * @type Array<number>
  */
 class Entry extends Array {
 
     /**
-     * @param {Number} number The sequence number of the index entry.
-     * @param {Number} position The file position where the indexed document is stored.
-     * @param {Number} [size] The size of the stored document (for verification). Default 0.
-     * @param {Number} [partition] The partition where the indexed document is stored. Default 0.
+     * @param {number} number The sequence number of the index entry.
+     * @param {number} position The file position where the indexed document is stored.
+     * @param {number} [size] The size of the stored document (for verification). Default 0.
+     * @param {number} [partition] The partition where the indexed document is stored. Default 0.
      */
     constructor(number, position, size = 0, partition = 0) {
         super(4);
@@ -67,7 +67,7 @@ class Entry extends Array {
     }
 
     /**
-     * @return {Number} The byte size of this Entry. Always 16.
+     * @returns {number} The byte size of this Entry. Always 16.
      */
     static get size() {
         return 4 * 4;
@@ -77,8 +77,8 @@ class Entry extends Array {
      * Read a new Entry from a Buffer object at the given offset.
      *
      * @param {Buffer} buffer The buffer object to read the index data from. Will read four 32-Bit LE unsigned integers. 
-     * @param {Number} [offset] The buffer offset to start reading from. Default 0.
-     * @return {Entry} A new entry matching the values from the Buffer.
+     * @param {number} [offset] The buffer offset to start reading from. Default 0.
+     * @returns {Entry} A new entry matching the values from the Buffer.
      */
     static fromBuffer(buffer, offset = 0) {
         const number     = buffer.readUInt32LE(offset);
@@ -92,8 +92,8 @@ class Entry extends Array {
      * Write this Entry into a Buffer object at the given offset.
      *
      * @param {Buffer} buffer The buffer object to write the index entry data to. Will write four 32-Bit LE unsigned integers.
-     * @param {Number} offset The offset to start writing into the buffer.
-     * @return {Number} The size of the data written. Will always be 16.
+     * @param {number} offset The offset to start writing into the buffer.
+     * @returns {number} The size of the data written. Will always be 16.
      */
     toBuffer(buffer, offset) {
         buffer.writeUInt32LE(this[0], offset);
@@ -104,28 +104,28 @@ class Entry extends Array {
     }
 
     /**
-     * @returns {Number}
+     * @returns {number}
      */
     get number() {
         return this[0];
     }
 
     /**
-     * @returns {Number}
+     * @returns {number}
      */
     get position() {
         return this[1];
     }
 
     /**
-     * @returns {Number}
+     * @returns {number}
      */
     get size() {
         return this[2];
     }
 
     /**
-     * @returns {Number}
+     * @returns {number}
      */
     get partition() {
         return this[3];

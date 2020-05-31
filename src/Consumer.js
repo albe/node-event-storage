@@ -74,7 +74,7 @@ class Consumer extends stream.Readable {
      * Update the state of this consumer transactionally with the position.
      * May only be called from within the document handling callback.
      *
-     * @param {Object} newState
+     * @param {object} newState
      * @api
      */
     setState(newState) {
@@ -89,7 +89,7 @@ class Consumer extends stream.Readable {
      * @private
      * @param {string} name The name of the index the document was added for.
      * @param {number} position The 1-based position inside the index that the document was added to.
-     * @param {Object} document The document that was added.
+     * @param {object} document The document that was added.
      */
     handleNewDocument(name, position, document) {
         if (name !== this.indexName) {
@@ -134,7 +134,7 @@ class Consumer extends stream.Readable {
      * Check if this consumer has caught up. If so, register a handler for the stream and emit a 'caught-up' event.
      *
      * @private
-     * @return {boolean} True if this consumer has caught up and can
+     * @returns {boolean} True if this consumer has caught up and can
      */
     checkCaughtUp() {
         if (this.index.length <= this.position) {

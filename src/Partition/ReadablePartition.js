@@ -54,7 +54,7 @@ class ReadablePartition extends EventEmitter {
 
     /**
      * @param {string} name The name of the partition.
-     * @param {Object} [config] An object with storage parameters.
+     * @param {object} [config] An object with storage parameters.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {number} [config.readBufferSize] Size of the read buffer in bytes. Default 4096.
      */
@@ -227,7 +227,7 @@ class ReadablePartition extends EventEmitter {
 
         const sequenceNumber = buffer.readUInt32BE(offset + 4);
         const time64 = buffer.readDoubleBE(offset + 8);
-        return { dataSize, sequenceNumber, time64 };
+        return ({ dataSize, sequenceNumber, time64 });
     }
 
     /**
@@ -292,7 +292,7 @@ class ReadablePartition extends EventEmitter {
 
     /**
      * @api
-     * @return {Generator} A generator that returns all documents in this partition.
+     * @returns {Generator} A generator that returns all documents in this partition.
      */
     *readAll() {
         let position = 0;

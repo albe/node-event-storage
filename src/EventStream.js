@@ -57,7 +57,7 @@ class EventStream extends stream.Readable {
     /**
      * Will iterate over all events in this stream and return an array of the events.
      *
-     * @returns {Array<Object>}
+     * @returns {Array<object>}
      */
     get events() {
         if (this._events instanceof Array) {
@@ -75,7 +75,7 @@ class EventStream extends stream.Readable {
      * Iterate over the events in this stream with a callback.
      * This method is useful to gain access to the event metadata.
      *
-     * @param {function(Object, Object, string)} callback A callback function that will receive the event, the storage metadata and the original stream name for every event in this stream.
+     * @param {function(object, Object, string)} callback A callback function that will receive the event, the storage metadata and the original stream name for every event in this stream.
      */
     forEach(callback) {
         let next;
@@ -95,7 +95,7 @@ class EventStream extends stream.Readable {
     }
 
     /**
-     * @returns {Object|boolean} The next event or false if no more events in the stream.
+     * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
         let next;

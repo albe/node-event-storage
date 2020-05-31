@@ -77,7 +77,7 @@ class ReadOnlyStorage extends ReadableStorage {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {{ index: ReadableIndex, matcher?: Object|function }}
+     * @returns {{ index: ReadableIndex, matcher?: object|function }}
      */
     createIndex(name, options = {}) {
         const { index } = super.createIndex(name, options);

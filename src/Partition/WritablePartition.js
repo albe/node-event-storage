@@ -28,14 +28,14 @@ class WritablePartition extends ReadablePartition {
 
     /**
      * @param {string} name The name of the partition.
-     * @param {Object} [config] An object with storage parameters.
+     * @param {object} [config] An object with storage parameters.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {number} [config.readBufferSize] Size of the read buffer in bytes. Default 4096.
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
-     * @param {Object} [config.metadata] A metadata object that will be written to the file header.
+     * @param {object} [config.metadata] A metadata object that will be written to the file header.
      * @param {typeof Clock} [config.clock] The constructor to a clock interface
      */
     constructor(name, config = {}) {
@@ -283,7 +283,7 @@ class WritablePartition extends ReadablePartition {
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading from.
-     * @returns {Object} A reader object with properties `buffer`, `cursor` and `length`.
+     * @returns {object} A reader object with properties `buffer`, `cursor` and `length`.
      */
     prepareReadBuffer(position) {
         if (position + DOCUMENT_HEADER_SIZE >= this.size) {

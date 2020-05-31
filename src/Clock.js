@@ -18,7 +18,7 @@ class Clock {
     }
 
     /**
-     * @return {number} The number of microseconds since the epoch given in the constructor. The decimal part denotes the accuracy of the clock in milliseconds.
+     * @returns {number} The number of microseconds since the epoch given in the constructor. The decimal part denotes the accuracy of the clock in milliseconds.
      * @note Needs to allow at least tens of ms accuracy, better hundreds of ms
      */
     time() {
