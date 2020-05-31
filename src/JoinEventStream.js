@@ -39,13 +39,14 @@ class JoinEventStream extends EventStream {
         minRevision = wrapRevision(minRevision, eventStore.length);
         maxRevision = wrapRevision(maxRevision, eventStore.length);
 
+        this.reverse = minRevision > maxRevision;
         this.iterator = streams.map(streamName => {
             if (!eventStore.streams[streamName]) {
                 return { next() { return { done: true }; } };
             }
             const streamIndex = eventStore.streams[streamName].index;
-            const from = streamIndex.find(minRevision, true);
-            const until = streamIndex.find(maxRevision);
+            const from = streamIndex.find(minRevision, !this.reverse);
+            const until = streamIndex.find(maxRevision, this.reverse);
             return eventStore.storage.readRange(from || 1, until, streamIndex);
         });
     }
@@ -62,6 +63,16 @@ class JoinEventStream extends EventStream {
 
     /**
      * @private
+     * @param {number} first
+     * @param {number} second
+     * @returns {boolean} If the first item follows after the second in the given read order determined by this.reverse flag.
+     */
+    follows(first, second) {
+        return (this.reverse ? first < second : first > second);
+    }
+
+    /**
+     * @private
      * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
@@ -73,7 +84,7 @@ class JoinEventStream extends EventStream {
             if (value === false) {
                 return;
             }
-            if (nextIndex === -1 || this._next[nextIndex].metadata.commitId > value.metadata.commitId) {
+            if (nextIndex === -1 || this.follows(this._next[nextIndex].metadata.commitId, value.metadata.commitId)) {
                 nextIndex = index;
             }
         });

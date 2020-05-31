@@ -3,9 +3,21 @@ const path = require('path');
 const EventEmitter = require('events');
 const Partition = require('../Partition');
 const Index = require('../Index');
-const { assert, createHmac, matches, buildMetadataForMatcher } = require('../util');
+const { assert, createHmac, matches, wrapAndCheck, buildMetadataForMatcher } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
+
+/**
+ * Reverses the items of an iterable
+ * @param {Generator|Iterable} iterator
+ * @returns {Generator<*>}
+ */
+function *reverse(iterator) {
+    const items = Array.from(iterator);
+    for (let i = items.length - 1; i >= 0; i--) {
+        yield items[i];
+    }
+}
 
 /**
  * An append-only storage with highly performant positional range scans.
@@ -186,7 +198,7 @@ class ReadableStorage extends EventEmitter {
      */
     readFrom(partitionId, position, size) {
         const partition = this.getPartition(partitionId);
-        const data = partition.readFrom(position);
+        const data = partition.readFrom(position, size);
         return this.serializer.deserialize(data);
     }
 
@@ -221,18 +233,40 @@ class ReadableStorage extends EventEmitter {
      * @param {number} from The 1-based document number (inclusive) to start reading from.
      * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
      * @param {ReadableIndex} [index] The index to use for finding the documents in the range.
-     * @returns {Generator} A generator that will read each document in the range one by one.
+     * @returns {Generator<object>} A generator that will read each document in the range one by one.
      */
-    *readRange(from, until, index) {
+    *readRange(from, until = -1, index = null) {
         index = index || this.index;
+        index.open();
 
-        if (!index.isOpen()) {
-            index.open();
+        const readFrom = wrapAndCheck(from, index.length);
+        const readUntil = wrapAndCheck(until, index.length);
+        assert(readFrom !== false && readUntil !== false, `Range scan error for range ${from} - ${until}.`);
+
+        if (readFrom > readUntil) {
+            const batchSize = 10;
+            let batchUntil = readFrom;
+            while (batchUntil > readUntil) {
+                const batchFrom = Math.max(readUntil, batchUntil - batchSize);
+                yield* reverse(this.iterateRange(batchFrom, batchUntil, index));
+                batchUntil = batchFrom - 1;
+            }
+            return undefined;
         }
 
-        const entries = index.range(from, until);
-        assert(entries !== false, `Range scan error for range ${from} - ${until}.`);
+        yield* this.iterateRange(readFrom, readUntil, index);
+    }
 
+    /**
+     * Iterate all documents in this storage in range from to until inside the index.
+     * @private
+     * @param {number} from
+     * @param {number} until
+     * @param {ReadableIndex} index
+     * @returns {Generator<object>}
+     */
+    *iterateRange(from, until, index) {
+        const entries = index.range(from, until);
         for (let entry of entries) {
             const document = this.readFrom(entry.partition, entry.position, entry.size);
             yield document;

@@ -318,7 +318,23 @@ describe('EventStore', function() {
             });
         });
 
-        it('needs to be tested.');
+        it('can iterate events in reverse order', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            let reverseStream = eventstore.getEventStream('foo-bar', -1, 0);
+            let i = 20;
+            for (let event of reverseStream) {
+                expect(event).to.eql({ key: i-- });
+            }
+        });
+
+        it('needs to be tested further.');
     });
 
     describe('fromStreams', function() {
@@ -368,6 +384,22 @@ describe('EventStore', function() {
                     });
                 });
             });
+        });
+
+        it('iterates events from multiple streams in reverse order', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit(i % 2 ? 'foo' : 'bar', [{key: i}]);
+            }
+
+            let reverseStream = eventstore.fromStreams('foo-bar', ['foo', 'bar'],-1, 0);
+            let i = 20;
+            for (let event of reverseStream) {
+                expect(event).to.eql({ key: i-- });
+            }
         });
 
     });
