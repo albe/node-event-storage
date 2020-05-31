@@ -33,7 +33,13 @@
     "*/JoinEventStream*.js",
     "*/Partition*.js",
     "*/Storage*.js",
-    "*/util.js",
+    "*/Watcher*.js",
+    "/Index/*.js",
+    "/Partition/*.js",
+    "/Storage/*.js",
+    "/Clock.js",
+    "/WatchesFile.js",
+    "/util.js",
     "/index.js"
   ],
   "license": "MIT",
@@ -44,7 +50,7 @@
     }
   ],
   "engines": {
-    "node": ">=6.0"
+    "node": ">=8.0"
   },
   "dependencies": {
     "mkdirp": "^1.0.3"
