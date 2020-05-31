@@ -261,6 +261,24 @@ describe('Storage', function() {
             expect(i).to.be(11);
         });
 
+        it('can read full range in reverse', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 20; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            let i = 20;
+            let documents = storage.readRange(i, 1);
+            for (let doc of documents) {
+                expect(doc).to.eql({ foo: i-- });
+            }
+            expect(i).to.be(0);
+        });
+
         it('can read a sub range', function() {
             storage = createStorage();
             storage.open();
@@ -348,7 +366,6 @@ describe('Storage', function() {
             expect(() => storage.readRange(0).next()).to.throwError();
             expect(() => storage.readRange(11).next()).to.throwError();
             expect(() => storage.readRange(1, 14).next()).to.throwError();
-            expect(() => storage.readRange(8, 4).next()).to.throwError();
         });
 
         it('can open secondary indexes lazily', function() {
