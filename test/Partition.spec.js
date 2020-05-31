@@ -199,7 +199,7 @@ describe('Partition', function() {
             partition.close();
             partition.open();
 
-            expect(() => console.log(partition.readFrom(4))).to.throwError();
+            expect(() => console.log(partition.readFrom(3))).to.throwError();
         });
 
         it('throws when reading unexpected document size', function() {

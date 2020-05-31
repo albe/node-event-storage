@@ -84,13 +84,12 @@ class WritablePartition extends ReadablePartition {
 
         if (super.open() === false) {
             const stat = fs.statSync(this.fileName);
-            if (stat.size === 0) {
-                this.metadata.epoch = Date.now();
-                this.writeMetadata();
-                this.size = 0;
-            } else {
+            if (stat.size !== 0) {
                 return false;
             }
+            this.metadata.epoch = Date.now();
+            this.writeMetadata();
+            this.size = 0;
         }
         this.clock = new this.ClockConstructor(this.metadata.epoch || NES_EPOCH.getTime());
 
@@ -203,6 +202,53 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
+     * Write the given data to the partition without buffering.
+     * @private
+     * @param {string} data The (padded) data to write to storage.
+     * @param {number} dataSize The size of the raw document without padding.
+     * @param {number} [sequenceNumber] The external sequence number to store with the document.
+     * @param {function} [callback] A function that will be called when the document is written to disk.
+     * @returns {number} Number of bytes written.
+     */
+    writeUnbuffered(data, dataSize, sequenceNumber, callback) {
+        this.flush();
+        const dataHeader = Buffer.alloc(DOCUMENT_HEADER_SIZE);
+        this.writeDocumentHeader(dataHeader, 0, dataSize, sequenceNumber);
+
+        let bytesWritten = fs.writeSync(this.fd, dataHeader);
+        bytesWritten += fs.writeSync(this.fd, data);
+        if (typeof callback === 'function') {
+            process.nextTick(callback);
+        }
+        return bytesWritten;
+    }
+
+    /**
+     * Write the given data to the partition with buffering. Will flush the write buffer if it is necessary.
+     * @private
+     * @param {string} data The (padded) data to write to storage.
+     * @param {number} dataSize The size of the raw document without padding.
+     * @param {number} [sequenceNumber] The external sequence number to store with the document.
+     * @param {function} [callback] A function that will be called when the document is written to disk.
+     * @returns {number} Number of bytes written.
+     */
+    writeBuffered(data, dataSize, sequenceNumber, callback) {
+        const bytesToWrite = Buffer.byteLength(data, 'utf8') + DOCUMENT_HEADER_SIZE;
+        this.flushIfWriteBufferTooSmall(bytesToWrite);
+
+        let bytesWritten = 0;
+        bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
+        bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
+        this.writeBufferCursor += bytesWritten;
+        this.writeBufferDocuments++;
+        if (typeof callback === 'function') {
+            this.flushCallbacks.push(callback);
+        }
+        this.flushIfWriteBufferDocumentsFull();
+        return bytesWritten;
+    }
+
+    /**
      * @api
      * @param {string} data The data to write to storage.
      * @param {number} [sequenceNumber] The external sequence number to store with the document.
@@ -220,30 +266,14 @@ class WritablePartition extends ReadablePartition {
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
-        const dataPad = padData(dataSize);
-        const padSize = Buffer.byteLength(dataPad, 'utf8');
-        const writeSize = dataSize + padSize;
-        this.flushIfWriteBufferTooSmall(writeSize + DOCUMENT_HEADER_SIZE);
-        if (writeSize + DOCUMENT_HEADER_SIZE > this.writeBuffer.byteLength) {
-            const dataHeader = Buffer.alloc(DOCUMENT_HEADER_SIZE);
-            this.writeDocumentHeader(dataHeader, 0, dataSize, sequenceNumber);
-
-            fs.writeSync(this.fd, dataHeader);
-            fs.writeSync(this.fd, data + dataPad);
-            if (typeof callback === 'function') {
-                process.nextTick(callback);
-            }
-        } else {
-            this.writeBufferCursor += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
-            this.writeBufferCursor += this.writeBuffer.write(data + dataPad, this.writeBufferCursor, writeSize, 'utf8');
-            this.writeBufferDocuments++;
-            if (typeof callback === 'function') {
-                this.flushCallbacks.push(callback);
-            }
-            this.flushIfWriteBufferDocumentsFull();
-        }
+        data += padData(dataSize);
         const dataPosition = this.size;
-        this.size += writeSize + DOCUMENT_HEADER_SIZE;
+        if (dataSize + DOCUMENT_HEADER_SIZE >= this.writeBuffer.byteLength * 4 / 5) {
+            this.size += this.writeUnbuffered(data, dataSize, sequenceNumber, callback);
+        } else {
+            this.size += this.writeBuffered(data, dataSize, sequenceNumber, callback);
+        }
+        assert(this.size >= dataPosition + dataSize + DOCUMENT_HEADER_SIZE, `Error while writing document at position ${dataPosition}.`);
         return dataPosition;
     }
 

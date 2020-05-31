@@ -265,6 +265,8 @@ class ReadablePartition extends EventEmitter {
             return false;
         }
 
+        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
+
         const reader = this.prepareReadBuffer(position);
         if (reader.length < size + DOCUMENT_HEADER_SIZE) {
             return false;
