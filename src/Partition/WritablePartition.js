@@ -215,7 +215,8 @@ class WritablePartition extends ReadablePartition {
         const dataHeader = Buffer.alloc(DOCUMENT_HEADER_SIZE);
         this.writeDocumentHeader(dataHeader, 0, dataSize, sequenceNumber);
 
-        let bytesWritten = fs.writeSync(this.fd, dataHeader);
+        let bytesWritten = 0;
+        bytesWritten += fs.writeSync(this.fd, dataHeader);
         bytesWritten += fs.writeSync(this.fd, data);
         if (typeof callback === 'function') {
             process.nextTick(callback);

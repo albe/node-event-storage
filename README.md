@@ -309,7 +309,11 @@ Note: If there are any misconceptions on my side to the ACID semantics, let me k
 
 Currently, the `storage` guarantees a consistent global ordering on all events by managing a global primary index. This makes
 sure that streams that are made up of multiple write-streams will stay consistent when re-reading all events. This has some
-issues though, like not being able to consistently reindex a storage, which is discussed in https://github.com/albe/node-event-storage/issues/24. Therefore, this guarantee may be relaxed in later versions.
+issues though, like not being able to consistently reindex a storage, which is discussed in https://github.com/albe/node-event-storage/issues/24.
+
+Since version 0.8 the storage also stores a monotonic clock stamp and an external sequence number together with the document.
+This way, a consistent global order can also be reconsituted without a global index. In a later version, the global index might
+therefore be removed and reindexing a storage be possible, which allows to rebuild a consistent state after a destructive crash.
 
 ### Event Streams
 
