@@ -15,17 +15,17 @@ class ReadableStorage extends EventEmitter {
 
     /**
      * @param {string} [storageName] The name of the storage.
-     * @param {Object} [config] An object with storage parameters.
-     * @param {Object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
-     * @param {function(Object): string} config.serializer.serialize Default is JSON.stringify.
-     * @param {function(string): Object} config.serializer.deserialize Default is JSON.parse.
+     * @param {object} [config] An object with storage parameters.
+     * @param {object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
+     * @param {function(object): string} config.serializer.serialize Default is JSON.stringify.
+     * @param {function(string): object} config.serializer.deserialize Default is JSON.parse.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {string} [config.indexDirectory] The path where the indexes should be stored. Defaults to dataDirectory.
      * @param {string} [config.indexFile] The name of the primary index. Default '{storageName}.index'.
      * @param {number} [config.readBufferSize] Size of the read buffer in bytes. Default 4096.
-     * @param {Object} [config.indexOptions] An options object that should be passed to all indexes on construction.
+     * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
-     * @param {Object} [config.metadata] A metadata object to be stored in all partitions belonging to this storage.
+     * @param {object} [config.metadata] A metadata object to be stored in all partitions belonging to this storage.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -58,7 +58,7 @@ class ReadableStorage extends EventEmitter {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {{ index: ReadableIndex, matcher?: Object|function }}
+     * @returns {{ index: ReadableIndex, matcher?: object|function }}
      */
     createIndex(name, options = {}) {
         /** @type ReadableIndex */
@@ -80,7 +80,7 @@ class ReadableStorage extends EventEmitter {
      * Create/open the primary index and build the base configuration for all secondary indexes.
      *
      * @private
-     * @param {Object} config The configuration object
+     * @param {object} config The configuration object
      * @returns void
      */
     initializeIndexes(config) {
@@ -108,7 +108,7 @@ class ReadableStorage extends EventEmitter {
      * Every file beginning with the storageFile name is considered a partition.
      *
      * @private
-     * @param {Object} config The configuration object containing options for the partitions.
+     * @param {object} config The configuration object containing options for the partitions.
      * @returns void
      */
     scanPartitions(config) {
@@ -181,7 +181,7 @@ class ReadableStorage extends EventEmitter {
      * @param {number} partitionId The partition to read from.
      * @param {number} position The file position to read from.
      * @param {number} [size] The expected byte size of the document at the given position.
-     * @returns {Object} The document stored at the given position.
+     * @returns {object} The document stored at the given position.
      * @throws {Error} if the document at the given position can not be deserialized.
      */
     readFrom(partitionId, position, size) {
@@ -196,7 +196,7 @@ class ReadableStorage extends EventEmitter {
      * @api
      * @param {number} number The 1-based document number (inside the given index) to read.
      * @param {ReadableIndex} [index] The index to use for finding the document position.
-     * @returns {Object} The document at the given position inside the index.
+     * @returns {object} The document at the given position inside the index.
      */
     read(number, index) {
         index = index || this.index;
@@ -244,7 +244,7 @@ class ReadableStorage extends EventEmitter {
      *
      * @api
      * @param {string} name The index name.
-     * @param {Object|function} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
+     * @param {object|function} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
      * @returns {ReadableIndex}
      * @throws {Error} if the index with that name does not exist.
      * @throws {Error} if the HMAC for the matcher does not match.
@@ -268,7 +268,7 @@ class ReadableStorage extends EventEmitter {
      * Helper method to iterate over all documents.
      *
      * @protected
-     * @param {function(Object, EntryInterface)} iterationHandler
+     * @param {function(object, EntryInterface)} iterationHandler
      */
     forEachDocument(iterationHandler) {
         /* istanbul ignore if  */
@@ -289,7 +289,7 @@ class ReadableStorage extends EventEmitter {
      *
      * @protected
      * @param {function(ReadableIndex, string)} iterationHandler
-     * @param {Object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
+     * @param {object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
      */
     forEachSecondaryIndex(iterationHandler, matchDocument) {
         /* istanbul ignore if  */

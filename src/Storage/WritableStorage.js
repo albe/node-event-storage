@@ -18,10 +18,10 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @param {string} [storageName] The name of the storage.
-     * @param {Object} [config] An object with storage parameters.
-     * @param {Object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
-     * @param {function(Object): string} config.serializer.serialize Default is JSON.stringify.
-     * @param {function(string): Object} config.serializer.deserialize Default is JSON.parse.
+     * @param {object} [config] An object with storage parameters.
+     * @param {object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
+     * @param {function(object): string} config.serializer.serialize Default is JSON.stringify.
+     * @param {function(string): object} config.serializer.deserialize Default is JSON.parse.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {string} [config.indexDirectory] The path where the indexes should be stored. Defaults to dataDirectory.
      * @param {string} [config.indexFile] The name of the primary index. Default '{storageName}.index'.
@@ -30,8 +30,8 @@ class WritableStorage extends ReadableStorage {
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
-     * @param {function(Object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
-     * @param {Object} [config.indexOptions] An options object that should be passed to all indexes on construction.
+     * @param {function(object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
+     * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
      */
     constructor(storageName = 'storage', config = {}) {
@@ -62,6 +62,7 @@ class WritableStorage extends ReadableStorage {
     /**
      * @inheritDoc
      * @returns {boolean}
+     * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open() {
         if (!this.lock()) {
@@ -73,6 +74,8 @@ class WritableStorage extends ReadableStorage {
     /**
      * Attempt to lock this storage by means of a lock directory.
      * @returns {boolean} True if the lock was created or false if the lock is already in place.
+     * @throws {StorageLockedError} If this storage is already locked by another process.
+     * @throws {Error} If the lock could not be created.
      */
     lock() {
         if (this.locked) {
@@ -119,7 +122,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} partitionId The partition where the document is stored.
      * @param {number} position The file offset where the document is stored.
      * @param {number} size The size of the stored document.
-     * @param {Object} document The document to add to the index.
+     * @param {object} document The document to add to the index.
      * @param {function} [callback] The callback to call when the index is written to disk.
      * @returns {EntryInterface} The index entry item.
      */
@@ -170,7 +173,7 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @api
-     * @param {Object} document The document to write to storage.
+     * @param {object} document The document to write to storage.
      * @param {function} [callback] A function that will be called when the document is written to disk.
      * @returns {number} The 1-based document sequence number in the storage.
      */
@@ -202,7 +205,7 @@ class WritableStorage extends ReadableStorage {
      *
      * @api
      * @param {string} name The index name.
-     * @param {Object|function} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
+     * @param {object|function} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
      * @returns {ReadableIndex} The index containing all documents that match the query.
      * @throws {Error} if the index doesn't exist yet and no matcher was specified.
      */
@@ -330,7 +333,7 @@ class WritableStorage extends ReadableStorage {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {{ index: WritableIndex, matcher: Object|function }}
+     * @returns {{ index: WritableIndex, matcher: object|function }}
      */
     createIndex(name, options = {}) {
         const index = new WritableIndex(name, options);

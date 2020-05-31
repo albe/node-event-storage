@@ -13,7 +13,7 @@ class DirectoryWatcher extends EventEmitter {
 
     /**
      * @param {string} directory
-     * @param {Object} [options] The options to pass to the fs.watch call. See https://nodejs.org/api/fs.html#fs_fs_watch_filename_options_listener
+     * @param {object} [options] The options to pass to the fs.watch call. See https://nodejs.org/api/fs.html#fs_fs_watch_filename_options_listener
      * @returns {DirectoryWatcher}
      */
     constructor(directory, options = {}) {
@@ -33,7 +33,7 @@ class DirectoryWatcher extends EventEmitter {
 
     /**
      * Close this watcher.
-     * @return void
+     * @returns void
      */
     close() {
         this.references--;

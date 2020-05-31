@@ -37,8 +37,8 @@ const createHmac = secret => string => {
     };
 
 /**
- * @param {Object} document The document to check against the matcher.
- * @param {Object|function} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
+ * @param {object} document The document to check against the matcher.
+ * @param {object|function} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
  * @returns {boolean} True if the document matches the matcher or false otherwise.
  */
 function matches(document, matcher) {
@@ -60,7 +60,7 @@ function matches(document, matcher) {
 }
 
 /**
- * @param {Object|function} matcher The matcher object or function that should be serialized.
+ * @param {object|function} matcher The matcher object or function that should be serialized.
  * @param {function(string)} hmac A function that calculates a HMAC of the given string.
  * @returns {{matcher: string|object, hmac?: string}}
  */
@@ -76,9 +76,9 @@ function buildMetadataForMatcher(matcher, hmac) {
 }
 
 /**
- * @param {{matcher: string|Object, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
+ * @param {{matcher: string|object, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
  * @param {function(string)} hmac A function that calculates a HMAC of the given string.
- * @returns {Object|function} The matcher object or function.
+ * @returns {object|function} The matcher object or function.
  */
 function buildMatcherFromMetadata(matcherMetadata, hmac) {
     let matcher;
