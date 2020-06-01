@@ -18,6 +18,9 @@ class ReadOnlyPartition extends WatchesFile(ReadablePartition) {
      * @param {string} filename
      */
     onChange(filename) {
+        if (!this.fd) {
+            return;
+        }
         const prevSize = this.size;
         this.size = this.readFileSize();
         if (this.size > prevSize) {

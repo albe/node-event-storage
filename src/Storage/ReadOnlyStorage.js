@@ -83,6 +83,10 @@ class ReadOnlyStorage extends ReadableStorage {
         const { index } = super.createIndex(name, options);
         const indexShortName = name.replace(this.storageFile + '.', '').replace('.index', '');
         index.on('append', (prevLength, newLength) => {
+            if (!this.watcher) {
+                // If the watcher has been removed, this means this storage was closed and we don't want to handle events any more
+                return;
+            }
             const entries = index.range(prevLength + 1, newLength);
             /* istanbul ignore if */
             if (entries === false) {
