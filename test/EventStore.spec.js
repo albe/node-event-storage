@@ -13,7 +13,9 @@ describe('EventStore', function() {
     });
 
     afterEach(function () {
-        if (eventstore) eventstore.close();
+        if (eventstore) {
+            eventstore.close();
+        }
         eventstore = null;
     });
 
