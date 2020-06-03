@@ -48,6 +48,55 @@ describe('EventStore', function() {
         fs.readdir = originalReaddir;
     });
 
+    it('repairs unfinished commits', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        let events = [{foo: 'bar'}, {foo: 'baz'}, {foo: 'quux'}];
+        eventstore.on('ready', () => {
+            eventstore.commit('foo-bar', events, () => {
+                // Simulate an unfinished write after the second event (but indexes are still written)
+                const entry = eventstore.storage.index.get(3);
+                eventstore.storage.getPartition(entry.partition).truncate(entry.position);
+                eventstore.close();
+
+                eventstore = new EventStore({
+                    storageDirectory
+                });
+                eventstore.on('ready', () => {
+                    expect(eventstore.length).to.be(0);
+                    expect(eventstore.getStreamVersion('foo-bar')).to.be(0);
+                    done();
+                });
+            });
+        });
+    });
+
+    it('repairs torn writes', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        let events = [{foo: 'bar'.repeat(500)}];
+        eventstore.on('ready', () => {
+            eventstore.commit('foo-bar', events, () => {
+                // Simulate a torn write (but indexes are still written)
+                fs.truncateSync(eventstore.storage.getPartition('foo-bar').fileName, 512);
+                eventstore.close();
+
+                eventstore = new EventStore({
+                    storageDirectory
+                });
+                eventstore.on('ready', () => {
+                    expect(eventstore.length).to.be(0);
+                    expect(eventstore.getStreamVersion('foo-bar')).to.be(0);
+                    done();
+                });
+            });
+        });
+    });
+
     it('throws when trying to open non-existing store read-only', function() {
         expect(() => new EventStore({
             storageDirectory,

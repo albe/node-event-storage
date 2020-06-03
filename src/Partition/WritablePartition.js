@@ -319,26 +319,30 @@ class WritablePartition extends ReadablePartition {
         if (after > this.size) {
             return;
         }
-        if (after < 0) {
-            after = 0;
-        }
+        after = Math.max(0, after);
         this.flush();
 
         let position = after, data;
+        let skipDeleteLog = false;
         try {
             data = this.readFrom(position);
         } catch (e) {
-            throw new Error('Can only truncate on valid document boundaries.');
+            if (!(e instanceof ReadablePartition.CorruptFileError)) {
+                throw new Error('Can only truncate on valid document boundaries.');
+            }
+            skipDeleteLog = true;
         }
-        // copy all truncated documents to some delete log
-        const deletedBranch = new WritablePartition(this.name + '-' + after + '.branch', { dataDirectory: this.dataDirectory });
-        deletedBranch.open();
-        while (data) {
-            deletedBranch.write(data);
-            position += this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
-            data = this.readFrom(position);
+        if (!skipDeleteLog) {
+            // copy all truncated documents to some delete log
+            const deletedBranch = new WritablePartition(this.name + '-' + after + '.branch', { dataDirectory: this.dataDirectory });
+            deletedBranch.open();
+            while (data) {
+                deletedBranch.write(data);
+                position += this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
+                data = this.readFrom(position);
+            }
+            deletedBranch.close();
         }
-        deletedBranch.close();
 
         fs.truncateSync(this.fileName, this.headerSize + after);
         this.truncateReadBuffer(after);

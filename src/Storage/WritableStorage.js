@@ -309,6 +309,9 @@ class WritableStorage extends ReadableStorage {
         if (!this.index.isOpen()) {
             this.index.open();
         }
+        if (after < 0) {
+            after += this.index.length;
+        }
 
         this.truncatePartitions(after);
 
@@ -367,3 +370,4 @@ class WritableStorage extends ReadableStorage {
 
 module.exports = WritableStorage;
 module.exports.StorageLockedError = StorageLockedError;
+module.exports.CorruptFileError = ReadableStorage.CorruptFileError;
