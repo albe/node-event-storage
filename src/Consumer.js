@@ -46,12 +46,21 @@ class Consumer extends stream.Readable {
         if (!fs.existsSync(consumerDirectory)) {
             mkdirpSync(consumerDirectory);
         } else {
-            // Clean up left over from failed writes
-            const files = fs.readdirSync(consumerDirectory);
-            for (let file of files) {
-                if (file.startsWith(this.fileName + '.')) {
-                    fs.unlinkSync(file);
-                }
+            this.cleanUpFailedWrites(consumerDirectory);
+        }
+    }
+
+    /**
+     * Iterate over all files in the directory of this consumer and unlink any file that starts with the filename followed by a dot.
+     * @private
+     */
+    cleanUpFailedWrites() {
+        const consumerNamePrefix = path.basename(this.fileName) + '.';
+        const consumerDirectory = path.dirname(this.fileName);
+        const files = fs.readdirSync(consumerDirectory);
+        for (let file of files) {
+            if (file.startsWith(consumerNamePrefix)) {
+                fs.unlinkSync(path.join(consumerDirectory, file));
             }
         }
     }
