@@ -42,10 +42,18 @@ class Consumer extends stream.Readable {
         this.index = this.storage.openIndex(indexName);
         this.indexName = indexName;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
+        this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
         if (!fs.existsSync(consumerDirectory)) {
             mkdirpSync(consumerDirectory);
+        } else {
+            // Clean up left over from failed writes
+            const files = fs.readdirSync(consumerDirectory);
+            for (let file of files) {
+                if (file.startsWith(this.fileName + '.')) {
+                    fs.unlinkSync(file);
+                }
+            }
         }
-        this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
     }
 
     /**
@@ -124,9 +132,19 @@ class Consumer extends stream.Readable {
             const consumerData = Buffer.allocUnsafe(4 + consumerState.length);
             consumerData.writeInt32LE(this.position, 0);
             consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
-            fs.writeFileSync(this.fileName, consumerData);
+            var tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
-            this.emit('persisted');
+            if (fs.existsSync(tmpFile)) {
+                throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
+            }
+            try {
+                fs.writeFileSync(tmpFile, consumerData);
+                // If the write fails (half-way), the consumer state file will not be corrupted
+                fs.renameSync(tmpFile, this.fileName);
+                this.emit('persisted');
+            } catch (e) {
+                fs.unlinkSync(tmpFile);
+            }
         });
     }
 
