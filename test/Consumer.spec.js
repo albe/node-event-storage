@@ -41,6 +41,14 @@ describe('Consumer', function() {
         expect(fs.existsSync(dataDirectory + '/consumers')).to.be(true);
     });
 
+    it('cleans up failed write left-overs', function() {
+        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer.stop();
+        fs.writeFileSync(consumer.fileName + '.1', 'failed write!');
+        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        expect(fs.existsSync(consumer.fileName + '.1')).to.be(false);
+    });
+
     it('emits event when catching up', function(done){
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();

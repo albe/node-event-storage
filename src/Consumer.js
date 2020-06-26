@@ -42,10 +42,27 @@ class Consumer extends stream.Readable {
         this.index = this.storage.openIndex(indexName);
         this.indexName = indexName;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
+        this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
         if (!fs.existsSync(consumerDirectory)) {
             mkdirpSync(consumerDirectory);
+        } else {
+            this.cleanUpFailedWrites(consumerDirectory);
         }
-        this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
+    }
+
+    /**
+     * Iterate over all files in the directory of this consumer and unlink any file that starts with the filename followed by a dot.
+     * @private
+     */
+    cleanUpFailedWrites() {
+        const consumerNamePrefix = path.basename(this.fileName) + '.';
+        const consumerDirectory = path.dirname(this.fileName);
+        const files = fs.readdirSync(consumerDirectory);
+        for (let file of files) {
+            if (file.startsWith(consumerNamePrefix)) {
+                fs.unlinkSync(path.join(consumerDirectory, file));
+            }
+        }
     }
 
     /**
@@ -124,9 +141,21 @@ class Consumer extends stream.Readable {
             const consumerData = Buffer.allocUnsafe(4 + consumerState.length);
             consumerData.writeInt32LE(this.position, 0);
             consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
-            fs.writeFileSync(this.fileName, consumerData);
+            var tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
-            this.emit('persisted');
+            /* istanbul ignore if */
+            if (fs.existsSync(tmpFile)) {
+                throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
+            }
+            try {
+                fs.writeFileSync(tmpFile, consumerData);
+                // If the write fails (half-way), the consumer state file will not be corrupted
+                fs.renameSync(tmpFile, this.fileName);
+                this.emit('persisted');
+            } catch (e) {
+                /* istanbul ignore next */
+                fs.unlinkSync(tmpFile);
+            }
         });
     }
 
