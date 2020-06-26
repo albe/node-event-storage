@@ -143,6 +143,7 @@ class Consumer extends stream.Readable {
             consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
             var tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
+            /* istanbul ignore if */
             if (fs.existsSync(tmpFile)) {
                 throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
             }
@@ -152,6 +153,7 @@ class Consumer extends stream.Readable {
                 fs.renameSync(tmpFile, this.fileName);
                 this.emit('persisted');
             } catch (e) {
+                /* istanbul ignore next */
                 fs.unlinkSync(tmpFile);
             }
         });
