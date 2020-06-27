@@ -50,7 +50,7 @@
     }
   ],
   "engines": {
-    "node": ">=8.0"
+    "node": ">=10.0"
   },
   "dependencies": {
     "mkdirp": "^1.0.3"
