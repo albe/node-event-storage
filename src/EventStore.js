@@ -200,6 +200,10 @@ class EventStore extends EventEmitter {
             throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
         }
 
+        if (events.length > 1) {
+            delete metadata.commitVersion;
+        }
+
         const commitId = this.length;
         let commitVersion = 0;
         const committedAt = Date.now();
@@ -216,7 +220,7 @@ class EventStore extends EventEmitter {
             callback(commit);
         };
         for (let event of events) {
-            const eventMetadata = Object.assign({ commitId, committedAt }, metadata, { commitVersion, streamVersion });
+            const eventMetadata = Object.assign({ commitId, committedAt, commitVersion }, metadata, { streamVersion });
             const storedEvent = { stream: streamName, payload: event, metadata: eventMetadata };
             commitVersion++;
             streamVersion++;
