@@ -75,7 +75,7 @@ class EventStream extends stream.Readable {
      * Iterate over the events in this stream with a callback.
      * This method is useful to gain access to the event metadata.
      *
-     * @param {function(object, Object, string)} callback A callback function that will receive the event, the storage metadata and the original stream name for every event in this stream.
+     * @param {function(object, object, string)} callback A callback function that will receive the event, the storage metadata and the original stream name for every event in this stream.
      */
     forEach(callback) {
         let next;
