@@ -19,9 +19,12 @@ An optimized embedded event store for modern node.js, written in ES6.
 - [Usage](#usage)
   * [Creating additional streams](#creating-additional-streams)
   * [Optimistic concurrency](#optimistic-concurrency)
-- [Consumers](#consumers)
-  * [Exactly-once](#exactly-once-semantics)
-- [Read-Only](#read-only)
+  * [Reading streams](#reading-streams)
+    * [Joining streams](#joining-streams)
+    * [Event metadata](#event-metadata)
+  * [Consumers](#consumers)
+    * [Exactly-once](#exactly-once-semantics)
+  * [Read-Only](#read-only)
 - [Implementation details](#implementation-details)
   * [ACID](#acid)
   * [Global order](#global-order)
@@ -177,6 +180,56 @@ Where `expectedVersion` is either `EventStore.ExpectedVersion.Any` (no optimisti
 It will throw an OptimisticConcurrencyError if the given stream version does not match the expected.
 In that case you should either signal that back to the upstream source, or replay state and reattempt application
 of the command.
+
+### Reading streams
+
+Of course any functional system will not only write to the storage, but also read back the events and do something meaningful with them.
+The common case is a projection/read model, or a process manager (which is technically a projection that emits new events), but could also
+be for just skimming through the events for migrating/upgrading data or just showing a history table.
+For this you can just get a hold of the event stream you want to read, and iterate it. The EventStream is an [Iterable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols)!
+Apart from that, you can also specify the exact version range you want to iterate at the time of retrieving the stream. With this it is also
+possible to iterate the stream in reverse, by specifying a lower `max` than `min` revision.
+
+```javascript
+const stream0 = eventstore.getEventStream('my-stream', 0, -1); // all events from the start (#0) up to the last (-1 equals the last version)
+const stream1 = eventstore.getEventStream('my-stream', 0, 50); // all events from the start (#0) up to event #50, hence 51 events in total
+const stream2 = eventstore.getEventStream('my-stream', 10, -11); // the events starting from #10 up to the 10th last event
+const stream3 = eventstore.getEventStream('my-stream', -11, -1); // get the last ten events starting from the earliest
+const stream4 = eventstore.getEventStream('my-stream', -1, -11); // get the last ten events startimg from the last in reverse order
+
+for (let event of stream{x}) {
+   ...
+}
+```
+
+**Note**
+> If a new event is appended right after the `getEventStream()` call, but before iterating, this event will **not** be included in the iteration.
+> This is due to the revision boundary being fixed at the time of getting the stream reference. In some cases this might be unwanted, but those cases are
+> probably better covered by [consumers](#consumers).
+
+#### Joining streams
+
+Sometimes you might want to iterate over events from multiple streams in the order they were appended to the respective streams. In that case the
+`fromStreams(string transientStreamName, array streamNames, [number minRevision, [number maxRevision]])` method will do what you want.
+It will return an instance of `EventStream` (`JoinEventStream` actually) that will iterate the events of all streams specified in their global insertion order.
+You can also reverse the order by specifying a lower `max` than `min` revision.
+The result of this iteration will not be persisted and is not applicable to [consumers](#consumers), so if you intend to more frequently work with the join of
+those streams, another approach would be to create a completely new stream that will match all events that belong to the streams you want to join.
+
+#### Event metadata
+
+In case you also need access to the storage level meta information, the iterable approach will not suffice. For those cases the `forEach((event, metadata, streamName) callback)`
+method will give you everything you need.
+```javascript
+const stream = eventstore.getEventStream('my-stream');
+stream.forEach((event, metadata, streamName) => {
+   // metadata is an object of the form { commitId, committedAt, commitVersion, streamVersion } combined with any additional metadata you provide in the commit call.
+   // commitId is a unique Id for the whole commit, committedAt the milliseconds timestamp when the commit happened,
+   // commitVersion is the sequence number for the event within the commit and streamVersion the version of the event within the stream
+   eventstore.commit('my-new-stream', [event], metadata);
+});
+```
+This is primarily useful for low-level work, like rewriting streams.
 
 ### Consumers
 
