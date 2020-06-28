@@ -65,13 +65,21 @@ class WritableIndex extends ReadableIndex {
      * @throws {Error} If the file is corrupt or can not be read correctly.
      */
     checkFile() {
-        const entries = super.checkFile();
-        if (entries < 0) {
-            // Freshly created index... write metadata initially.
-            this.writeMetadata();
-            return 0;
+        try {
+            const entries = super.checkFile();
+            if (entries < 0) {
+                // Freshly created index... write metadata initially.
+                this.writeMetadata();
+                return 0;
+            }
+            return entries;
+        } catch (e) {
+            if (e instanceof ReadableIndex.CorruptedIndexError) {
+                this.truncate(e.size);
+                return e.size;
+            }
+            throw e;
         }
-        return entries;
     }
 
     /**
@@ -206,7 +214,8 @@ class WritableIndex extends ReadableIndex {
      * @param {number} after The index entry number to truncate after.
      */
     truncate(after) {
-        if (after > this.length) {
+        // Need to check readUntil to allow truncating on initial opening for repair
+        if (this.readUntil >= 0 && after > this.length) {
             return;
         }
         if (after < 0) {
