@@ -109,11 +109,12 @@ describe('Index', function() {
         expect(() => index = createIndex(index.name, { metadata: { test: 'anotherValue' } })).to.throwError(/Index metadata mismatch/);
     });
 
-    it('throws on opening with altered file', function() {
+    it('truncates on opening with altered file', function() {
         index = setupIndexWithEntries(5);
         index.close();
         fs.appendFileSync(index.fileName, 'foo');
-        expect(() => index = createIndex(index.name)).to.throwError(/Index file is corrupt/);
+        expect(() => index = createIndex(index.name)).to.not.throwError();
+        expect(index.length).to.be(5);
     });
 
     describe('Entry', function() {

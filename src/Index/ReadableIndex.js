@@ -7,6 +7,19 @@ const { assert, wrapAndCheck, binarySearch } = require('../util');
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";
 
+class CorruptedIndexError extends Error {}
+
+/**
+ * Returns a constructor for a CorruptedIndexError with the given size property.
+ */
+function CorruptedIndexErrorFactory(size) {
+    return function (...args) {
+        let error = new CorruptedIndexError(...args);
+        error.size = size;
+        return error;
+    };
+}
+
 /**
  * An index is a simple append-only file that stores an ordered list of entry elements pointing to the actual file position
  * where the matching document is found in the storage file.
@@ -110,14 +123,13 @@ class ReadableIndex extends EventEmitter {
         const stat = fs.fstatSync(this.fd);
         if (stat.size === 0) {
             return -1;
-        } else {
-            stat.size -= this.readMetadata();
-            assert(stat.size >= 0, 'Invalid index file!');
         }
 
+        stat.size -= this.readMetadata();
+        assert(stat.size >= 0, 'Invalid index file!');
+
         const length = Math.floor(stat.size / this.EntryClass.size);
-        // Corrupt index file
-        assert(stat.size === length * this.EntryClass.size, 'Index file is corrupt!');
+        assert(stat.size === length * this.EntryClass.size, 'Index file is corrupt!', CorruptedIndexErrorFactory(length));
 
         return length;
     }
@@ -384,3 +396,4 @@ class ReadableIndex extends EventEmitter {
 module.exports = ReadableIndex;
 module.exports.Entry = Entry;
 module.exports.HEADER_MAGIC = HEADER_MAGIC;
+module.exports.CorruptedIndexError = CorruptedIndexError;
