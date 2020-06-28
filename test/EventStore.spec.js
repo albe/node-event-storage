@@ -402,6 +402,56 @@ describe('EventStore', function() {
             for (let event of reverseStream) {
                 expect(event).to.eql({ key: i-- });
             }
+            expect(i).to.be(0);
+        });
+
+    });
+
+    describe('getEventStreamForCategory', function() {
+
+        it('throws when not specifying category without streams', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            expect(() => eventstore.getEventStreamForCategory('non-existing-category')).to.throwError();
+        });
+
+        it('iterates events for all streams with a given category prefix', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('bar', [{key: 0}]);
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-' + i, [{key: i}]);
+            }
+            eventstore.commit('foobar', [{key: 21}]);
+
+            let categoryStream = eventstore.getEventStreamForCategory('foo');
+            let i = 1;
+            for (let event of categoryStream) {
+                expect(event).to.eql({ key: i++ });
+            }
+            expect(i).to.be(21);
+        });
+
+        it('works with a dedicated stream for the category', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.createEventStream('foo', e => e.stream.startsWith('foo-'));
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-' + i, [{key: i}]);
+            }
+
+            let categoryStream = eventstore.getEventStreamForCategory('foo');
+            let i = 1;
+            for (let event of categoryStream) {
+                expect(event).to.eql({ key: i++ });
+            }
+            expect(i).to.be(21);
         });
 
     });
