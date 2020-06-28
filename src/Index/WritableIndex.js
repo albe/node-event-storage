@@ -214,8 +214,7 @@ class WritableIndex extends ReadableIndex {
      * @param {number} after The index entry number to truncate after.
      */
     truncate(after) {
-        // Need to check readUntil to allow truncating on initial opening for repair
-        if (this.readUntil >= 0 && after > this.length) {
+        if (!this.fd) {
             return;
         }
         if (after < 0) {
@@ -223,7 +222,12 @@ class WritableIndex extends ReadableIndex {
         }
         this.flush();
 
-        fs.truncateSync(this.fileName, this.headerSize + after * this.EntryClass.size);
+        const stat = fs.statSync(this.fileName);
+        const truncatePosition = this.headerSize + after * this.EntryClass.size;
+        if (truncatePosition >= stat.size) {
+            return;
+        }
+        fs.truncateSync(this.fileName, truncatePosition);
         this.data.splice(after);
         this.readUntil = Math.min(this.readUntil, after);
     }
