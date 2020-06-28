@@ -271,7 +271,7 @@ class EventStore extends EventEmitter {
     }
 
     /**
-     * Create a new event stream from existing streams by joining them.
+     * Create a virtual event stream from existing streams by joining them.
      *
      * @param {string} streamName The (transient) name of the joined stream.
      * @param {Array<string>} streamNames An array of the stream names to join.
@@ -287,6 +287,33 @@ class EventStore extends EventEmitter {
             assert(stream in this.streams, `Stream "${stream}" does not exist.`);
         }
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision);
+    }
+
+    /**
+     * Get a stream for a category of streams. This will effectively return a joined stream of all streams that start
+     * with the given `categoryName` followed by a dash.
+     * If you frequently use this for a category consisting of a lot of streams (e.g. `users`), consider creating a
+     * dedicated physical stream for the category:
+     *
+     *    `eventstore.createEventStream('users', e => e.stream.startsWith('users-'))`
+     *
+     * @api
+     * @param {string} categoryName The name of the category to get a stream for. A category is a stream name prefix.
+     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @returns {EventStream} The joined event stream for all streams of the given category.
+     * @throws {Error} If no stream for this category exists.
+     */
+    getEventStreamForCategory(categoryName, minRevision = 0, maxRevision = -1) {
+        if (categoryName in this.streams) {
+            return this.getEventStream(categoryName, minRevision, maxRevision);
+        }
+        const categoryStreams = Object.keys(this.streams).filter(streamName => streamName.startsWith(categoryName + '-'));
+
+        if (categoryStreams.length === 0) {
+            throw new Error(`No streams for category '${categoryName}' exist.`);
+        }
+        return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision);
     }
 
     /**

@@ -79,8 +79,8 @@ Using it as queryable log storage.
 
 ## Event-Storage and it's specifics
 
-The thing that makes event storages stand out (and also makes them simpler and more performant), is that they
-have no concept of overwriting or deleting data. They are purely append-only storages and the only querying is
+The thing that makes event storages stand out (and makes them simpler and more performant), is that they
+have no concept of overwriting or deleting data. They are purely append-only storages, and the only querying is
 sequential (range) reading (possibly with some filtering applied): 
 
 This means a couple of things:
@@ -113,14 +113,14 @@ const EventStore = require('event-storage');
 const eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
 eventstore.on('ready', () => {
     const streamVersion = eventstore.getStreamVersion('my-stream');
-    ...
+    //...
     eventstore.commit('my-stream', [{ foo: 'bar' }], streamVersion, () => {
-        ...
+        //...
     });
 
     let stream = eventstore.getEventStream('my-stream');
     for (let event of stream) {
-        ...
+        //...
     }
 });
 ```
@@ -133,17 +133,17 @@ potentially involves other commits to the same stream. See [Optimistic Concurren
 Create additional streams that contain only part of another stream, or even a combination of events of other streams.
 
 ```javascript
-...
+//...
 let myProjectionStream = eventstore.createStream('my-projection-stream', (event) => ['FooHappened', 'BarHappened'].includes(event.type));
 
 for (let event of myProjectionStream) {
-    ...
+    //...
 }
 ```
 
 ### Optimistic concurrency
 
-Optimistic concurrency is required when multiple sources generate events concurrently.
+Optimistic concurrency control is required when multiple sources generate events concurrently.
 
 > Note that having the producer of events behind a HTTP interface automatically implies concurrent operation.
 
@@ -159,17 +159,17 @@ stream.forEach((event, metadata) => {
 });
 const expectedVersion = stream.version;
 // Provide model state and expectedVersion to some state change API or UI that returns a command
-...
+//...
 // generate new events from the current model, by applying an incoming command
 const events = model.handle(command.payload);
 try {
     // The expectedVersion is supposed to be given back through the command
     eventstore.commit('my-stream', events, command.expectedVersion, () => {
-        ...
+        //...
     });
 } catch (e) {
     if (e instanceof EventStore.OptimisticConcurrencyError) {
-        ...
+        //...
         // Reattempt command / resolve conflict
     }
 }
@@ -195,10 +195,10 @@ const stream0 = eventstore.getEventStream('my-stream', 0, -1); // all events fro
 const stream1 = eventstore.getEventStream('my-stream', 0, 50); // all events from the start (#0) up to event #50, hence 51 events in total
 const stream2 = eventstore.getEventStream('my-stream', 10, -11); // the events starting from #10 up to the 10th last event
 const stream3 = eventstore.getEventStream('my-stream', -11, -1); // get the last ten events starting from the earliest
-const stream4 = eventstore.getEventStream('my-stream', -1, -11); // get the last ten events startimg from the last in reverse order
+const stream4 = eventstore.getEventStream('my-stream', -1, -11); // get the last ten events starting from the last in reverse order
 
 for (let event of stream{x}) {
-   ...
+   //...
 }
 ```
 
@@ -215,6 +215,22 @@ It will return an instance of `EventStream` (`JoinEventStream` actually) that wi
 You can also reverse the order by specifying a lower `max` than `min` revision.
 The result of this iteration will not be persisted and is not applicable to [consumers](#consumers), so if you intend to more frequently work with the join of
 those streams, another approach would be to create a completely new stream that will match all events that belong to the streams you want to join.
+
+#### Stream categories
+
+Similar to EventStoreDB (and other), event-storage allows categorizing streams by naming convention.
+This is useful when e.g. needing to iterate all events that belong to a single model class, rather than instance.
+In this case, you name the streams for the instances as the class name followed by the identity of the instance, e.g. `user-123`, `user-456`, etc.
+If you then want to iterate all users' events, you would need to join the streams of all users and for convenience you can do this with
+the method `getEventStreamForCategory(categoryName, minRevision, maxRevision)`. This will find all streams whose name starts with the given
+`categoryName` followed by a dash and return a [joined stream](#joining-streams) over those. If you already created a dedicated stream for this
+category manually, this stream will be returned.
+
+```javascript
+eventstore.commit('user-' + user.id, [new UserRegistered(user.id, user.email)]);
+//...
+const allUsersStream = eventstore.getEventStreamForCategory('user');
+```
 
 #### Event metadata
 
@@ -233,9 +249,10 @@ This is primarily useful for low-level work, like rewriting streams.
 
 ### Consumers
 
-Consumers are durable event-driven listeners on event streams. They provide at-least-once delivery guarantees,
-meaning that they receive each event in the stream at least once. An event can possibly be delivered twice if
+Consumers are durable event-driven listeners on event streams. From a nodejs perspective they are `stream.Readable`s. They provide
+at-least-once delivery guarantees, meaning they receive each event in the stream at least once. An event may be delivered twice if
 the program crashed during the handling of an event, since the current position will only be persisted *afterwards*.
+As of version 0.6 the `setState()` method allows opting into [exactly-once](#exactly-once-semantics) processing.
 
 ```javascript
 let myConsumer = eventstore.getConsumer('my-stream', 'my-stream-consumer1');
@@ -258,7 +275,7 @@ As soon as the consumer has caught up the stream, it will emit a `caught-up` eve
 Since version 0.6 the consumers can persist their state (a simple JSON object), which allows for achieving
 exactly-once processing semantics relatively easy. What this means is, that the state of the consumer will
 always reflect the state of having each event processed exactly once, because if persisting the state fails,
-the position is also not updated and vice versa.
+the position will also not be updated and vice versa.
 
 ```javascript
 let myConsumer = eventstore.getConsumer('my-stream', 'my-stream-consumer1');
@@ -269,7 +286,7 @@ myConsumer.on('data', event => {
 ```
 
 This is very useful for projecting some data out of a stream with exactly-once processing without a lot of effort.
-Whenever the state is persisted, the consumer will also emit a `persisted` event.
+Whenever the state has been persisted, the consumer will also emit a `persisted` event.
 
 **Note**
 > Never mutate the consumers `state` property directly and only use the `setState` method **inside** the `data` handler.
@@ -281,10 +298,10 @@ wrap a transaction around sending an e-mail and persisting the consumer position
 
 ### Read-Only
 
-The `EventStore` can also be opened in read-only mode since 0.7, by specifying the constructor option `readOnly: true`.
-In this mode, any writes to the store are prevented, while all reads and consumers work as normal. The read-only storage
+The `EventStore` can also be opened in a readonly mode since 0.7, by specifying the constructor option `readOnly: true`.
+In this mode, any writes to the store will be prevented, while all reads and consumers work as normal. The read-only storage
 will watch the files that back it and automatically update internal state on changes, so the reader is asynchronously fully
-consistent to the writer state. You can open as many readers as needed and the main use case is to use it for consumers running
+consistent to the writer state. You can open as many readers as needed, and the main use case is to use it for consumers running
 in a different process than the writer. This way, you can have different processes create projections from the events for
 different use cases and serve their state out to other systems, e.g. through an HTTP interface or whatever deems useful.
 
@@ -476,8 +493,8 @@ file, the matcher function gets fingerprinted with an HMAC.
 This HMAC is calculated with a secret that you should specify with the `hmacSecret` option of the storage
 configuration.
 
-Currently the `hmacSecret` is an optional parameter defaulting to an empty string, which is unsecure, so always
+Currently the `hmacSecret` is an optional parameter defaulting to an empty string, which is insecure, so always
 specify an own unique random secret for this in production.
 
 Alternatively you should always explicitly specify your matchers when opening an existing index, since that will
-check that the specified matcher matches the one in the index file.
+check the specified matcher matches the one in the index file.
