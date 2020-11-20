@@ -21,8 +21,8 @@
     "url": "https://github.com/albe/node-event-storage/issues"
   },
   "scripts": {
-    "test": "nyc --reporter=html mocha test/*.spec.js",
-    "coverage": "nyc report --reporter=lcov | coveralls"
+    "test": "nyc --reporter=lcov mocha test/*.spec.js",
+    "coverage": "nyc report --reporter=text-lcov | coveralls"
   },
   "files": [
     "*/Consumer*.js",
