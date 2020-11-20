@@ -1,4 +1,5 @@
-[![Build Status](https://travis-ci.org/albe/node-event-storage.svg?branch=master)](https://travis-ci.org/albe/node-event-storage) [![npm version](https://badge.fury.io/js/event-storage.svg)](https://badge.fury.io/js/event-storage)
+[![build](https://github.com/albe/node-event-storage/workflows/build/badge.svg)](https://github.com/albe/node-event-storage/actions?query=workflow%3A%22Node.js+CI%22)
+[![npm version](https://badge.fury.io/js/event-storage.svg)](https://badge.fury.io/js/event-storage)
 [![Code Climate](https://codeclimate.com/github/albe/node-event-storage/badges/gpa.svg)](https://codeclimate.com/github/albe/node-event-storage)
 [![Coverage Status](https://coveralls.io/repos/github/albe/node-event-storage/badge.svg?branch=master)](https://coveralls.io/github/albe/node-event-storage?branch=master)
 [![Code documentation](https://inch-ci.org/github/albe/node-event-storage.svg?branch=master)](https://inch-ci.org/github/albe/node-event-storage)
