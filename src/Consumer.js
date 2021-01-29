@@ -8,6 +8,21 @@ const Storage = require('./Storage/ReadableStorage');
 const MAX_CATCHUP_BATCH = 10;
 
 /**
+ * Safely unlink a file and ignore if it doesn't exist.
+ * @param {string} filename
+ */
+const safeUnlink = (filename) => {
+    /* istanbul ignore next */
+    try {
+        fs.unlinkSync(filename);
+    } catch (e) {
+        if (e.code !== "ENOENT") {
+            throw e;
+        }
+    }
+};
+
+/**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
  */
 class Consumer extends stream.Readable {
@@ -61,7 +76,7 @@ class Consumer extends stream.Readable {
         const files = fs.readdirSync(consumerDirectory);
         for (let file of files) {
             if (file.startsWith(consumerNamePrefix)) {
-                fs.unlinkSync(path.join(consumerDirectory, file));
+                safeUnlink(path.join(consumerDirectory, file));
             }
         }
     }
@@ -169,10 +184,7 @@ class Consumer extends stream.Readable {
                 this.emit('persisted');
             } catch (e) {
                 /* istanbul ignore next */
-                try {
-                    fs.unlinkSync(tmpFile);
-                } catch (e) {
-                }
+                safeUnlink(tmpFile);
             }
         });
     }
