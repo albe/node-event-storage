@@ -254,13 +254,18 @@ class Consumer extends stream.Readable {
     /**
      * Reset this projection to restart processing all documents again.
      * NOTE: This will overwrite the current state of the projection and hence be destructive.
+     * @param {object} [initialState] The initial state of the consumer.
      * @param {number} [startFrom] The revision to start from within the index to consume.
      * @api
      */
-    reset(startFrom = 0) {
+    reset(initialState = {}, startFrom = 0) {
+        if (typeof initialState === 'number') {
+            startFrom = initialState;
+            initialState = {};
+        }
         const restart = this.consuming;
         this.stop();
-        this.state = Object.freeze({});
+        this.state = Object.freeze(initialState);
         this.position = startFrom;
         this.persist();
         if (restart) {

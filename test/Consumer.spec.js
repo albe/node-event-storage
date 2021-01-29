@@ -310,6 +310,22 @@ describe('Consumer', function() {
         consumer.start();
     });
 
+    it('can be reset with new initialState and reprocesses all events', function(done) {
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        consumer.once('caught-up', () => {
+            consumer.once('caught-up', () => {
+                expect(consumer.state.foo).to.be(4);
+                done();
+            });
+            expect(consumer.state.foo).to.be(3);
+            consumer.reset({ foo: 1 });
+        });
+        consumer.on('data', document => consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id })));
+    });
+
     it('can build consistency guards (aggregates)', function(done) {
         const guard = new Consumer(storage, 'foobar', 'unique-bar-guard');
         guard.apply = function(event) {
