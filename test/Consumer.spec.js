@@ -264,6 +264,21 @@ describe('Consumer', function() {
         expect(() => consumer.setState({ foo: 'bar' })).to.throwError();
     });
 
+    it('will persist multiple setState calls only once', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.on('data', () => {
+            consumer.setState({ foo: 1 });
+            consumer.setState({ foo: 1, bar: 2 });
+            consumer.once('persisted', () => {
+                expect(consumer.state.bar).to.be(2);
+                done();
+            });
+            consumer.stop();
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+    });
+
     it('restores state after reopening', function(done) {
         const state = { foo: 0, bar: 'baz' };
         consumer = new Consumer(storage, 'foobar', 'consumer-1');
