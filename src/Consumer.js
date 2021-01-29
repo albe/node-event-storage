@@ -8,7 +8,7 @@ const Storage = require('./Storage/ReadableStorage');
 const MAX_CATCHUP_BATCH = 10;
 
 /**
- * Implements an event-driven durable Consumer that provides at-least-once delivery semantics.
+ * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
  */
 class Consumer extends stream.Readable {
 
@@ -16,9 +16,10 @@ class Consumer extends stream.Readable {
      * @param {Storage} storage The storage to create the consumer for.
      * @param {string} indexName The name of the index to consume.
      * @param {string} identifier The unique name to identify this consumer.
+     * @param {object} [initialState] The initial state of the consumer.
      * @param {number} [startFrom] The revision to start from within the index to consume.
      */
-    constructor(storage, indexName, identifier, startFrom = 0) {
+    constructor(storage, indexName, identifier, initialState = {}, startFrom = 0) {
         super({ objectMode: true });
 
         assert(storage instanceof Storage, 'Must provide a storage for the consumer.');
@@ -26,7 +27,7 @@ class Consumer extends stream.Readable {
         assert(typeof identifier === 'string' && identifier !== '', 'Must specify an identifier name for the consumer.');
 
         this.initializeStorage(storage, indexName, identifier);
-        this.restoreState(startFrom);
+        this.restoreState(initialState, startFrom);
         this.handler = this.handleNewDocument.bind(this);
         this.on('error', () => (this.handleDocument = false));
     }
@@ -67,12 +68,17 @@ class Consumer extends stream.Readable {
 
     /**
      * @private
+     * @param {object} initialState The initial state if no persisted state exists.
      * @param {number} startFrom The revision to start from within the index to consume.
      */
-    restoreState(startFrom) {
+    restoreState(initialState, startFrom) {
         /* istanbul ignore if */
         if (!this.fileName) {
             return;
+        }
+        if (typeof initialState === 'number') {
+            startFrom = initialState;
+            initialState = {};
         }
         try {
             const consumerData = fs.readFileSync(this.fileName);
@@ -80,8 +86,9 @@ class Consumer extends stream.Readable {
             this.state = JSON.parse(consumerData.toString('utf8', 4));
         } catch (e) {
             this.position = startFrom;
-            this.state = {};
+            this.state = initialState;
         }
+        Object.freeze(this.state);
 
         this.persisting = null;
         this.consuming = false;
@@ -91,13 +98,18 @@ class Consumer extends stream.Readable {
      * Update the state of this consumer transactionally with the position.
      * May only be called from within the document handling callback.
      *
-     * @param {object} newState
+     * @param {object|function(object):object} newState
+     * @param {boolean} [persist] Set to false if this state update should not be persisted yet
      * @api
      */
-    setState(newState) {
+    setState(newState, persist = true) {
         assert(this.handleDocument, 'Called setState outside of document handler!');
 
+        if (typeof newState === 'function') {
+            newState = newState(this.state);
+        }
         this.state = Object.freeze(newState);
+        this.doPersist = persist;
     }
 
     /**
@@ -123,7 +135,9 @@ class Consumer extends stream.Readable {
             this.stop();
         }
         this.position = position;
-        this.persist();
+        if (this.doPersist) {
+            this.persist();
+        }
     }
 
     /**
@@ -235,6 +249,23 @@ class Consumer extends stream.Readable {
         this.storage.removeListener('index-add', this.handler);
         this.consuming = false;
         this.handleDocument = false;
+    }
+
+    /**
+     * Reset this projection to restart processing all documents again.
+     * NOTE: This will overwrite the current state of the projection and hence be destructive.
+     * @param {number} [startFrom] The revision to start from within the index to consume.
+     * @api
+     */
+    reset(startFrom = 0) {
+        const restart = this.consuming;
+        this.stop();
+        this.state = Object.freeze({});
+        this.position = startFrom;
+        this.persist();
+        if (restart) {
+            this.start();
+        }
     }
 
     /**

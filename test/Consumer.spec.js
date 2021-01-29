@@ -60,6 +60,23 @@ describe('Consumer', function() {
         consumer.start();
     });
 
+    it('can start with some initial state', function(done){
+        consumer = new Consumer(storage, 'foobar', 'consumer1', { foos: 0, lastId: 0 });
+        expect(consumer.state.foos).to.be(0);
+        expect(consumer.state.lastId).to.be(0);
+        storage.write({ type: 'Foobar', id: 2 });
+        consumer.on('caught-up', () => {
+            expect(consumer.state.foos).to.be(1);
+            expect(consumer.state.lastId).to.be(2);
+            done();
+        });
+        consumer.on('data', document => {
+            if (document.type === 'Foobar') {
+                consumer.setState({foos: consumer.state.foos + 1, lastId: document.id});
+            }
+        });
+    });
+
     it('continues emitting data after catching up', function(done){
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();
@@ -181,7 +198,6 @@ describe('Consumer', function() {
     it('will automatically start consuming when registering data listener', function(done){
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         let expected = 0;
-        //consumer.stop();
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 }, () => {
@@ -263,6 +279,35 @@ describe('Consumer', function() {
         });
 
         storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('allows function argument in setState', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.on('data', (document) => {
+            consumer.setState(state => ({...state, foo: (state.foo || 0) + 1, lastId: document.id}));
+            consumer.once('persisted', () => {
+                expect(consumer.state.foo).to.be(1);
+                done();
+            });
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('can be reset and reprocesses all events', function(done) {
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.once('caught-up', () => {
+            consumer.once('caught-up', () => {
+                expect(consumer.position).to.be(3);
+                done();
+            });
+            consumer.reset();
+            expect(consumer.position).to.be(0);
+        });
+        consumer.start();
     });
 
 });
