@@ -310,4 +310,25 @@ describe('Consumer', function() {
         consumer.start();
     });
 
+    it('can build consistency guards (aggregates)', function(done) {
+        const guard = new Consumer(storage, 'foobar', 'unique-bar-guard');
+        guard.apply = function(event) {
+            this.setState(state => ({ ...state, ...event }));
+        };
+        guard.handle = function(command) {
+            if (this.state.foo === 'bar') {
+                throw new Error('There was already a bar!');
+            }
+            return {type: 'Foobar', foo: command.foo};
+        };
+        guard.on('data', guard.apply);
+
+        storage.write(guard.handle({ foo: 'bar' }));
+
+        guard.on('persisted', () => {
+            expect(() => storage.write(guard.handle({foo: 'bar'}))).to.throwError(/already a bar/);
+            done();
+        });
+    });
+
 });
