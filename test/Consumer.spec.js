@@ -326,6 +326,48 @@ describe('Consumer', function() {
         consumer.on('data', document => consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id })));
     });
 
+    it('persists state on every setState by default', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        let expected = 0;
+        consumer.on('data', document => {
+            consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id }));
+        });
+        consumer.on('persisted', () => {
+            expect(consumer.state.lastId).to.be(++expected);
+            if (consumer.state.lastId === 3) {
+                done();
+            } else {
+                storage.write({type: 'Foobar', id: consumer.state.lastId + 1});
+            }
+        });
+        consumer.on('caught-up', () => {
+            storage.write({ type: 'Foobar', id: 1 });
+        });
+    });
+
+    it('allows to skip state persistence', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        consumer.on('data', document => {
+            consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id }), false);
+            if (document.id === 3) {
+                expect(consumer.state.foo).to.be(3);
+                consumer.stop();
+
+                setTimeout(() => {
+                    const consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+                    expect(consumer.state.foo).to.be(0);
+                    done();
+                }, 1);
+            }
+        });
+        consumer.on('caught-up', () => {
+            consumer.on('persisted', () => { throw new Error('Invoked persistence!'); });
+            storage.write({ type: 'Foobar', id: 1 });
+            storage.write({ type: 'Foobar', id: 2 });
+            storage.write({ type: 'Foobar', id: 3 });
+        });
+    });
+
     it('can build consistency guards (aggregates)', function(done) {
         const guard = new Consumer(storage, 'foobar', 'unique-bar-guard');
         guard.apply = function(event) {
