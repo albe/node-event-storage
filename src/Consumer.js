@@ -125,6 +125,7 @@ class Consumer extends stream.Readable {
             return;
         }
 
+        /* istanbul ignore if */
         if (this.position !== position - 1) {
             return;
         }
