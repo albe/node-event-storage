@@ -374,6 +374,21 @@ describe('Consumer', function() {
         });
     });
 
+    it('will not restart if stopped before reset', function(done) {
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.once('caught-up', () => {
+            consumer.stop();
+            expect(consumer.isPaused()).to.be(true);
+            consumer.reset();
+            expect(consumer.isPaused()).to.be(true);
+            done();
+        });
+        consumer.start();
+    });
+
     it('persists state on every setState by default', function(done) {
         consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
         let expected = 0;
