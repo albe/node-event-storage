@@ -168,7 +168,10 @@ class Consumer extends stream.Readable {
                 this.emit('persisted');
             } catch (e) {
                 /* istanbul ignore next */
-                fs.unlinkSync(tmpFile);
+                try {
+                    fs.unlinkSync(tmpFile);
+                } catch (e) {
+                }
             }
         });
     }
