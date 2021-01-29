@@ -326,6 +326,22 @@ describe('Consumer', function() {
         consumer.on('data', document => consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id })));
     });
 
+    it('can be reset with new starting point and reprocesses all events', function(done) {
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.once('caught-up', () => {
+            consumer.once('caught-up', () => {
+                expect(consumer.position).to.be(3);
+                done();
+            });
+            consumer.reset(2);
+            expect(consumer.position).to.be(2);
+        });
+        consumer.start();
+    });
+
     it('persists state on every setState by default', function(done) {
         consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
         let expected = 0;
