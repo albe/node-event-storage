@@ -60,6 +60,23 @@ describe('Consumer', function() {
         consumer.start();
     });
 
+    it('can start with some initial state', function(done){
+        consumer = new Consumer(storage, 'foobar', 'consumer1', { foos: 0, lastId: 0 });
+        expect(consumer.state.foos).to.be(0);
+        expect(consumer.state.lastId).to.be(0);
+        storage.write({ type: 'Foobar', id: 2 });
+        consumer.on('caught-up', () => {
+            expect(consumer.state.foos).to.be(1);
+            expect(consumer.state.lastId).to.be(2);
+            done();
+        });
+        consumer.on('data', document => {
+            if (document.type === 'Foobar') {
+                consumer.setState({foos: consumer.state.foos + 1, lastId: document.id});
+            }
+        });
+    });
+
     it('continues emitting data after catching up', function(done){
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();
@@ -181,7 +198,6 @@ describe('Consumer', function() {
     it('will automatically start consuming when registering data listener', function(done){
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         let expected = 0;
-        //consumer.stop();
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 }, () => {
@@ -248,6 +264,21 @@ describe('Consumer', function() {
         expect(() => consumer.setState({ foo: 'bar' })).to.throwError();
     });
 
+    it('will persist multiple setState calls only once', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.on('data', () => {
+            consumer.setState({ foo: 1 });
+            consumer.setState({ foo: 1, bar: 2 });
+            consumer.once('persisted', () => {
+                expect(consumer.state.bar).to.be(2);
+                done();
+            });
+            consumer.stop();
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+    });
+
     it('restores state after reopening', function(done) {
         const state = { foo: 0, bar: 'baz' };
         consumer = new Consumer(storage, 'foobar', 'consumer-1');
@@ -263,6 +294,162 @@ describe('Consumer', function() {
         });
 
         storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('allows function argument in setState', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.on('data', (document) => {
+            consumer.setState(state => ({...state, foo: (state.foo || 0) + 1, lastId: document.id}));
+            consumer.once('persisted', () => {
+                expect(consumer.state.foo).to.be(1);
+                done();
+            });
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('can be reset and reprocesses all events', function(done) {
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.once('caught-up', () => {
+            consumer.once('caught-up', () => {
+                expect(consumer.position).to.be(3);
+                done();
+            });
+            consumer.reset();
+            expect(consumer.position).to.be(0);
+        });
+        consumer.start();
+    });
+
+    it('can be reset with new initialState and reprocesses all events', function(done) {
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        consumer.once('caught-up', () => {
+            consumer.once('caught-up', () => {
+                expect(consumer.state.foo).to.be(4);
+                done();
+            });
+            expect(consumer.state.foo).to.be(3);
+            consumer.reset({ foo: 1 });
+        });
+        consumer.on('data', document => consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id })));
+    });
+
+    it('can be reset with new starting point and reprocesses all events', function(done) {
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.once('caught-up', () => {
+            consumer.once('caught-up', () => {
+                expect(consumer.position).to.be(3);
+                done();
+            });
+            consumer.reset(2);
+            expect(consumer.position).to.be(2);
+        });
+        consumer.start();
+    });
+
+    it('can be reset while running', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.once('caught-up', () => {
+            storage.write({ type: 'Foobar', id: 1 });
+            storage.write({ type: 'Foobar', id: 2 });
+            storage.write({ type: 'Foobar', id: 3 });
+        });
+        consumer.once('data', () => {
+            consumer.reset();
+            expect(consumer.position).to.be(0);
+            consumer.once('caught-up', () => {
+                expect(consumer.position).to.be(3);
+                done();
+            });
+        });
+    });
+
+    it('will not restart if stopped before reset', function(done) {
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.once('caught-up', () => {
+            consumer.stop();
+            expect(consumer.isPaused()).to.be(true);
+            consumer.reset();
+            expect(consumer.isPaused()).to.be(true);
+            done();
+        });
+        consumer.start();
+    });
+
+    it('persists state on every setState by default', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        let expected = 0;
+        consumer.on('data', document => {
+            consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id }));
+        });
+        consumer.on('persisted', () => {
+            expect(consumer.state.lastId).to.be(++expected);
+            if (consumer.state.lastId === 3) {
+                done();
+            } else {
+                storage.write({type: 'Foobar', id: consumer.state.lastId + 1});
+            }
+        });
+        consumer.on('caught-up', () => {
+            storage.write({ type: 'Foobar', id: 1 });
+        });
+    });
+
+    it('allows to skip state persistence', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        consumer.on('data', document => {
+            consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id }), false);
+            if (document.id === 3) {
+                expect(consumer.state.foo).to.be(3);
+                consumer.stop();
+
+                setTimeout(() => {
+                    const consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+                    expect(consumer.state.foo).to.be(0);
+                    done();
+                }, 1);
+            }
+        });
+        consumer.on('caught-up', () => {
+            consumer.on('persisted', () => { throw new Error('Invoked persistence!'); });
+            storage.write({ type: 'Foobar', id: 1 });
+            storage.write({ type: 'Foobar', id: 2 });
+            storage.write({ type: 'Foobar', id: 3 });
+        });
+    });
+
+    it('can build consistency guards (aggregates)', function(done) {
+        const guard = new Consumer(storage, 'foobar', 'unique-bar-guard');
+        guard.apply = function(event) {
+            this.setState(state => ({ ...state, ...event }));
+        };
+        guard.handle = function(command) {
+            if (this.state.foo === 'bar') {
+                throw new Error('There was already a bar!');
+            }
+            return {type: 'Foobar', foo: command.foo};
+        };
+        guard.on('data', guard.apply);
+
+        storage.write(guard.handle({ foo: 'bar' }));
+
+        guard.on('persisted', () => {
+            expect(() => storage.write(guard.handle({foo: 'bar'}))).to.throwError(/already a bar/);
+            done();
+        });
     });
 
 });

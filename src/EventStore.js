@@ -365,11 +365,13 @@ class EventStore extends EventEmitter {
      *
      * @param {string} streamName The name of the stream to consume.
      * @param {string} identifier The unique identifying name of this consumer.
+     * @param {object} [initialState] The initial state of the consumer.
      * @param {number} [since] The stream revision to start consuming from.
      * @returns {Consumer} A durable consumer for the given stream.
      */
-    getConsumer(streamName, identifier, since = 0) {
-        const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, since);
+    getConsumer(streamName, identifier, initialState = {}, since = 0) {
+        const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, initialState, since);
+        consumer.streamName = streamName;
         return consumer.pipe(new EventUnwrapper());
     }
 
