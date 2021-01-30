@@ -25,6 +25,8 @@ An optimized embedded event store for modern node.js, written in ES6.
     * [Event metadata](#event-metadata)
   * [Consumers](#consumers)
     * [Exactly-once](#exactly-once-semantics)
+    * [Consumer state](#consumer-state)
+    * [Consistency guards (a.k.a. "Aggregates")](#consistency-guards-aka-aggregates)
   * [Read-Only](#read-only)
 - [Implementation details](#implementation-details)
   * [ACID](#acid)
