@@ -357,6 +357,12 @@ check of the commit will prevent the second attempt from persisting those events
 already carry the last known version of the guard that the user made a decision on. Otherwise, the guard's own position makes sure
 that only events directly following the previous state are committed.
 
+**Note**
+> This implementation of a consistency guard already implements snapshotting automatically, which means that restarting the process
+> does not require rebuilding the state from all previous events. If you want to control how often the guard's state is snapshotted,
+> you can specify a second argument to the `setState()` method that should be true when a snapshot should be created and false otherwise,
+> e.g. `this.position % 20 === 0`. Note that this is only needed for very high frequency guards/streams, in order to reduce IO.
+
 ### Read-Only
 
 The `EventStore` can also be opened in a readonly mode since 0.7, by specifying the constructor option `readOnly: true`.
