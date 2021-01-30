@@ -371,6 +371,7 @@ class EventStore extends EventEmitter {
      */
     getConsumer(streamName, identifier, initialState = {}, since = 0) {
         const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, initialState, since);
+        consumer.streamName = streamName;
         return consumer.pipe(new EventUnwrapper());
     }
 

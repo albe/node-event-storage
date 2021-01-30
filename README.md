@@ -291,11 +291,71 @@ Whenever the state has been persisted, the consumer will also emit a `persisted`
 
 **Note**
 > Never mutate the consumers `state` property directly and only use the `setState` method **inside** the `data` handler.
+> Since version 0.8 mutating is prevented by freezing the state object.
 
 The reason why this works is, that conceptually the state update and the position update happens within a single
 transaction. So anything you can wrap inside a transaction with storing the position yields exactly-once semantics.
 However, for example sending an email exactly once for every event is not achievable with this, because you can't
 wrap a transaction around sending an e-mail and persisting the consumer position in a local file easily.
+
+#### Consumer state
+
+Since version 0.8 a consumer can set an initial state and update it's state via a function that receives the current state as argument.
+That way it becomes much easier to write reusable state calculation functions.
+
+```javascript
+const myConsumer = eventstore.getConsumer('my-stream', 'my-stream-consumer1', { someValue: 0, someOtherValue: true });
+myConsumer.on('data', event => {
+    myConsumer.setState(state => ({ ...state, someValue: state.someValue + event.someValueDiff }));
+});
+```
+
+Also, since that version the consumer can be reset, to force it to reprocess all (or a subset) of the events.
+
+```javascript
+myConsumer.reset({ someValue: 1 }, 10);
+```
+This will restart the consumer with an inital state of `someValue = 1` and reprocess starting from position 10 in the stream.
+
+#### Consistency guards (a.k.a. "Aggregates")
+
+Consistency guards, or more famously yet misleadingly called "Aggregates" in event sourcing can be built with the semantics
+that a `Consumer` provides.
+One example for the code is shown here:
+
+```javascript
+const myConsistencyGuard = eventstore.getConsumer('my-guard-stream', 'my-guard-uuid');
+// The guard's apply event method, which will update the internal state. Since the consumer is running in the same process
+// as the writing eventstore, this is effectively synchronous (invoked on next node event loop).
+// This should only contain the data necessary to make the decisions in validateCommand()
+myConsistencyGuard.apply = function(event) {
+    this.setState(state => ({ ...state, someValue: calculateNewValue(state.someValue, event) }));
+};
+// You could also just use a lambda here, but the apply/handle separation is a well known paradigm when building "Aggregates"
+myConsistencyGuard.on('data', myConsistencyGuard.apply);
+// The command handling method that builds new events (this makes the guard easily testable).
+// This contains (only) your business rules fulfilling some (hard) constraints. It only returns the events
+// that should be emitted from handling the command.
+myConsistencyGuard.handle = function(command) {
+    // Should throw an Error if the command is rejected based on the current state
+    validateCommand(command, this.state);
+    return [new MyDomainEvent(command), ...];
+};
+
+// This is probably a HTTP handler method like express' app.post('my/guard/uri', ...) or invoked from there
+function myCommandHandler(command) {
+    // Notice how the guard just becomes some arbitrary event emitter - in a lot of cases you don't need a guard at all, e.g. if you only do Event = CommandHappened
+    eventstore.commit(myConsistencyGuard.streamName, myConsistencyGuard.handle(command), command.position || myConsistencyGuard.position);
+}
+```
+
+So how does this work? First, the guard is basically a consumer of its own stream. Since a consumer provides
+[exactly-once](#exactly-once-semantics) processing guarantees when using `setState()`, we are always sure that the guard's state exactly reflects
+the state after processing all events once. Therefore, the handle method can safely make decisions based on that assumption
+and reject commands that do not fit the current state of the guard. If two requests come in in parallel, the optimistic concurrency
+check of the commit will prevent the second attempt from persisting those events. For multi-user handling, the command should
+already carry the last known version of the guard that the user made a decision on. Otherwise, the guard's own position makes sure
+that only events directly following the previous state are committed.
 
 ### Read-Only
 
