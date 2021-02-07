@@ -1,5 +1,6 @@
 const expect = require('expect.js');
 const fs = require('fs-extra');
+const path = require('path');
 const EventStore = require('../src/EventStore');
 
 const storageDirectory = __dirname + '/data';
@@ -34,6 +35,17 @@ describe('EventStore', function() {
                 }
                 done();
             });
+        });
+    });
+
+    it('can be created with custom name', function(done) {
+        eventstore = new EventStore('custom-store', {
+            storageDirectory
+        });
+
+        eventstore.commit('foo-bar', [{ type: 'foo'}], () => {
+            expect(fs.existsSync(path.join(storageDirectory, 'custom-store.foo-bar'))).to.be(true);
+            done();
         });
     });
 
@@ -337,6 +349,26 @@ describe('EventStore', function() {
         });
 
         it('needs to be tested further.');
+    });
+
+    describe('getAllEvents', function() {
+
+        it('returns stream for all events', function (done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            eventstore.on('ready', () => {
+                const stream = eventstore.getAllEvents();
+                expect(stream.events.length).to.be(20);
+                done();
+            });
+        });
+
     });
 
     describe('fromStreams', function() {

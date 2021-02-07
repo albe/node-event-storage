@@ -55,7 +55,7 @@ class EventStore extends events.EventEmitter {
             storeName = 'eventstore';
         }
 
-        this.storageDirectory = path.resolve(config.storageDirectory || './data');
+        this.storageDirectory = path.resolve(config.storageDirectory || /* istanbul ignore next */ './data');
         let defaults = {
             dataDirectory: this.storageDirectory,
             indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
