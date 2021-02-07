@@ -207,6 +207,7 @@ class WritableStorage extends ReadableStorage {
      * @param {function(document): IndexDefinition} indexer The indexer function, which returns an object containing the index name and matcher or null if the document should not be indexed. Alternatively the index name may be null.
      */
     addIndexer(indexer) {
+        /* istanbul ignore else */
         if (typeof indexer === 'function') {
             this.indexers.push(indexer);
         }
