@@ -57,6 +57,7 @@ class WritableStorage extends ReadableStorage {
         }
         super(storageName, config);
         this.partitioner = config.partitioner;
+        this.indexers = [];
     }
 
     /**
@@ -188,6 +189,7 @@ class WritableStorage extends ReadableStorage {
         assert(position !== false, 'Error writing document.');
 
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
+        this.runIndexers(document);
         this.forEachSecondaryIndex((index, name) => {
             if (!index.isOpen()) {
                 index.open();
@@ -200,16 +202,27 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * Add an indexer, which will be invoked for every document and ensures an index exists with the returned name and matcher.
+     * @param {function(document): {name:string, matcher:object|function}|null} indexer The indexer function, which returns an object containing the index name and matcher.
+     */
+    addIndexer(indexer) {
+        if (typeof indexer === 'function') {
+            this.indexers.push(indexer);
+        }
+    }
+
+    /**
      * Ensure that an index with the given name and document matcher exists.
      * Will create the index if it doesn't exist, otherwise return the existing index.
      *
      * @api
      * @param {string} name The index name.
      * @param {object|function} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
-     * @returns {ReadableIndex} The index containing all documents that match the query.
+     * @param {boolean} [updateIndex] If set to false the index will not be matched against all existing documents.
+     * @returns {ReadableIndex|WritableIndex} The index containing all documents that match the query.
      * @throws {Error} if the index doesn't exist yet and no matcher was specified.
      */
-    ensureIndex(name, matcher) {
+    ensureIndex(name, matcher, updateIndex = true) {
         if (name in this.secondaryIndexes) {
             return this.secondaryIndexes[name].index;
         }
@@ -223,6 +236,24 @@ class WritableStorage extends ReadableStorage {
 
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
         const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
+        if (updateIndex) {
+            this.updateIndex(index, matcher);
+        }
+
+        this.secondaryIndexes[name] = { index, matcher };
+        this.emit('index-created', name);
+        return index;
+    }
+
+    /**
+     * Run the given matcher through all existing documents and add them to the index on match.
+     * If an error occurs during indexing, the index will be destroyed.
+     *
+     * @private
+     * @param {WritableIndex} index
+     * @param {object|function} matcher
+     */
+    updateIndex(index, matcher) {
         try {
             this.forEachDocument((document, indexEntry) => {
                 if (matches(document, matcher)) {
@@ -233,10 +264,6 @@ class WritableStorage extends ReadableStorage {
             index.destroy();
             throw e;
         }
-
-        this.secondaryIndexes[name] = { index, matcher };
-        this.emit('index-created', name);
-        return index;
     }
 
     /**
@@ -270,6 +297,23 @@ class WritableStorage extends ReadableStorage {
             if (partitions.length === numPartitions) {
                 break;
             }
+        }
+    }
+
+    /**
+     * Run all indexers against the given document and ensure according indexes.
+     * Note: This will not cause newly created indexes to index all existing documents.
+     *
+     * @private
+     * @param {object} document
+     */
+    runIndexers(document) {
+        for (let indexer of this.indexers) {
+            const index = indexer(document);
+            if (!index || !index.name) {
+                continue;
+            }
+            this.ensureIndex(index.name, index.matcher, false);
         }
     }
 

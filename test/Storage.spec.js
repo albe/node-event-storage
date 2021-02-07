@@ -121,6 +121,27 @@ describe('Storage', function() {
             expect(index.isOpen()).to.be(true);
         });
 
+        it('invokes indexers and correctly indexes documents', function() {
+            const sampleIndexer = (document) => {
+                const name = 'type-' + document.type;
+                const matcher = { type: document.type };
+                return {name, matcher};
+            };
+            storage = createStorage();
+            storage.addIndexer(sampleIndexer);
+
+            expect(() => storage.openIndex('type-bar')).to.throwError();
+            expect(() => storage.openIndex('type-foo')).to.throwError();
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ type: (i % 3) ? 'bar' : 'foo', id: i });
+            }
+            const barIndex = storage.openIndex('type-bar');
+            const fooIndex = storage.openIndex('type-foo');
+
+            expect(barIndex.length).to.be(7);
+            expect(fooIndex.length).to.be(3);
+        });
+
     });
 
     describe('length', function() {
