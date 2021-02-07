@@ -319,7 +319,7 @@ class ReadableIndex extends events.EventEmitter {
      */
     get(index) {
         index = wrapAndCheck(index, this.length);
-        if (Number.isNaN(index)) {
+        if (index <= 0) {
             return false;
         }
 
@@ -357,7 +357,7 @@ class ReadableIndex extends events.EventEmitter {
         from = wrapAndCheck(from, this.length);
         until = wrapAndCheck(until, this.length);
 
-        if (Number.isNaN(from) || until < from) {
+        if (from <= 0 || until < from) {
             return false;
         }
 
