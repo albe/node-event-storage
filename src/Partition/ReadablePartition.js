@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const { assert } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
@@ -40,7 +40,7 @@ function hash(str) {
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
  * In the case of an event store, this is most likely the (write) streams.
  */
-class ReadablePartition extends EventEmitter {
+class ReadablePartition extends events.EventEmitter {
 
     /**
      * Get the id for a specific partition name.
@@ -165,7 +165,7 @@ class ReadablePartition extends EventEmitter {
     }
 
     /**
-     * @private
+     * @protected
      * @returns {number} The file size not including the file header.
      */
     readFileSize() {
@@ -292,7 +292,7 @@ class ReadablePartition extends EventEmitter {
 
     /**
      * @api
-     * @returns {Generator} A generator that returns all documents in this partition.
+     * @returns {Generator<string>} A generator that returns all documents in this partition.
      */
     *readAll() {
         let position = 0;

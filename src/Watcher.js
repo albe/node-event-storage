@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const { assert } = require('./util');
 
 const directoryWatchers = {};
@@ -9,7 +9,7 @@ const directoryWatchers = {};
  * A reference counting singleton nodejs watcher for directories.
  * Emits events 'change' and 'rename' with the file name as argument.
  */
-class DirectoryWatcher extends EventEmitter {
+class DirectoryWatcher extends events.EventEmitter {
 
     /**
      * @param {string} directory
@@ -126,7 +126,7 @@ class Watcher {
      * @api
      */
     close() {
-        if (!(this.watcher instanceof EventEmitter)) {
+        if (!(this.watcher instanceof events.EventEmitter)) {
             return;
         }
         this.watcher.removeListener('change', this.onChange);

@@ -171,7 +171,7 @@ class Consumer extends stream.Readable {
             const consumerData = Buffer.allocUnsafe(4 + consumerState.length);
             consumerData.writeInt32LE(this.position, 0);
             consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
-            var tmpFile = this.fileName + '.' + this.position;
+            const tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
             /* istanbul ignore if */
             if (fs.existsSync(tmpFile)) {
@@ -289,6 +289,7 @@ class Consumer extends stream.Readable {
         }
     }
 
+    // noinspection JSUnusedGlobalSymbols
     /**
      * Readable stream implementation.
      * @private

@@ -2,7 +2,7 @@ const EventStream = require('./EventStream');
 const JoinEventStream = require('./JoinEventStream');
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const Storage = require('./Storage');
 const Consumer = require('./Consumer');
 const stream = require('stream');
@@ -38,7 +38,7 @@ class EventUnwrapper extends stream.Transform {
  * An event stream is implemented as an iterator over an index on the storage, therefore indexes need to be lightweight
  * and highly performant in read-only mode.
  */
-class EventStore extends EventEmitter {
+class EventStore extends events.EventEmitter {
 
     /**
      * @param {string} [storeName] The name of the store which will be used as storage prefix. Default 'eventstore'.
@@ -149,7 +149,7 @@ class EventStore extends EventEmitter {
      * @private
      * @param {Array<object>|object} events
      * @param {number} [expectedVersion]
-     * @param {object} [metadata]
+     * @param {object|function} [metadata]
      * @param {function} [callback]
      * @returns {{events: Array<object>, metadata: object, callback: function, expectedVersion: number}}
      */

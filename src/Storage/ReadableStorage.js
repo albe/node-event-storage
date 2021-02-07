@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const Partition = require('../Partition');
 const Index = require('../Index');
 const { assert, createHmac, matches, wrapAndCheck, buildMetadataForMatcher } = require('../util');
@@ -23,7 +23,7 @@ function *reverse(iterator) {
  * An append-only storage with highly performant positional range scans.
  * It's highly optimized for an event-store and hence does not support compaction or data-rewrite, nor any querying
  */
-class ReadableStorage extends EventEmitter {
+class ReadableStorage extends events.EventEmitter {
 
     /**
      * @param {string} [storageName] The name of the storage.
