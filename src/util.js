@@ -152,18 +152,18 @@ function binarySearch(number, length, get) {
 /**
  * @param {number} index The 1-based index position to wrap around if < 0 and check against the bounds.
  * @param {number} length The length of the index and upper bound.
- * @returns {number|boolean} The wrapped index or false if index out of bounds.
+ * @returns {number} The wrapped index or NaN if index out of bounds.
  */
 function wrapAndCheck(index, length) {
     if (typeof index !== 'number') {
-        return false;
+        return Number.NaN;
     }
 
     if (index < 0) {
         index += length + 1;
     }
     if (index < 1 || index > length) {
-        return false;
+        return Number.NaN;
     }
     return index;
 }

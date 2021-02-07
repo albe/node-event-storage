@@ -68,7 +68,8 @@ class EventStore extends events.EventEmitter {
         this.storeName = storeName;
         this.storage = this.createStorage(this.storeName, storageConfig);
         this.storage.open();
-        this.streams = { _all: { index: this.storage.index } };
+        this.streams = Object.create(null);
+        this.streams._all = { index: this.storage.index };
 
         this.scanStreams((err) => {
             if (err) {
@@ -112,6 +113,7 @@ class EventStore extends events.EventEmitter {
                 if ((matches = file.match(/(stream-(.*))\.index$/)) !== null) {
                     const streamName = matches[2];
                     const index = this.storage.openIndex(matches[1]);
+                    // deepcode ignore PrototypePollution: streams is a Map
                     this.streams[streamName] = { index };
                     this.emit('stream-available', streamName);
                 }
@@ -373,43 +375,6 @@ class EventStore extends events.EventEmitter {
         const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, initialState, since);
         consumer.streamName = streamName;
         return consumer.pipe(new EventUnwrapper());
-    }
-
-    /**
-     * Get all commits that happened since the given store revision.
-     *
-     * @param {number} [since] The event revision since when to return commits (inclusive). If since is within a commit, the full commit will be returned.
-     * @returns {Generator<object>} A generator of commit objects, each containing the commit metadata and the array of events.
-     */
-    *getCommits(since = 0) {
-        let commit;
-        let eventStream = this.getAllEvents(since);
-        let storedEvent;
-        while ((storedEvent = eventStream.next()) !== false) {
-            const { metadata, stream, payload } = storedEvent;
-
-            if (!commit && metadata.commitVersion > 0) {
-                eventStream = this.getAllEvents(since - metadata.commitVersion);
-                continue;
-            }
-
-            if (!commit || commit.commitId !== metadata.commitId) {
-                if (commit) {
-                    yield commit;
-                }
-                commit = {
-                    commitId: metadata.commitId,
-                    committedAt: metadata.committedAt,
-                    streamName: stream,
-                    streamVersion: metadata.streamVersion,
-                    events: []
-                };
-            }
-            commit.events.push(payload);
-        }
-        if (commit) {
-            yield commit;
-        }
     }
 }
 

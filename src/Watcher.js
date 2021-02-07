@@ -3,7 +3,7 @@ const path = require('path');
 const events = require('events');
 const { assert } = require('./util');
 
-const directoryWatchers = {};
+const directoryWatchers = new Map();
 
 /**
  * A reference counting singleton nodejs watcher for directories.
@@ -20,12 +20,13 @@ class DirectoryWatcher extends events.EventEmitter {
         directory = path.normalize(directory);
         assert(fs.existsSync(directory), 'Can not watch a non-existing directory.');
 
-        if (directoryWatchers[directory]) {
-            directoryWatchers[directory].references++;
-            return directoryWatchers[directory];
+        if (directoryWatchers.has(directory)) {
+            const watcher = directoryWatchers.get(directory);
+            watcher.references++;
+            return watcher;
         }
         super();
-        directoryWatchers[directory] = this;
+        directoryWatchers.set(directory, this);
         this.directory = directory;
         this.watcher = fs.watch(directory, Object.assign({ persistent: false }, options), this.emit.bind(this));
         this.references = 1;
@@ -40,7 +41,7 @@ class DirectoryWatcher extends events.EventEmitter {
         if (this.references === 0 && this.watcher) {
             this.watcher.close();
             this.watcher = null;
-            directoryWatchers[this.directory] = null;
+            directoryWatchers.delete(this.directory);
         }
     }
 

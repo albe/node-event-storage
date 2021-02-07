@@ -250,7 +250,7 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {Entry} The index entry at the given position.
      */
     read(index) {
-        index--;
+        index = Number(index) - 1;
 
         fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
         if (index === this.readUntil + 1) {
@@ -319,7 +319,7 @@ class ReadableIndex extends events.EventEmitter {
      */
     get(index) {
         index = wrapAndCheck(index, this.length);
-        if (index === false) {
+        if (Number.isNaN(index)) {
             return false;
         }
 
@@ -357,7 +357,7 @@ class ReadableIndex extends events.EventEmitter {
         from = wrapAndCheck(from, this.length);
         until = wrapAndCheck(until, this.length);
 
-        if (from === false || until < from) {
+        if (Number.isNaN(from) || until < from) {
             return false;
         }
 
