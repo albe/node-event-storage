@@ -63,10 +63,21 @@ class EventStore extends events.EventEmitter {
             readOnly: config.readOnly || false
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
+        this.initialize(storeName, storageConfig);
+    }
+
+    /**
+     * @private
+     * @param {string} storeName
+     * @param {object} storageConfig
+     */
+    initialize(storeName, storageConfig) {
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
 
         this.storeName = storeName;
-        this.storage = this.createStorage(this.storeName, storageConfig);
+        this.storage = (storageConfig.readOnly === true) ?
+                        new Storage.ReadOnly(storeName, storageConfig)
+                        : new Storage(storeName, storageConfig);
         this.storage.open();
         this.streams = Object.create(null);
         this.streams._all = { index: this.storage.index };
@@ -78,18 +89,6 @@ class EventStore extends events.EventEmitter {
             }
             this.emit('ready');
         });
-    }
-
-    /**
-     * @param {string} name
-     * @param {object} config
-     * @returns {ReadableStorage|WritableStorage}
-     */
-    createStorage(name, config) {
-        if (config.readOnly === true) {
-            return new Storage.ReadOnly(name, config);
-        }
-        return new Storage(name, config);
     }
 
     /**
