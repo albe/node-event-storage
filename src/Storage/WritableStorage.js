@@ -203,7 +203,8 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * Add an indexer, which will be invoked for every document and ensures an index exists with the returned name and matcher.
-     * @param {function(document): {name:string, matcher:object|function}|null} indexer The indexer function, which returns an object containing the index name and matcher.
+     * @typedef {{name:string|null, matcher:object|function}|null} IndexDefinition
+     * @param {function(document): IndexDefinition} indexer The indexer function, which returns an object containing the index name and matcher or null if the document should not be indexed. Alternatively the index name may be null.
      */
     addIndexer(indexer) {
         if (typeof indexer === 'function') {

@@ -129,12 +129,15 @@ describe('Storage', function() {
             };
             storage = createStorage();
             storage.addIndexer(sampleIndexer);
+            storage.addIndexer((document) => null);
+            storage.addIndexer((document) => ({ name: null, matcher: null }));
 
             expect(() => storage.openIndex('type-bar')).to.throwError();
             expect(() => storage.openIndex('type-foo')).to.throwError();
             for (let i = 1; i <= 10; i++) {
                 storage.write({ type: (i % 3) ? 'bar' : 'foo', id: i });
             }
+            expect(Object.keys(storage.secondaryIndexes)).to.eql(['type-bar', 'type-foo']);
             const barIndex = storage.openIndex('type-bar');
             const fooIndex = storage.openIndex('type-foo');
 
