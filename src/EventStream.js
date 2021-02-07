@@ -107,6 +107,7 @@ class EventStream extends stream.Readable {
         return next.done ? false : next.value;
     }
 
+    // noinspection JSUnusedGlobalSymbols
     /**
      * Readable stream implementation.
      * @private

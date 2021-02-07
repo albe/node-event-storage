@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const Entry = require('../IndexEntry');
 const { assert, wrapAndCheck, binarySearch } = require('../util');
 
@@ -31,7 +31,7 @@ function CorruptedIndexErrorFactory(size) {
  *
  * The index basically functions like a simplified LSM list.
  */
-class ReadableIndex extends EventEmitter {
+class ReadableIndex extends events.EventEmitter {
 
     /**
      * @param {string} [name] The name of the file to use for storing the index.
@@ -65,6 +65,7 @@ class ReadableIndex extends EventEmitter {
      * @param {object} options
      */
     initialize(options) {
+        /* @type Array<Entry> */
         this.data = [];
         this.fd = null;
         this.fileMode = 'r';

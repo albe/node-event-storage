@@ -3,9 +3,9 @@ const Watcher = require('./Watcher');
 /**
  * A mixin that provides a file watcher for this.fileName which triggers a method `onChange` on the class, that needs to be implemented.
  *
- * @param {constructor} Base
- * @returns {{new(): {watchFile(): void, close(): void, open(): boolean, stopWatching(): void}, prototype: {watchFile(): void, close(): void, open(): boolean, stopWatching(): void}}}
- * @constructor
+ * @template T
+ * @param {T} Base
+ * @returns {T} An anonymous class that extends Base
  */
 const WatchesFile = Base => class extends Base {
 
