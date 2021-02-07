@@ -241,7 +241,7 @@ class ReadableStorage extends events.EventEmitter {
 
         const readFrom = wrapAndCheck(from, index.length);
         const readUntil = wrapAndCheck(until, index.length);
-        assert(Number.isInteger(readFrom) && Number.isInteger(readUntil), `Range scan error for range ${from} - ${until}.`);
+        assert(readFrom > 0 && readUntil > 0, `Range scan error for range ${from} - ${until}.`);
 
         if (readFrom > readUntil) {
             const batchSize = 10;
