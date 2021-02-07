@@ -1,5 +1,6 @@
 const expect = require('expect.js');
 const fs = require('fs-extra');
+const path = require('path');
 const EventStore = require('../src/EventStore');
 
 const storageDirectory = __dirname + '/data';
@@ -34,6 +35,17 @@ describe('EventStore', function() {
                 }
                 done();
             });
+        });
+    });
+
+    it('can be created with custom name', function(done) {
+        eventstore = new EventStore('custom-store', {
+            storageDirectory
+        });
+
+        eventstore.commit('foo-bar', [{ type: 'foo'}], () => {
+            expect(fs.existsSync(path.join(storageDirectory, 'custom-store.foo-bar'))).to.be(true);
+            done();
         });
     });
 
@@ -339,6 +351,26 @@ describe('EventStore', function() {
         it('needs to be tested further.');
     });
 
+    describe('getAllEvents', function() {
+
+        it('returns stream for all events', function (done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            eventstore.on('ready', () => {
+                const stream = eventstore.getAllEvents();
+                expect(stream.events.length).to.be(20);
+                done();
+            });
+        });
+
+    });
+
     describe('fromStreams', function() {
 
         it('throws when not specifying a join stream name', function() {
@@ -522,97 +554,6 @@ describe('EventStore', function() {
             eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
                 eventstore.deleteEventStream('bar');
                 expect(eventstore.getEventStream('foo-bar')).to.not.be(false);
-                done();
-            });
-        });
-
-    });
-
-    describe('getCommits', function() {
-
-        function commitAll(streamName, commits, callback) {
-            for (let i = 0; i < commits.length; i++) {
-                eventstore.commit(streamName, commits[i], i === commits.length - 1 ? callback : undefined);
-            }
-        }
-
-        it('returns empty iterator if no commits in store', function() {
-            eventstore = new EventStore({
-                storageDirectory
-            });
-
-            const commits = eventstore.getCommits(0);
-            expect(commits.next()).to.eql({ value: undefined, done: true });
-        });
-
-        it('returns a list of all commits', function(done) {
-            eventstore = new EventStore({
-                storageDirectory
-            });
-            const events = [
-                [{ foo: 1 }, { foo: 2 }],
-                [{ bar: 1 }],
-                [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
-            ];
-            commitAll('foo-bar', events, () => {
-                const commits = eventstore.getCommits(0);
-                let streamVersion = 0;
-                let commitNumber = 0;
-                for (let commit of commits) {
-                    expect(commit.streamName).to.be('foo-bar');
-                    expect(commit.streamVersion).to.be(streamVersion);
-                    expect(commit.events).to.eql(events[commitNumber++]);
-                    streamVersion += commit.events.length;
-                }
-                expect(commitNumber).to.be(3);
-                done();
-            });
-        });
-
-        it('returns only commits after the given revision', function(done) {
-            eventstore = new EventStore({
-                storageDirectory
-            });
-            const events = [
-                [{ foo: 1 }, { foo: 2 }],
-                [{ bar: 1 }],
-                [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
-            ];
-            commitAll('foo-bar', events, () => {
-                const commits = eventstore.getCommits(4);
-                let streamVersion = 3;
-                let commitNumber = 2;
-                for (let commit of commits) {
-                    expect(commit.streamName).to.be('foo-bar');
-                    expect(commit.streamVersion).to.be(streamVersion);
-                    expect(commit.events).to.eql(events[commitNumber++]);
-                    streamVersion += commit.events.length;
-                }
-                expect(commitNumber).to.be(3);
-                done();
-            });
-        });
-
-        it('returns the full commit if given revision is within a single commit', function(done) {
-            eventstore = new EventStore({
-                storageDirectory
-            });
-            const events = [
-                [{ foo: 1 }, { foo: 2 }],
-                [{ bar: 1 }],
-                [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
-            ];
-            commitAll('foo-bar', events, () => {
-                const commits = eventstore.getCommits(5);
-                let streamVersion = 3;
-                let commitNumber = 2;
-                for (let commit of commits) {
-                    expect(commit.streamName).to.be('foo-bar');
-                    expect(commit.streamVersion).to.be(streamVersion);
-                    expect(commit.events).to.eql(events[commitNumber++]);
-                    streamVersion += commit.events.length;
-                }
-                expect(commitNumber).to.be(3);
                 done();
             });
         });

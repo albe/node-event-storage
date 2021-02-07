@@ -62,7 +62,7 @@ class Consumer extends stream.Readable {
         if (!fs.existsSync(consumerDirectory)) {
             mkdirpSync(consumerDirectory);
         } else {
-            this.cleanUpFailedWrites(consumerDirectory);
+            this.cleanUpFailedWrites();
         }
     }
 
