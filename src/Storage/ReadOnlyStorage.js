@@ -13,6 +13,8 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     constructor(storageName = 'storage', config = {}) {
         super(storageName, config);
+        this.storageFilesFilter = this.storageFilesFilter.bind(this);
+        this.onStorageFileChanged = this.onStorageFileChanged.bind(this);
     }
 
     /**
@@ -33,8 +35,12 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     open() {
         if (!this.watcher) {
-            this.watcher = new Watcher(this.dataDirectory, this.storageFilesFilter.bind(this));
-            this.watcher.on('rename', this.onStorageFileChanged.bind(this));
+            this.watcher = new Watcher(this.dataDirectory, this.storageFilesFilter);
+            this.watcher.on('rename', this.onStorageFileChanged);
+        }
+        if (this.dataDirectory !== this.indexDirectory && !this.indexWatcher) {
+            this.indexWatcher = new Watcher(this.indexDirectory, this.storageFilesFilter);
+            this.indexWatcher.on('rename', this.onStorageFileChanged);
         }
         return super.open();
     }
@@ -45,8 +51,9 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     onStorageFileChanged(filename) {
         if (filename.substr(-6) === '.index') {
+            const indexName = filename.substr(this.storageFile.length + 1, filename.length - this.storageFile.length - 7);
             // New indexes are not automatically opened in the reader
-            this.emit('index-created', filename);
+            this.emit('index-created', indexName);
             return;
         }
 
@@ -69,6 +76,10 @@ class ReadOnlyStorage extends ReadableStorage {
         if (this.watcher) {
             this.watcher.close();
             this.watcher = null;
+        }
+        if (this.indexWatcher) {
+            this.indexWatcher.close();
+            this.indexWatcher = null;
         }
         super.close();
     }
