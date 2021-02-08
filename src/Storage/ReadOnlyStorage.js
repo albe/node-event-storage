@@ -35,12 +35,8 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     open() {
         if (!this.watcher) {
-            this.watcher = new Watcher(this.dataDirectory, this.storageFilesFilter);
+            this.watcher = new Watcher([this.dataDirectory, this.indexDirectory], this.storageFilesFilter);
             this.watcher.on('rename', this.onStorageFileChanged);
-        }
-        if (this.dataDirectory !== this.indexDirectory && !this.indexWatcher) {
-            this.indexWatcher = new Watcher(this.indexDirectory, this.storageFilesFilter);
-            this.indexWatcher.on('rename', this.onStorageFileChanged);
         }
         return super.open();
     }
@@ -76,10 +72,6 @@ class ReadOnlyStorage extends ReadableStorage {
         if (this.watcher) {
             this.watcher.close();
             this.watcher = null;
-        }
-        if (this.indexWatcher) {
-            this.indexWatcher.close();
-            this.indexWatcher = null;
         }
         super.close();
     }
