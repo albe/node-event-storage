@@ -867,7 +867,24 @@ describe('Storage', function() {
             let reader = createReader();
             reader.open();
             reader.on('index-created', (name) => {
-                expect(name.substr(-9, 3)).to.be('one');
+                expect(name).to.be('one');
+                expect(reader.secondaryIndexes[name]).to.be(undefined);
+                reader.close();
+                done();
+            });
+
+            storage.ensureIndex('one', doc => doc.type === 'one');
+            storage.flush();
+        });
+
+        it('recognizes new indexes created in different directory by writer', function(done){
+            storage = createStorage({ indexDirectory: dataDirectory + '/indexes', syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader( { indexDirectory: dataDirectory + '/indexes' });
+            reader.open();
+            reader.on('index-created', (name) => {
+                expect(name).to.be('one');
                 expect(reader.secondaryIndexes[name]).to.be(undefined);
                 reader.close();
                 done();
