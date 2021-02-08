@@ -62,12 +62,11 @@ class Watcher {
     constructor(fileOrDirectory, fileFilter = null) {
         let directories;
         if (typeof fileOrDirectory === 'string') {
+            directories = [fileOrDirectory];
             if (!fs.statSync(fileOrDirectory).isDirectory()) {
                 directories = [path.dirname(fileOrDirectory)];
                 const filename = path.basename(fileOrDirectory);
                 fileFilter = changedFilename => changedFilename === filename;
-            } else {
-                directories = [fileOrDirectory];
             }
         } else {
             directories = [...new Set(fileOrDirectory.map(path.normalize))];
