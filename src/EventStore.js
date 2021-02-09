@@ -131,7 +131,7 @@ class EventStore extends events.EventEmitter {
             return;
         }
         const index = this.storage.openIndex('stream-'+streamName);
-        // deepcode ignore PrototypePollution: streams is a Map
+        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index };
         this.emit('stream-available', streamName);
     }
@@ -350,6 +350,7 @@ class EventStore extends events.EventEmitter {
         const index = this.storage.ensureIndex(streamIndexName, matcher);
         assert(index !== null, `Error creating stream index ${streamName}.`);
 
+        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index, matcher };
         this.emit('stream-created', streamName);
         return new EventStream(streamName, this);
