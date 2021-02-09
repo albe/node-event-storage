@@ -119,6 +119,18 @@ class EventStore extends events.EventEmitter {
             }
             callback();
         });
+        this.storage.on('index-created', name => {
+            if (!name.startsWith('stream-')) {
+                return;
+            }
+            const streamName = name.substr(7, name.length - 7);
+            if (streamName in this.streams) {
+                return;
+            }
+            const index = this.storage.openIndex('stream-'+streamName);
+            this.streams[streamName] = { index };
+            this.emit('stream-available', streamName);
+        });
     }
 
     /**
