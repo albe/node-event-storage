@@ -7,17 +7,18 @@ const Clock = require('../Clock');
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
-const DOCUMENT_PAD = ' '.repeat(15) + "\n";
+const DOCUMENT_SEPARATOR = "\x00\x00\x1E\n";
+const DOCUMENT_PAD = ' '.repeat(16 - DOCUMENT_SEPARATOR.length) + DOCUMENT_SEPARATOR;
 
 const NES_EPOCH = new Date('2020-01-01T00:00:00');
 
 /**
  * @param {number} dataSize
- * @returns {string} The data padded to 16 bytes alignment and ended with a line break.
+ * @returns {string} The data padded to 16 bytes alignment and ended with \0x1E (record separator) and a line break.
  */
 function padData(dataSize) {
-    const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 1) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
-    return DOCUMENT_PAD.substr(-padSize - 1);
+    const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
+    return DOCUMENT_PAD.substr(-padSize - DOCUMENT_SEPARATOR.length);
 }
 
 /**
