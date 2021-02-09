@@ -6,9 +6,10 @@ const { assert } = require('../util');
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
+const DOCUMENT_SEPARATOR = "\x00\x00\x1E\n";
 
-// node-event-store partition V02
-const HEADER_MAGIC = "nesprt02";
+// node-event-store partition V03
+const HEADER_MAGIC = "nesprt03";
 
 class CorruptFileError extends Error {}
 class InvalidDataSizeError extends Error {}
@@ -160,8 +161,8 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {number} The size of the data including header, padded to 16 bytes alignment and ended with a line break.
      */
     documentWriteSize(dataSize) {
-        const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 1) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
-        return dataSize + 1 + padSize + DOCUMENT_HEADER_SIZE;
+        const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
+        return dataSize + DOCUMENT_SEPARATOR.length + padSize + DOCUMENT_HEADER_SIZE;
     }
 
     /**
@@ -221,7 +222,8 @@ class ReadablePartition extends events.EventEmitter {
             throw new InvalidDataSizeError(`Invalid document size ${dataSize} at position ${position}, expected ${size}.`);
         }
 
-        if (position + dataSize + DOCUMENT_HEADER_SIZE > this.size) {
+        const writeSize = this.documentWriteSize(dataSize);
+        if (position + writeSize > this.size) {
             throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
         }
 
