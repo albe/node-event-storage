@@ -348,6 +348,29 @@ describe('EventStore', function() {
             }
         });
 
+        it('can open streams created in writer', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            const readstore = new EventStore({
+                storageDirectory,
+                readOnly: true
+            });
+
+            expect(readstore.getStreamVersion('foo')).to.be(-1);
+
+            readstore.on('stream-available', (streamName) => {
+                if (streamName === 'foo') {
+                    expect(readstore.getStreamVersion('foo')).to.be(0);
+                    readstore.close();
+                    done();
+                }
+            });
+
+            eventstore.createEventStream('foo', { type: 'foo' });
+        });
+
         it('needs to be tested further.');
     });
 
