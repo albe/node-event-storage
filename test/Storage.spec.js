@@ -429,6 +429,19 @@ describe('Storage', function() {
             expect(index.length).to.be(1);
         });
 
+        it('indexes documents by property object matcher ignoring undefined properties', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.write({type: 'Bar', other: '1'});
+            storage.write({type: 'Foo', other: '2'});
+            storage.write({type: 'Baz', other: '3'}, () => {
+                let index = storage.ensureIndex('foo', {type: 'Foo', other: undefined});
+
+                expect(index.length).to.be(1);
+                done();
+            });
+        });
+
         it('reopens existing indexes', function() {
             storage = createStorage();
             storage.open();
