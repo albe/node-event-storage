@@ -109,28 +109,31 @@ class EventStore extends events.EventEmitter {
             }
             let matches;
             for (let file of files) {
-                if ((matches = file.match(/(stream-(.*))\.index$/)) !== null) {
-                    const streamName = matches[2];
-                    const index = this.storage.openIndex(matches[1]);
-                    // deepcode ignore PrototypePollution: streams is a Map
-                    this.streams[streamName] = { index };
-                    this.emit('stream-available', streamName);
+                if ((matches = file.match(/(stream-.*)\.index$/)) !== null) {
+                    this.registerStream(matches[1]);
                 }
             }
             callback();
         });
-        this.storage.on('index-created', name => {
-            if (!name.startsWith('stream-')) {
-                return;
-            }
-            const streamName = name.substr(7, name.length - 7);
-            if (streamName in this.streams) {
-                return;
-            }
-            const index = this.storage.openIndex('stream-'+streamName);
-            this.streams[streamName] = { index };
-            this.emit('stream-available', streamName);
-        });
+        this.storage.on('index-created', this.registerStream.bind(this));
+    }
+
+    /**
+     * @private
+     * @param {string} name
+     */
+    registerStream(name) {
+        if (!name.startsWith('stream-')) {
+            return;
+        }
+        const streamName = name.substr(7, name.length - 7);
+        if (streamName in this.streams) {
+            return;
+        }
+        const index = this.storage.openIndex('stream-'+streamName);
+        // deepcode ignore PrototypePollution: streams is a Map
+        this.streams[streamName] = { index };
+        this.emit('stream-available', streamName);
     }
 
     /**
