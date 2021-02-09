@@ -453,6 +453,19 @@ describe('Storage', function() {
             expect(index.length).to.be(1);
         });
 
+        it('indexes documents by property object matcher ignoring undefined properties', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.write({type: 'Bar', other: '1'});
+            storage.write({type: 'Foo', other: '2'});
+            storage.write({type: 'Baz', other: '3'}, () => {
+                let index = storage.ensureIndex('foo', {type: 'Foo', other: undefined});
+
+                expect(index.length).to.be(1);
+                done();
+            });
+        });
+
         it('reopens existing indexes', function() {
             storage = createStorage();
             storage.open();
@@ -891,7 +904,24 @@ describe('Storage', function() {
             let reader = createReader();
             reader.open();
             reader.on('index-created', (name) => {
-                expect(name.substr(-9, 3)).to.be('one');
+                expect(name).to.be('one');
+                expect(reader.secondaryIndexes[name]).to.be(undefined);
+                reader.close();
+                done();
+            });
+
+            storage.ensureIndex('one', doc => doc.type === 'one');
+            storage.flush();
+        });
+
+        it('recognizes new indexes created in different directory by writer', function(done){
+            storage = createStorage({ indexDirectory: dataDirectory + '/indexes', syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader( { indexDirectory: dataDirectory + '/indexes' });
+            reader.open();
+            reader.on('index-created', (name) => {
+                expect(name).to.be('one');
                 expect(reader.secondaryIndexes[name]).to.be(undefined);
                 reader.close();
                 done();

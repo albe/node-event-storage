@@ -52,7 +52,7 @@ function matches(document, matcher) {
             if (!matches(document[prop], matcher[prop])) {
                 return false;
             }
-        } else if (document[prop] !== matcher[prop]) {
+        } else if (typeof matcher[prop] !== 'undefined' && document[prop] !== matcher[prop]) {
             return false;
         }
     }
