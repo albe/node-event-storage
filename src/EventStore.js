@@ -120,13 +120,15 @@ class EventStore extends events.EventEmitter {
 
     /**
      * @private
-     * @param {string} name
+     * @param {string} name The full stream name, including the `stream-` prefix.
      */
     registerStream(name) {
+        /* istanbul ignore if */
         if (!name.startsWith('stream-')) {
             return;
         }
         const streamName = name.substr(7, name.length - 7);
+        /* istanbul ignore if */
         if (streamName in this.streams) {
             return;
         }
