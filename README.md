@@ -142,7 +142,29 @@ let myProjectionStream = eventstore.createStream('my-projection-stream', (event)
 for (let event of myProjectionStream) {
     //...
 }
+
+// This stream will include all events that have a `someProperty` with exactly the value 'equalsThisValue'
+let myPropertyMatchingStream = eventstore.createStream('my-property-stream', { payload: { someProperty: 'equalsThisValue' } });
 ```
+
+For creating streams dynamically depending on the events coming in, since version 0.8 you can define streams functionally.
+
+```javascript
+// Will create a separate stream for every event type that occurs in the system.
+eventstore.createDynamicStream((event) => 'type-' + event.payload.type);
+
+// Will create a separate stream for every event type and use an object matcher
+// instead of executing the mapper for every subsequent event. Use this for optimization
+// if the logic is relatively complex. Hint: this is a bad example!
+eventstore.createDynamicStream((event) => ['type-' + event.payload.type, { payload: { type: event.type } }]);
+```
+
+**NOTE**
+> Defining dynamic streams may lead to a lot of streams being created, which will cost a lot of performance eventually.
+> Make sure to only use this when absolutely needed. For the event type case you might rather iterate all your known
+> types during start-up and create streams for those. If you want to iterate events by some random property, like e.g.
+> correlationId, a sane approach is to only create a stream for each prefix like the first two or three characters, then
+> filter the stream events when iterating.
 
 ### Optimistic concurrency
 

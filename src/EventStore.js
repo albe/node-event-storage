@@ -339,7 +339,7 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string} streamName The name of the stream to create.
-     * @param {object|function(event)} matcher A matcher object, denoting the properties that need to match on an event a function that takes the event and returns true if the event should be added.
+     * @param {object|function(object):boolean} matcher A matcher object, denoting the properties that need to match on an event or a function that takes the event and returns true if the event should be added.
      * @returns {EventStream} The EventStream with all existing events matching the matcher.
      * @throws {Error} If a stream with that name already exists.
      * @throws {Error} If the stream could not be created.
@@ -392,6 +392,35 @@ class EventStore extends events.EventEmitter {
         const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, initialState, since);
         consumer.streamName = streamName;
         return consumer.pipe(new EventUnwrapper());
+    }
+
+    /**
+     * Create a dynamic stream from a function that maps an event and it's metadata to a stream name.
+     * The mapping method needs to be pure and not depend on external variables.
+     *
+     * NOTE: Use this sparingly! It is costly to create streams dynamically and can lead to a lot of streams being created,
+     *       which puts more work on the writer.
+     *
+     * @typedef {string|[string, object]|null} MappedStream
+     * @param {function(object):MappedStream} streamMapper A method that maps an event and it's metadata to a stream name
+     */
+    createDynamicStream(streamMapper) {
+        const matcherFunc = `(storedEvent) => (${streamMapper.toString()})(storedEvent) === $streamName`;
+        this.storage.addIndexer((storedEvent) => {
+            const streamName = streamMapper(storedEvent);
+            if (streamName instanceof Array) {
+                const [name, matcher] = streamName;
+                if (name in this.streams) {
+                    return null;
+                }
+                return { name: 'stream-' + name, matcher };
+            }
+            if (!streamName || streamName in this.streams) {
+                return null;
+            }
+            const matcher = eval(matcherFunc.replace('$streamName', `'${streamName}'`)); // jshint ignore:line
+            return { name: 'stream-' + streamName, matcher };
+        });
     }
 }
 

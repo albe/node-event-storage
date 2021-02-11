@@ -536,6 +536,45 @@ describe('EventStore', function() {
         });
     });
 
+    describe('createDynamicStream', function() {
+
+        it('creates a proper stream with matcher', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createDynamicStream((event) => 'type-'+event.payload.type);
+            eventstore.commit('foo', [{ type: 'one' }]);
+            eventstore.commit('foo', [{ type: 'two' }]);
+        });
+
+        it('allows to specify an event matcher object as second return value', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createDynamicStream(({ payload: { type }}) => ['type-'+type, { payload: { type } }]);
+            eventstore.commit('foo', [{ type: 'one' }]);
+            eventstore.commit('foo', [{ type: 'two' }], () => {
+                expect(eventstore.getStreamVersion('type-one')).to.be(1);
+                expect(eventstore.getStreamVersion('type-two')).to.be(1);
+                done();
+            });
+        });
+
+        it('allows to specify a metadata matcher object', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createDynamicStream(({ metadata }) => ['correlation-'+metadata.correlationId, { metadata : { correlationId: metadata.correlationId } }]);
+            eventstore.commit('foo', [{ type: 'one' }], { correlationId: 1 });
+            eventstore.commit('foo', [{ type: 'two' }], { correlationId: 2 }, () => {
+                expect(eventstore.getStreamVersion('correlation-1')).to.be(1);
+                expect(eventstore.getStreamVersion('correlation-2')).to.be(1);
+                done();
+            });
+        });
+
+    });
+
     describe('deleteEventStream', function() {
 
         it('throws in read-only mode', function(done) {
