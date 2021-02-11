@@ -11,6 +11,10 @@ const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 class StorageLockedError extends Error {}
 
 /**
+ * @typedef {object|function(object):boolean} Matcher
+ */
+
+/**
  * An append-only storage with highly performant positional range scans.
  * It's highly optimized for an event-store and hence does not support compaction or data-rewrite, nor any querying
  */
@@ -203,8 +207,8 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * Add an indexer, which will be invoked for every document and ensures an index exists with the returned name and matcher.
-     * @typedef {{name:string|null, matcher:object|function}|null} IndexDefinition
-     * @param {function(document): IndexDefinition} indexer The indexer function, which returns an object containing the index name and matcher or null if the document should not be indexed. Alternatively the index name may be null.
+     * @typedef {{name:string|null, matcher:Matcher}|null} IndexDefinition
+     * @param {function(object):IndexDefinition} indexer The indexer function, which returns an object containing the index name and matcher or null if the document should not be indexed. Alternatively the index name may be null.
      */
     addIndexer(indexer) {
         /* istanbul ignore else */
@@ -219,7 +223,7 @@ class WritableStorage extends ReadableStorage {
      *
      * @api
      * @param {string} name The index name.
-     * @param {object|function} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
+     * @param {Matcher} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
      * @param {boolean} [updateIndex] If set to false the index will not be matched against all existing documents.
      * @returns {ReadableIndex|WritableIndex} The index containing all documents that match the query.
      * @throws {Error} if the index doesn't exist yet and no matcher was specified.
@@ -253,7 +257,7 @@ class WritableStorage extends ReadableStorage {
      *
      * @private
      * @param {WritableIndex} index
-     * @param {object|function} matcher
+     * @param {Matcher} matcher
      */
     updateIndex(index, matcher) {
         try {
@@ -379,7 +383,7 @@ class WritableStorage extends ReadableStorage {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {{ index: WritableIndex, matcher: object|function }}
+     * @returns {{ index: WritableIndex, matcher: Matcher }}
      */
     createIndex(name, options = {}) {
         const index = new WritableIndex(name, options);
