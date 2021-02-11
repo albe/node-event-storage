@@ -11,6 +11,10 @@ const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 class StorageLockedError extends Error {}
 
 /**
+ * @typedef {object|function(object):boolean} Matcher
+ */
+
+/**
  * An append-only storage with highly performant positional range scans.
  * It's highly optimized for an event-store and hence does not support compaction or data-rewrite, nor any querying
  */
@@ -205,7 +209,7 @@ class WritableStorage extends ReadableStorage {
      *
      * @api
      * @param {string} name The index name.
-     * @param {object|function} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
+     * @param {Matcher} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
      * @returns {ReadableIndex} The index containing all documents that match the query.
      * @throws {Error} if the index doesn't exist yet and no matcher was specified.
      */
@@ -333,7 +337,7 @@ class WritableStorage extends ReadableStorage {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {{ index: WritableIndex, matcher: object|function }}
+     * @returns {{ index: WritableIndex, matcher: Matcher }}
      */
     createIndex(name, options = {}) {
         const index = new WritableIndex(name, options);

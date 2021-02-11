@@ -20,6 +20,10 @@ function *reverse(iterator) {
 }
 
 /**
+ * @typedef {object|function(object):boolean} Matcher
+ */
+
+/**
  * An append-only storage with highly performant positional range scans.
  * It's highly optimized for an event-store and hence does not support compaction or data-rewrite, nor any querying
  */
@@ -70,7 +74,7 @@ class ReadableStorage extends events.EventEmitter {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {{ index: ReadableIndex, matcher?: object|function }}
+     * @returns {{ index: ReadableIndex, matcher?: Matcher }}
      */
     createIndex(name, options = {}) {
         /** @type ReadableIndex */
@@ -278,7 +282,7 @@ class ReadableStorage extends events.EventEmitter {
      *
      * @api
      * @param {string} name The index name.
-     * @param {object|function} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
+     * @param {Matcher} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
      * @returns {ReadableIndex}
      * @throws {Error} if the index with that name does not exist.
      * @throws {Error} if the HMAC for the matcher does not match.
