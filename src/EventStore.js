@@ -109,16 +109,33 @@ class EventStore extends events.EventEmitter {
             }
             let matches;
             for (let file of files) {
-                if ((matches = file.match(/(stream-(.*))\.index$/)) !== null) {
-                    const streamName = matches[2];
-                    const index = this.storage.openIndex(matches[1]);
-                    // deepcode ignore PrototypePollution: streams is a Map
-                    this.streams[streamName] = { index };
-                    this.emit('stream-available', streamName);
+                if ((matches = file.match(/(stream-.*)\.index$/)) !== null) {
+                    this.registerStream(matches[1]);
                 }
             }
             callback();
         });
+        this.storage.on('index-created', this.registerStream.bind(this));
+    }
+
+    /**
+     * @private
+     * @param {string} name The full stream name, including the `stream-` prefix.
+     */
+    registerStream(name) {
+        /* istanbul ignore if */
+        if (!name.startsWith('stream-')) {
+            return;
+        }
+        const streamName = name.substr(7, name.length - 7);
+        /* istanbul ignore if */
+        if (streamName in this.streams) {
+            return;
+        }
+        const index = this.storage.openIndex('stream-'+streamName);
+        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
+        this.streams[streamName] = { index };
+        this.emit('stream-available', streamName);
     }
 
     /**
@@ -335,6 +352,7 @@ class EventStore extends events.EventEmitter {
         const index = this.storage.ensureIndex(streamIndexName, matcher);
         assert(index !== null, `Error creating stream index ${streamName}.`);
 
+        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index, matcher };
         this.emit('stream-created', streamName);
         return new EventStream(streamName, this);
