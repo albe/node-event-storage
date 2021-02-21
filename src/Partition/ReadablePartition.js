@@ -252,6 +252,25 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Prepare the read buffer for reading *before* the specified position. Don't try to reader *after* the returned cursor.
+     *
+     * @protected
+     * @param {number} position The position in the file to prepare the read buffer for reading before.
+     * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object with properties `buffer`, `cursor` and `length`.
+     */
+    prepareReadBufferBackwards(position) {
+        if (position < 0) {
+            return ({ buffer: null, cursor: 0, length: 0 });
+        }
+        let bufferCursor = position - this.readBufferPos;
+        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_SEPARATOR.length + 4)) {
+            this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
+            bufferCursor = this.readBufferLength;
+        }
+        return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
+    }
+
+    /**
      * Read the data from the given position.
      *
      * @api
@@ -293,6 +312,45 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Find the start position of the document that precedes the given position.
+     *
+     * @protected
+     * @param {number} position The file position to read backwards from.
+     * @returns {number|boolean} The start position of the first document before the given position or false if no header could be found.
+     */
+    findDocumentPositionBefore(position) {
+        assert(this.fd, 'Partition is not opened.');
+        if (position <= 0) {
+            return false;
+        }
+
+        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
+
+        const separatorSize = DOCUMENT_SEPARATOR.length;
+        // Optimization if we are at an exact document boundary, where we can just read the document size
+        let reader/* = this.prepareReadBufferBackwards(position);
+        const block = reader.buffer.toString('ascii', reader.cursor - separatorSize, reader.cursor);
+        if (block === DOCUMENT_SEPARATOR) {
+            const dataSize = reader.buffer.readUInt32BE(reader.cursor - separatorSize - 4);
+            return position - this.documentWriteSize(dataSize);
+        }*/
+
+        do {
+            reader = this.prepareReadBufferBackwards(position - separatorSize);
+
+            const bufferSeparatorPosition = reader.buffer.lastIndexOf(DOCUMENT_SEPARATOR, reader.cursor - separatorSize, 'ascii');
+            if (bufferSeparatorPosition >= 0) {
+                position = this.readBufferPos + bufferSeparatorPosition + separatorSize;
+                break;
+            }
+            position -= this.readBufferLength;
+        } while (position > 0);
+        return position;
+        /*const header = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+        return ({ position, ...header });*/
+    }
+
+    /**
      * @api
      * @returns {Generator<string>} A generator that returns all documents in this partition.
      */
@@ -305,6 +363,20 @@ class ReadablePartition extends events.EventEmitter {
         }
     }
 
+    /**
+     * @api
+     * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
+     */
+    *readAllBackwards() {
+        let position = this.size;
+        while ((position = this.findDocumentPositionBefore(position)) !== false) {
+            const data = this.readFrom(position);
+            if (data === false) {
+                break;
+            }
+            yield data;
+        }
+    }
 }
 
 module.exports = ReadablePartition;

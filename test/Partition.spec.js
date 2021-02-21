@@ -156,6 +156,36 @@ describe('Partition', function() {
 
     });
 
+    describe('readAll', function() {
+
+        it('reads all documents in write order', function() {
+            partition.open();
+            fillPartition(50, i => 'foo-' + i.toString());
+            partition.close();
+            partition.open();
+            let i = 1;
+            for (let data of partition.readAll()) {
+                expect(data).to.be('foo-' + i.toString());
+                i++;
+            }
+            expect(i).to.be(51);
+        });
+
+        it('reads all documents in backwards write order', function() {
+            partition.open();
+            fillPartition(50, i => 'foo-' + i.toString());
+            partition.close();
+            partition.open();
+            let i = 50;
+            for (let data of partition.readAllBackwards()) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
+    });
+
     describe('readFrom', function() {
 
         it('returns false when partition is not open', function() {
