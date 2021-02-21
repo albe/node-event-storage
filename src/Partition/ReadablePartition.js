@@ -1,12 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const events = require('events');
-const { assert } = require('../util');
+const { assert, alignTo } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
 const DOCUMENT_SEPARATOR = "\x00\x00\x1E\n";
+const DOCUMENT_FOOTER_SIZE = 4 /* additional data size footer */ + DOCUMENT_SEPARATOR.length;
 
 // node-event-store partition V03
 const HEADER_MAGIC = "nesprt03";
@@ -161,8 +162,8 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {number} The size of the data including header, padded to 16 bytes alignment and ended with a line break.
      */
     documentWriteSize(dataSize) {
-        const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 4 + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
-        return dataSize + DOCUMENT_SEPARATOR.length + 4 + padSize + DOCUMENT_HEADER_SIZE;
+        const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
+        return DOCUMENT_HEADER_SIZE + dataSize + padSize + DOCUMENT_FOOTER_SIZE;
     }
 
     /**
@@ -383,3 +384,7 @@ module.exports = ReadablePartition;
 module.exports.CorruptFileError = CorruptFileError;
 module.exports.InvalidDataSizeError = InvalidDataSizeError;
 module.exports.HEADER_MAGIC = HEADER_MAGIC;
+module.exports.DOCUMENT_SEPARATOR = DOCUMENT_SEPARATOR;
+module.exports.DOCUMENT_ALIGNMENT = DOCUMENT_ALIGNMENT;
+module.exports.DOCUMENT_HEADER_SIZE = DOCUMENT_HEADER_SIZE;
+module.exports.DOCUMENT_FOOTER_SIZE = DOCUMENT_FOOTER_SIZE;

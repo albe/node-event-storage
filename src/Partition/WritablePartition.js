@@ -1,25 +1,14 @@
 const fs = require('fs');
 const mkdirpSync = require('mkdirp').sync;
 const ReadablePartition = require('./ReadablePartition');
-const { assert, buildMetadataHeader } = require('../util');
+const { assert, buildMetadataHeader, alignTo } = require('../util');
 const Clock = require('../Clock');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
-const DOCUMENT_HEADER_SIZE = 16;
-const DOCUMENT_ALIGNMENT = 4;
-const DOCUMENT_SEPARATOR = "\x00\x00\x1E\n";
-const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT)/* + DOCUMENT_SEPARATOR*/;
+const { DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } = ReadablePartition;
+const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
 
 const NES_EPOCH = new Date('2020-01-01T00:00:00');
-
-/**
- * @param {number} dataSize
- * @returns {string} The data needed to pad to DOCUMENT_ALIGNMENT bytes alignment (including the DOCUMENT_SEPARATOR).
- */
-function padData(dataSize) {
-    const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 4 + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
-    return DOCUMENT_PAD.substr(0, padSize);
-}
 
 /**
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
@@ -219,7 +208,8 @@ class WritablePartition extends ReadablePartition {
         let bytesWritten = 0;
         bytesWritten += fs.writeSync(this.fd, dataHeader);
         bytesWritten += fs.writeSync(this.fd, data);
-        bytesWritten += fs.writeSync(this.fd, padData(dataSize));
+        const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
+        bytesWritten += fs.writeSync(this.fd, DOCUMENT_PAD.substr(0, padSize));
         const dataSizeBuffer = Buffer.alloc(4);
         dataSizeBuffer.writeUInt32BE(dataSize, 0);
         bytesWritten += fs.writeSync(this.fd, dataSizeBuffer);
@@ -240,13 +230,14 @@ class WritablePartition extends ReadablePartition {
      * @returns {number} Number of bytes written.
      */
     writeBuffered(data, dataSize, sequenceNumber, callback) {
-        const bytesToWrite = Buffer.byteLength(data, 'utf8') + DOCUMENT_HEADER_SIZE;
+        const bytesToWrite = this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
         this.flushIfWriteBufferTooSmall(bytesToWrite);
 
         let bytesWritten = 0;
         bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
         bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
-        bytesWritten += this.writeBuffer.write(padData(dataSize), this.writeBufferCursor + bytesWritten, 'utf8');
+        const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
+        bytesWritten += this.writeBuffer.write(DOCUMENT_PAD.substr(0, padSize), this.writeBufferCursor + bytesWritten, 'utf8');
         this.writeBuffer.writeUInt32BE(dataSize, this.writeBufferCursor + bytesWritten);
         bytesWritten += 4;
         bytesWritten += this.writeBuffer.write(DOCUMENT_SEPARATOR, this.writeBufferCursor + bytesWritten, 'utf8');
