@@ -8,7 +8,7 @@ const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
 const DOCUMENT_SEPARATOR = "\x00\x00\x1E\n";
-const DOCUMENT_PAD = ' '.repeat(16 - DOCUMENT_SEPARATOR.length) + DOCUMENT_SEPARATOR;
+const DOCUMENT_PAD = ' '.repeat(16 - 4 - DOCUMENT_SEPARATOR.length)/* + DOCUMENT_SEPARATOR*/;
 
 const NES_EPOCH = new Date('2020-01-01T00:00:00');
 
@@ -17,8 +17,8 @@ const NES_EPOCH = new Date('2020-01-01T00:00:00');
  * @returns {string} The data padded to 16 bytes alignment and ended with \0x1E (record separator) and a line break.
  */
 function padData(dataSize) {
-    const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
-    return DOCUMENT_PAD.substr(-padSize - DOCUMENT_SEPARATOR.length);
+    const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 4 + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
+    return DOCUMENT_PAD.substr(0, padSize);
 }
 
 /**
@@ -219,6 +219,11 @@ class WritablePartition extends ReadablePartition {
         let bytesWritten = 0;
         bytesWritten += fs.writeSync(this.fd, dataHeader);
         bytesWritten += fs.writeSync(this.fd, data);
+        bytesWritten += fs.writeSync(this.fd, padData(dataSize));
+        const dataSizeBuffer = Buffer.alloc(4);
+        dataSizeBuffer.writeUInt32BE(dataSize, 0);
+        bytesWritten += fs.writeSync(this.fd, dataSizeBuffer);
+        bytesWritten += fs.writeSync(this.fd, DOCUMENT_SEPARATOR);
         if (typeof callback === 'function') {
             process.nextTick(callback);
         }
@@ -241,6 +246,10 @@ class WritablePartition extends ReadablePartition {
         let bytesWritten = 0;
         bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
         bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
+        bytesWritten += this.writeBuffer.write(padData(dataSize), this.writeBufferCursor + bytesWritten, 'utf8');
+        this.writeBuffer.writeUInt32BE(dataSize, this.writeBufferCursor + bytesWritten);
+        bytesWritten += 4;
+        bytesWritten += this.writeBuffer.write(DOCUMENT_SEPARATOR, this.writeBufferCursor + bytesWritten, 'utf8');
         this.writeBufferCursor += bytesWritten;
         this.writeBufferDocuments++;
         if (typeof callback === 'function') {
@@ -268,7 +277,6 @@ class WritablePartition extends ReadablePartition {
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
-        data += padData(dataSize);
         const dataPosition = this.size;
         if (dataSize + DOCUMENT_HEADER_SIZE >= this.writeBuffer.byteLength * 4 / 5) {
             this.size += this.writeUnbuffered(data, dataSize, sequenceNumber, callback);

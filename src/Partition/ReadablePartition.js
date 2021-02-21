@@ -161,8 +161,8 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {number} The size of the data including header, padded to 16 bytes alignment and ended with a line break.
      */
     documentWriteSize(dataSize) {
-        const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
-        return dataSize + DOCUMENT_SEPARATOR.length + padSize + DOCUMENT_HEADER_SIZE;
+        const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 4 + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
+        return dataSize + DOCUMENT_SEPARATOR.length + 4 + padSize + DOCUMENT_HEADER_SIZE;
     }
 
     /**
@@ -328,12 +328,12 @@ class ReadablePartition extends events.EventEmitter {
 
         const separatorSize = DOCUMENT_SEPARATOR.length;
         // Optimization if we are at an exact document boundary, where we can just read the document size
-        let reader/* = this.prepareReadBufferBackwards(position);
+        let reader = this.prepareReadBufferBackwards(position);
         const block = reader.buffer.toString('ascii', reader.cursor - separatorSize, reader.cursor);
         if (block === DOCUMENT_SEPARATOR) {
             const dataSize = reader.buffer.readUInt32BE(reader.cursor - separatorSize - 4);
             return position - this.documentWriteSize(dataSize);
-        }*/
+        }
 
         do {
             reader = this.prepareReadBufferBackwards(position - separatorSize);
