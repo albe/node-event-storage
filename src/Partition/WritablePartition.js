@@ -8,13 +8,13 @@ const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
 const DOCUMENT_SEPARATOR = "\x00\x00\x1E\n";
-const DOCUMENT_PAD = ' '.repeat(16 - 4 - DOCUMENT_SEPARATOR.length)/* + DOCUMENT_SEPARATOR*/;
+const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT)/* + DOCUMENT_SEPARATOR*/;
 
 const NES_EPOCH = new Date('2020-01-01T00:00:00');
 
 /**
  * @param {number} dataSize
- * @returns {string} The data padded to 16 bytes alignment and ended with \0x1E (record separator) and a line break.
+ * @returns {string} The data needed to pad to DOCUMENT_ALIGNMENT bytes alignment (including the DOCUMENT_SEPARATOR).
  */
 function padData(dataSize) {
     const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 4 + DOCUMENT_SEPARATOR.length) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
@@ -84,11 +84,10 @@ class WritablePartition extends ReadablePartition {
         this.flushCallbacks = [];
 
         if (super.open() === false) {
-            const stat = fs.statSync(this.fileName);
-            if (stat.size !== 0) {
+            if (this.size !== -this.headerSize) {
+                // If file is not empty, we can not open and initialize it
                 return false;
             }
-            this.metadata.epoch = Date.now();
             this.writeMetadata();
             this.size = 0;
         }
@@ -123,6 +122,7 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     writeMetadata() {
+        this.metadata.epoch = Date.now();
         const metadataBuffer = buildMetadataHeader(ReadablePartition.HEADER_MAGIC, this.metadata);
         fs.writeSync(this.fd, metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = metadataBuffer.byteLength;
@@ -328,9 +328,7 @@ class WritablePartition extends ReadablePartition {
         if (after > this.size) {
             return;
         }
-        if (after < 0) {
-            after = 0;
-        }
+        after = Math.max(0, after);
         this.flush();
 
         let position = after, data;

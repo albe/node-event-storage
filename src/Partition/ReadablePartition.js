@@ -209,7 +209,7 @@ class ReadablePartition extends events.EventEmitter {
      * @param {number} offset The position inside the buffer to start reading from.
      * @param {number} position The file position to start reading from.
      * @param {number} [size] The expected byte size of the document at the given position.
-     * @returns {{ dataSize: number, sequenceNumber, number, time64: number }} The metadata fields of the document
+     * @returns {{ dataSize: number, sequenceNumber: number, time64: number }} The metadata fields of the document
      * @throws {Error} if the storage entry at the given position is corrupted.
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
@@ -286,7 +286,7 @@ class ReadablePartition extends events.EventEmitter {
             return false;
         }
 
-        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
+        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
         const reader = this.prepareReadBuffer(position);
         if (reader.length < size + DOCUMENT_HEADER_SIZE) {
