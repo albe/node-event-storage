@@ -22,6 +22,7 @@ class InvalidDataSizeError extends Error {}
  * @returns {number}
  */
 function hash(str) {
+    /* istanbul ignore if */
     if (str.length === 0) {
         return 0;
     }
@@ -264,9 +265,9 @@ class ReadablePartition extends events.EventEmitter {
             return ({ buffer: null, cursor: 0, length: 0 });
         }
         let bufferCursor = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_SEPARATOR.length + 4)) {
+        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE)) {
             this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
-            bufferCursor = this.readBufferLength;
+            bufferCursor = position - this.readBufferPos;
         }
         return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
     }
@@ -321,11 +322,10 @@ class ReadablePartition extends events.EventEmitter {
      */
     findDocumentPositionBefore(position) {
         assert(this.fd, 'Partition is not opened.');
+        position -= (position % DOCUMENT_ALIGNMENT);
         if (position <= 0) {
             return false;
         }
-
-        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
         const separatorSize = DOCUMENT_SEPARATOR.length;
         // Optimization if we are at an exact document boundary, where we can just read the document size
@@ -353,10 +353,11 @@ class ReadablePartition extends events.EventEmitter {
 
     /**
      * @api
+     * @param {number} [after] The document position to start reading from.
      * @returns {Generator<string>} A generator that returns all documents in this partition.
      */
-    *readAll() {
-        let position = 0;
+    *readAll(after = 0) {
+        let position = after < 0 ? this.size + after + 1 : after;
         let data;
         while ((data = this.readFrom(position)) !== false) {
             yield data;
@@ -366,15 +367,13 @@ class ReadablePartition extends events.EventEmitter {
 
     /**
      * @api
+     * @param {number} [before] The document position to start reading backward from.
      * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
      */
-    *readAllBackwards() {
-        let position = this.size;
+    *readAllBackwards(before = -1) {
+        let position = before < 0 ? this.size + before + 1 : before;
         while ((position = this.findDocumentPositionBefore(position)) !== false) {
             const data = this.readFrom(position);
-            if (data === false) {
-                break;
-            }
             yield data;
         }
     }

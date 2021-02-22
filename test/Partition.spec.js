@@ -184,6 +184,19 @@ describe('Partition', function() {
             expect(i).to.be(0);
         });
 
+        it('reads all documents in backwards write order from arbitary position', function() {
+            partition.open();
+            fillPartition(50, i => 'foo-' + i.toString());
+            partition.close();
+            partition.open();
+            let i = 50;
+            for (let data of partition.readAllBackwards(-9)) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
     });
 
     describe('readFrom', function() {
