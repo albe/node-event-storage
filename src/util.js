@@ -27,6 +27,17 @@ function assert(condition, message, ErrorType = Error) {
 }
 
 /**
+ * Return the amount required to align value to the given alignment.
+ * It calculates the difference of the alignment and the modulo of value by alignment.
+ * @param {number} value
+ * @param {number} alignment
+ * @returns {number}
+ */
+function alignTo(value, alignment) {
+    return (alignment - (value % alignment)) % alignment;
+}
+
+/**
  * @param {string} secret The secret to use for calculating further HMACs
  * @returns {function(string)} A function that calculates the HMAC for a given string
  */
@@ -181,5 +192,6 @@ module.exports = {
     matches,
     buildMetadataForMatcher,
     buildMatcherFromMetadata,
-    buildMetadataHeader
+    buildMetadataHeader,
+    alignTo
 };
