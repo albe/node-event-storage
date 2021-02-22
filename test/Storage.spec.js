@@ -239,6 +239,23 @@ describe('Storage', function() {
             expect(index.isOpen()).to.be(true);
         });
 
+        it('works with arbitrarily sized documents', function() {
+            storage = createStorage({ writeBufferSize: 1024 });
+            storage.open();
+
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ foo: i, pad: ' '.repeat(storage.partitionConfig.writeBufferSize * i / 12) });
+            }
+
+            storage.close();
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 8; i++) {
+                expect(storage.read(i).foo).to.eql(i);
+            }
+        });
+
     });
 
     describe('readRange', function() {
@@ -981,5 +998,20 @@ describe('Storage', function() {
             reader.close();
         });
 
+        it('partitions are opened only once', function(done){
+            storage = createStorage({ syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('partition-created', (id) => {
+                const partitionInstance = reader.getPartition(id);
+                expect(reader.getPartition(id)).to.be(partitionInstance);
+                reader.close();
+                done();
+            });
+
+            storage.getPartition('');
+        });
     });
 });
