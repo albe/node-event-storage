@@ -26,8 +26,8 @@ describe('Partition', function() {
     /**
      * @returns {ReadOnlyPartition}
      */
-    function createReader() {
-        const reader = new Partition.ReadOnly(partition.name, { dataDirectory });
+    function createReader(options = {}) {
+        const reader = new Partition.ReadOnly(partition.name, { ...options, dataDirectory });
         readers[readers.length] = reader;
         return reader;
     }
@@ -171,6 +171,19 @@ describe('Partition', function() {
             expect(i).to.be(51);
         });
 
+        it('reads all documents in write order from arbitrary position', function() {
+            partition.open();
+            fillPartition(50, i => 'foo-' + i.toString());
+            partition.close();
+            partition.open();
+            let i = 50;
+            for (let data of partition.readAll(-partition.documentWriteSize('foo-50'.length)-1)) {
+                expect(data).to.be('foo-' + i.toString());
+                i++;
+            }
+            expect(i).to.be(51);
+        });
+
         it('reads all documents in backwards write order', function() {
             partition.open();
             fillPartition(50, i => 'foo-' + i.toString());
@@ -195,6 +208,24 @@ describe('Partition', function() {
                 i--;
             }
             expect(i).to.be(0);
+            i = 50;
+            for (let data of partition.readAllBackwards(partition.size - 12)) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
+        it('can find document boundaries by scanning across readbuffers', function() {
+            partition.open();
+            fillPartition(2, i => '0xFF'.repeat(64));
+            const lastPosition = partition.write('0xFF'.repeat(64));
+            partition.close();
+
+            const reader = createReader({ readBufferSize: 64 });
+            reader.open();
+            expect(reader.findDocumentPositionBefore(reader.size - 8)).to.be(lastPosition);
+            reader.close();
         });
 
     });

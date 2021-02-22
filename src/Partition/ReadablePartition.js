@@ -347,8 +347,6 @@ class ReadablePartition extends events.EventEmitter {
             position -= this.readBufferLength;
         } while (position > 0);
         return position;
-        /*const header = this.readDocumentHeader(reader.buffer, reader.cursor, position);
-        return ({ position, ...header });*/
     }
 
     /**
