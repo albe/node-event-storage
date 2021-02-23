@@ -112,6 +112,7 @@ class ReadablePartition extends events.EventEmitter {
         this.headerSize = 0;
         this.size = this.readFileSize();
         if (this.size <= 0) {
+            this.close();
             return false;
         }
 
@@ -224,11 +225,6 @@ class ReadablePartition extends events.EventEmitter {
             throw new InvalidDataSizeError(`Invalid document size ${dataSize} at position ${position}, expected ${size}.`);
         }
 
-        const writeSize = this.documentWriteSize(dataSize);
-        if (position + writeSize > this.size) {
-            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
-        }
-
         const sequenceNumber = buffer.readUInt32BE(offset + 4);
         const time64 = buffer.readDoubleBE(offset + 8);
         return ({ dataSize, sequenceNumber, time64 });
@@ -284,10 +280,7 @@ class ReadablePartition extends events.EventEmitter {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readFrom(position, size = 0) {
-        if (!this.fd) {
-            return false;
-        }
-
+        assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
         const reader = this.prepareReadBuffer(position);
@@ -297,6 +290,12 @@ class ReadablePartition extends events.EventEmitter {
 
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
         const { dataSize } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
+
+        // TODO: This should only be checked on opening
+        const writeSize = this.documentWriteSize(dataSize);
+        if (position + writeSize > this.size) {
+            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
+        }
 
         if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);

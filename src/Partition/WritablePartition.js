@@ -40,6 +40,7 @@ class WritablePartition extends ReadablePartition {
             clock: Clock
         };
         config = Object.assign(defaults, config);
+        config.metadata = Object.assign(defaults.metadata, config.metadata);
         super(name, config);
         if (!fs.existsSync(this.dataDirectory)) {
             mkdirpSync(this.dataDirectory);
@@ -65,24 +66,26 @@ class WritablePartition extends ReadablePartition {
             return true;
         }
 
-        this.writeBuffer = Buffer.allocUnsafeSlow(this.writeBufferSize);
+        let success = super.open();
+        if (!success) {
+            if (this.size + this.headerSize !== 0) {
+                // If file is not empty, we can not open and initialize it
+                return false;
+            }
+            this.writeMetadata();
+            success = super.open();
+        }
+
+        this.writeBuffer = success && Buffer.allocUnsafeSlow(this.writeBufferSize);
         // Where inside the write buffer the next write is added
         this.writeBufferCursor = 0;
         // How many documents are currently in the write buffer
         this.writeBufferDocuments = 0;
         this.flushCallbacks = [];
 
-        if (super.open() === false) {
-            if (this.size !== -this.headerSize) {
-                // If file is not empty, we can not open and initialize it
-                return false;
-            }
-            this.writeMetadata();
-            this.size = 0;
-        }
         this.clock = new this.ClockConstructor(this.metadata.epoch || NES_EPOCH.getTime());
 
-        return true;
+        return success;
     }
 
     /**
@@ -92,11 +95,10 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     close() {
-        if (this.fd) {
+        if (this.fd && this.writeBuffer) {
             this.flush();
             fs.fsyncSync(this.fd);
-        }
-        if (this.writeBuffer) {
+
             this.writeBuffer = null;
             this.writeBufferCursor = 0;
             this.writeBufferDocuments = 0;
@@ -111,9 +113,8 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     writeMetadata() {
-        this.metadata.epoch = Date.now();
         const metadataBuffer = buildMetadataHeader(ReadablePartition.HEADER_MAGIC, this.metadata);
-        fs.writeSync(this.fd, metadataBuffer, 0, metadataBuffer.byteLength, 0);
+        fs.writeFileSync(this.fileName, metadataBuffer);
         this.headerSize = metadataBuffer.byteLength;
     }
 
@@ -258,9 +259,7 @@ class WritablePartition extends ReadablePartition {
      * @returns {number|boolean} The file position at which the data was written or false on error.
      */
     write(data, sequenceNumber, callback) {
-        if (!this.fd) {
-            return false;
-        }
+        assert(this.fd, 'Partition is not opened.');
         if (typeof sequenceNumber === 'function') {
             callback = sequenceNumber;
             sequenceNumber = null;
@@ -322,25 +321,30 @@ class WritablePartition extends ReadablePartition {
         after = Math.max(0, after);
         this.flush();
 
-        let position = after, data;
+        let position = after;
         try {
-            data = this.readFrom(position);
+            this.readFrom(position);
         } catch (e) {
-            throw new Error('Can only truncate on valid document boundaries.');
+            if (!(e instanceof ReadablePartition.CorruptFileError)) {
+                throw new Error('Can only truncate on valid document boundaries.');
+            }
         }
+
         // copy all truncated documents to some delete log
-        const deletedBranch = new WritablePartition(this.name + '-' + after + '.branch', { dataDirectory: this.dataDirectory });
+        const backupName = this.name + '-' + (new Date()).toISOString().substring(0,10) + '-' + after + '.branch';
+        const deletedBranch = new WritablePartition(backupName, { dataDirectory: this.dataDirectory, metadata: { epoch: this.metadata.epoch } });
         deletedBranch.open();
-        while (data) {
-            deletedBranch.write(data);
-            position += this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
-            data = this.readFrom(position);
-        }
+        do {
+            const reader = this.prepareReadBuffer(position);
+            fs.writeSync(deletedBranch.fd, reader.buffer, reader.cursor, reader.length);
+            position += reader.length;
+        } while (position < this.size);
         deletedBranch.close();
 
         fs.truncateSync(this.fileName, this.headerSize + after);
         this.truncateReadBuffer(after);
         this.size = after;
+        this.emit('truncated', after);
     }
 }
 
