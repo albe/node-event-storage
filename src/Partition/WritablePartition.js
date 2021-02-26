@@ -8,8 +8,6 @@ const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const { DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } = ReadablePartition;
 const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
 
-const NES_EPOCH = new Date('2020-01-01T00:00:00');
-
 /**
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
  * In the case of an event store, this is most likely the (write) streams.
@@ -83,7 +81,7 @@ class WritablePartition extends ReadablePartition {
         this.writeBufferDocuments = 0;
         this.flushCallbacks = [];
 
-        this.clock = new this.ClockConstructor(this.metadata.epoch || NES_EPOCH.getTime());
+        this.clock = new this.ClockConstructor(this.metadata.epoch);
 
         return success;
     }
@@ -298,6 +296,8 @@ class WritablePartition extends ReadablePartition {
 
     /**
      * Truncate the internal read buffer after the given position.
+     *
+     * @internal
      * @param {number} after The byte position to truncate the read buffer after.
      */
     truncateReadBuffer(after) {
@@ -312,6 +312,7 @@ class WritablePartition extends ReadablePartition {
     /**
      * Truncate the partition storage at the given position.
      *
+     * @api
      * @param {number} after The file position after which to truncate the partition.
      */
     truncate(after) {
@@ -322,9 +323,8 @@ class WritablePartition extends ReadablePartition {
         after = Math.max(0, after);
         this.flush();
 
-        let position = after;
         try {
-            this.readFrom(position);
+            this.readFrom(after);
         } catch (e) {
             if (!(e instanceof ReadablePartition.CorruptFileError)) {
                 throw new Error('Can only truncate on valid document boundaries.');
@@ -332,8 +332,25 @@ class WritablePartition extends ReadablePartition {
         }
 
         // copy all truncated documents to some delete log
-        const backupName = this.name + '-' + (new Date()).toISOString().substring(0,10) + '-' + after + '.branch';
-        const deletedBranch = new WritablePartition(backupName, { dataDirectory: this.dataDirectory, metadata: { epoch: this.metadata.epoch } });
+        const backupName = (new Date()).toISOString().substring(0,10);
+        this.branchOff(backupName, after);
+
+        fs.truncateSync(this.fileName, this.headerSize + after);
+        this.truncateReadBuffer(after);
+        this.size = after;
+        this.emit('truncated', after);
+    }
+
+    /**
+     * Create a branch of this partition starting from the given position.
+     *
+     * @internal
+     * @param {string} branchName The name that identifies the branch (will be prefixed with this partition name and suffixed with the position)
+     * @param {number} position The file position from where to branch off
+     * @returns {WritablePartition} The branched off partition
+     */
+    branchOff(branchName, position) {
+        const deletedBranch = new WritablePartition(this.name + '-' + branchName + '-' + position + '.branch', { dataDirectory: this.dataDirectory, metadata: { epoch: this.metadata.epoch } });
         deletedBranch.open();
         do {
             const reader = this.prepareReadBuffer(position);
@@ -341,11 +358,7 @@ class WritablePartition extends ReadablePartition {
             position += reader.length;
         } while (position < this.size);
         deletedBranch.close();
-
-        fs.truncateSync(this.fileName, this.headerSize + after);
-        this.truncateReadBuffer(after);
-        this.size = after;
-        this.emit('truncated', after);
+        return deletedBranch;
     }
 }
 

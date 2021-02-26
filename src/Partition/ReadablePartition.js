@@ -12,6 +12,8 @@ const DOCUMENT_FOOTER_SIZE = 4 /* additional data size footer */ + DOCUMENT_SEPA
 // node-event-store partition V03
 const HEADER_MAGIC = "nesprt03";
 
+const NES_EPOCH = new Date('2020-01-01T00:00:00');
+
 class CorruptFileError extends Error {}
 class InvalidDataSizeError extends Error {}
 
@@ -150,6 +152,7 @@ class ReadablePartition extends events.EventEmitter {
         const metadata = metadataBuffer.toString('utf8').trim();
         try {
             this.metadata = JSON.parse(metadata);
+            this.metadata.epoch = this.metadata.epoch /* istanbul ignore next */|| NES_EPOCH.getTime();
         } catch (e) {
             throw new Error('Invalid metadata.');
         }
