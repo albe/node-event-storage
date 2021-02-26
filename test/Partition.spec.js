@@ -70,6 +70,13 @@ describe('Partition', function() {
         expect(() => partition.open()).to.throwError();
     });
 
+    it('can open an existing empty file', function() {
+        let fd = fs.openSync('test/data/.part', 'w');
+        fs.closeSync(fd);
+
+        expect(partition.open()).to.be(true);
+    });
+
     it('throws when mismatching header version', function() {
         let fd = fs.openSync('test/data/.part', 'w');
         fs.writeSync(fd, 'nesprt00');
@@ -87,8 +94,8 @@ describe('Partition', function() {
 
     describe('write', function() {
 
-        it('returns false when partition is not open', function() {
-            expect(partition.write('foo')).to.be(false);
+        it('throws when partition is not open', function() {
+            expect(() => partition.write('foo')).to.throwError();
         });
 
         it('calls callback eventually', function(done) {
@@ -218,8 +225,7 @@ describe('Partition', function() {
 
         it('can find document boundaries by scanning across readbuffers', function() {
             partition.open();
-            fillPartition(2, i => '0xFF'.repeat(64));
-            const lastPosition = partition.write('0xFF'.repeat(64));
+            const lastPosition = fillPartition(3, () => '0xFF'.repeat(64));
             partition.close();
 
             const reader = createReader({ readBufferSize: 64 });
@@ -232,8 +238,8 @@ describe('Partition', function() {
 
     describe('readFrom', function() {
 
-        it('returns false when partition is not open', function() {
-            expect(partition.readFrom(0)).to.be(false);
+        it('throws when partition is not open', function() {
+            expect(() => partition.readFrom(0)).to.throwError();
         });
 
         it('returns false when reading beyond file size', function() {
@@ -375,6 +381,15 @@ describe('Partition', function() {
             expect(partition.size).to.be(lastposition);
         });
 
+        it('can not read a truncated document', function() {
+            partition.open();
+            let lastposition = fillPartition(10);
+            expect(partition.readFrom(0)).to.not.be(false);
+            expect(partition.readFrom(lastposition)).to.not.be(false);
+            partition.truncate(lastposition);
+            expect(partition.readFrom(lastposition)).to.be(false);
+        });
+
         it('correctly truncates after unflushed writes', function() {
             partition.open();
             let lastposition = fillPartition(10);
@@ -384,6 +399,21 @@ describe('Partition', function() {
             partition.close();
             partition.open();
             expect(partition.size).to.be(lastposition);
+        });
+
+        it('correctly truncates torn writes', function() {
+            partition.open();
+            const position = fillPartition(5);
+            partition.close();
+
+            let fd = fs.openSync('test/data/.part', 'r+');
+            fs.ftruncateSync(fd, partition.headerSize + position + Partition.DOCUMENT_HEADER_SIZE + 4);
+            fs.closeSync(fd);
+
+            partition.open();
+
+            partition.truncate(position);
+            expect(partition.size).to.be(position);
         });
 
     });

@@ -12,6 +12,8 @@ const DOCUMENT_FOOTER_SIZE = 4 /* additional data size footer */ + DOCUMENT_SEPA
 // node-event-store partition V03
 const HEADER_MAGIC = "nesprt03";
 
+const NES_EPOCH = new Date('2020-01-01T00:00:00');
+
 class CorruptFileError extends Error {}
 class InvalidDataSizeError extends Error {}
 
@@ -112,6 +114,7 @@ class ReadablePartition extends events.EventEmitter {
         this.headerSize = 0;
         this.size = this.readFileSize();
         if (this.size <= 0) {
+            this.close();
             return false;
         }
 
@@ -149,6 +152,7 @@ class ReadablePartition extends events.EventEmitter {
         const metadata = metadataBuffer.toString('utf8').trim();
         try {
             this.metadata = JSON.parse(metadata);
+            this.metadata.epoch = this.metadata.epoch /* istanbul ignore next */|| NES_EPOCH.getTime();
         } catch (e) {
             throw new Error('Invalid metadata.');
         }
@@ -224,11 +228,6 @@ class ReadablePartition extends events.EventEmitter {
             throw new InvalidDataSizeError(`Invalid document size ${dataSize} at position ${position}, expected ${size}.`);
         }
 
-        const writeSize = this.documentWriteSize(dataSize);
-        if (position + writeSize > this.size) {
-            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
-        }
-
         const sequenceNumber = buffer.readUInt32BE(offset + 4);
         const time64 = buffer.readDoubleBE(offset + 8);
         return ({ dataSize, sequenceNumber, time64 });
@@ -284,10 +283,7 @@ class ReadablePartition extends events.EventEmitter {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readFrom(position, size = 0) {
-        if (!this.fd) {
-            return false;
-        }
-
+        assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
         const reader = this.prepareReadBuffer(position);
@@ -297,6 +293,12 @@ class ReadablePartition extends events.EventEmitter {
 
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
         const { dataSize } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
+
+        // TODO: This should only be checked on opening
+        const writeSize = this.documentWriteSize(dataSize);
+        if (position + writeSize > this.size) {
+            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
+        }
 
         if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);
