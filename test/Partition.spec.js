@@ -70,6 +70,13 @@ describe('Partition', function() {
         expect(() => partition.open()).to.throwError();
     });
 
+    it('can open an existing empty file', function() {
+        let fd = fs.openSync('test/data/.part', 'w');
+        fs.closeSync(fd);
+
+        expect(partition.open()).to.be(true);
+    });
+
     it('throws when mismatching header version', function() {
         let fd = fs.openSync('test/data/.part', 'w');
         fs.writeSync(fd, 'nesprt00');
@@ -372,6 +379,15 @@ describe('Partition', function() {
             partition.close();
             partition.open();
             expect(partition.size).to.be(lastposition);
+        });
+
+        it('can not read a truncated document', function() {
+            partition.open();
+            let lastposition = fillPartition(10);
+            expect(partition.readFrom(0)).to.not.be(false);
+            expect(partition.readFrom(lastposition)).to.not.be(false);
+            partition.truncate(lastposition);
+            expect(partition.readFrom(lastposition)).to.be(false);
         });
 
         it('correctly truncates after unflushed writes', function() {

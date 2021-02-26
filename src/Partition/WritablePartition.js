@@ -181,6 +181,7 @@ class WritablePartition extends ReadablePartition {
         if (time64 === null) {
             time64 = this.clock.time();
         }
+        /* istanbul ignore if */
         if (time64 < 0) {
             throw new Error('Time may not be negative!');
         }
