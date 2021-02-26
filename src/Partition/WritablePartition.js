@@ -39,8 +39,8 @@ class WritablePartition extends ReadablePartition {
             },
             clock: Clock
         };
-        config = Object.assign(defaults, config);
         config.metadata = Object.assign(defaults.metadata, config.metadata);
+        config = Object.assign(defaults, config);
         super(name, config);
         if (!fs.existsSync(this.dataDirectory)) {
             mkdirpSync(this.dataDirectory);
@@ -318,6 +318,7 @@ class WritablePartition extends ReadablePartition {
         if (after > this.size) {
             return;
         }
+        this.open();
         after = Math.max(0, after);
         this.flush();
 
