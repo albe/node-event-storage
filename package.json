@@ -34,13 +34,13 @@
     "*/Partition*.js",
     "*/Storage*.js",
     "*/Watcher*.js",
-    "/Index/*.js",
-    "/Partition/*.js",
-    "/Storage/*.js",
-    "/Clock.js",
-    "/WatchesFile.js",
-    "/util.js",
-    "/index.js"
+    "src/Index/*.js",
+    "src/Partition/*.js",
+    "src/Storage/*.js",
+    "src/Clock.js",
+    "src/WatchesFile.js",
+    "src/util.js",
+    "index.js"
   ],
   "license": "MIT",
   "maintainers": [
