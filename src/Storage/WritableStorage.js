@@ -72,7 +72,29 @@ class WritableStorage extends ReadableStorage {
         if (!this.lock()) {
             return true;
         }
+        this.checkTornWrites();
         return super.open();
+    }
+
+    /**
+     * Check all partitions torn writes and truncate the storage to the position before the first torn write.
+     * This might delete correctly written events in partitions, if their sequence number is higher than the
+     * torn write in another partition.
+     */
+    checkTornWrites() {
+        // TODO: Only do this if a potential failed write is detected (e.g. a tx-marker exists)
+        let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
+        this.forEachPartition(partition => {
+            partition.open();
+            const tornSequenceNumber = partition.checkTornWrite();
+            if (tornSequenceNumber >= 0) {
+                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSequenceNumber - 1);
+            }
+            partition.close();
+        });
+        if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
+            this.truncate(lastValidSequenceNumber);
+        }
     }
 
     /**
