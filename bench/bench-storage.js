@@ -21,7 +21,7 @@ function bench(storage) {
 
 	let number;
 	storage.open();
-	for (let doc of storage.readRange(1, -1)) {
+	for (let doc of storage.readRange(1)) {
 		number = doc.number;
 	}
 	storage.close();
