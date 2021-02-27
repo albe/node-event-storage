@@ -181,7 +181,7 @@ class Consumer extends stream.Readable {
                 fs.writeFileSync(tmpFile, consumerData);
                 // If the write fails (half-way), the consumer state file will not be corrupted
                 fs.renameSync(tmpFile, this.fileName);
-                this.emit('persisted');
+                this.emit('persisted', consumerState);
             } catch (e) {
                 /* istanbul ignore next */
                 safeUnlink(tmpFile);
