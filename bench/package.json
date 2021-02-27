@@ -2,7 +2,7 @@
   "name": "event-storage-bench",
   "version": "0.0.1",
   "scripts": {
-    "bench": "node bench-index.js && node bench-storage.js"
+    "bench": "node bench-index.js && node bench-storage.js && node bench-eventstore.js"
   },
   "dependencies": {
     "beautify-benchmark": "^0.2.4",
