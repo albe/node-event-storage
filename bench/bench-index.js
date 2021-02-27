@@ -6,7 +6,7 @@ const Suite = new Benchmark.Suite('index');
 Suite.on('cycle', () => fs.existsSync('data/.index') && fs.unlinkSync('data/.index'));
 Suite.on('cycle', (event) => benchmarks.add(event.target));
 Suite.on('complete', () => benchmarks.log());
-Suite.on('error', (e) => console.log(e));
+Suite.on('error', (e) => console.log(e.target.error));
 
 const Stable = require('event-storage');
 const Latest = require('../index');
