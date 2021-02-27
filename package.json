@@ -55,6 +55,10 @@
   "dependencies": {
     "mkdirp": "^1.0.3"
   },
+  "nyc": {
+    "include": [ "src/**/*.js" ],
+    "exclude": [ "bench/**/*.js" ]
+  },
   "devDependencies": {
     "coveralls": "^3.0.2",
     "expect.js": "^0.3.1",
