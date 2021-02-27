@@ -40,7 +40,7 @@
     "*/Storage/*.js",
     "src/WatchesFile.js",
     "src/util.js",
-    "src/index.js"
+    "index.js"
   ],
   "license": "MIT",
   "maintainers": [
