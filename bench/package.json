@@ -7,6 +7,6 @@
   "dependencies": {
     "beautify-benchmark": "^0.2.4",
     "benchmark": "^2.1.4",
-    "event-storage": "^0.7.0"
+    "event-storage": "^0.7.2"
   }
 }
