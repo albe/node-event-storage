@@ -29,11 +29,11 @@ function bench(store) {
 	if (number !== WRITES) throw new Error('Not all documents were written! Last document was '+number);
 }
 
-Suite.add('storage [stable]', () => {
+Suite.add('eventstore [stable]', () => {
 	bench(new Stable('eventstore', { storageDirectory: 'data' }));
 });
 
-Suite.add('storage [latest]', () => {
+Suite.add('eventstore [latest]', () => {
 	bench(new Latest('eventstore', { storageDirectory: 'data' }));
 });
 
