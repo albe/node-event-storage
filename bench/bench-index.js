@@ -22,7 +22,7 @@ function bench(index) {
 
 	let number;
 	index.open();
-	for (let entry of index.all()) {
+	for (let entry of index.range(-WRITES + 1)) {
 		number = entry.number;
 	}
 	index.close();
