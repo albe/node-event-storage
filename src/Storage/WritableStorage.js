@@ -88,11 +88,11 @@ class WritableStorage extends ReadableStorage {
             if (tornSequenceNumber >= 0) {
                 lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSequenceNumber - 1);
             }
-            partition.close();
         });
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
             this.truncate(lastValidSequenceNumber);
         }
+        this.forEachPartition(partition => partition.close());
     }
 
     /**
