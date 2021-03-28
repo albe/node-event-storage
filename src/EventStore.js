@@ -224,6 +224,7 @@ class EventStore extends events.EventEmitter {
 
         const commitId = this.length;
         let commitVersion = 0;
+        const commitSize = events.length;
         const committedAt = Date.now();
         const commit = Object.assign({
             commitId,
@@ -238,7 +239,7 @@ class EventStore extends events.EventEmitter {
             callback(commit);
         };
         for (let event of events) {
-            const eventMetadata = Object.assign({ commitId, committedAt, commitVersion }, metadata, { streamVersion });
+            const eventMetadata = Object.assign({ commitId, committedAt, commitVersion, commitSize }, metadata, { streamVersion });
             const storedEvent = { stream: streamName, payload: event, metadata: eventMetadata };
             commitVersion++;
             streamVersion++;
