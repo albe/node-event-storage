@@ -72,7 +72,6 @@ class WritableStorage extends ReadableStorage {
         if (!this.lock()) {
             return true;
         }
-        this.checkTornWrites();
         return super.open();
     }
 
@@ -82,7 +81,6 @@ class WritableStorage extends ReadableStorage {
      * torn write in another partition.
      */
     checkTornWrites() {
-        // TODO: Only do this if a potential failed write is detected (e.g. a tx-marker exists)
         let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
         this.forEachPartition(partition => {
             partition.open();
@@ -127,6 +125,9 @@ class WritableStorage extends ReadableStorage {
      * Current implementation just deletes a lock file that is named like the storage.
      */
     unlock() {
+        if (fs.existsSync(this.lockFile)) {
+            this.checkTornWrites();
+        }
         fs.rmdirSync(this.lockFile);
         this.locked = false;
     }
