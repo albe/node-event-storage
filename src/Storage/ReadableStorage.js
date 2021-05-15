@@ -138,6 +138,7 @@ class ReadableStorage extends events.EventEmitter {
         for (let file of files) {
             if (file.substr(-6) === '.index') continue;
             if (file.substr(-7) === '.branch') continue;
+            if (file.substr(-5) === '.lock') continue;
             if (file.substr(0, this.storageFile.length) !== this.storageFile) continue;
 
             const partition = this.createPartition(file, this.partitionConfig);
