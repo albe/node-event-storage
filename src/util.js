@@ -195,10 +195,6 @@ function ensureDirectory(dirName) {
         try {
             mkdirpSync(dirName);
         } catch (e) {
-            if (e.code !== 'EEXIST') {
-                throw e;
-            }
-            return true;
         }
         return false;
     }
