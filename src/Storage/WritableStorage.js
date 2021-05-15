@@ -125,7 +125,7 @@ class WritableStorage extends ReadableStorage {
      * Current implementation just deletes a lock file that is named like the storage.
      */
     unlock() {
-        if (fs.existsSync(this.lockFile)) {
+        if (!this.locked && fs.existsSync(this.lockFile)) {
             this.checkTornWrites();
         }
         fs.rmdirSync(this.lockFile);
