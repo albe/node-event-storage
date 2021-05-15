@@ -1,10 +1,9 @@
 const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
 const path = require('path');
 const WritablePartition = require('../Partition/WritablePartition');
 const WritableIndex = require('../Index/WritableIndex');
 const ReadableStorage = require('./ReadableStorage');
-const { assert, matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('../util');
+const { assert, matches, buildMetadataForMatcher, buildMatcherFromMetadata, ensureDirectory } = require('../util');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
@@ -57,12 +56,7 @@ class WritableStorage extends ReadableStorage {
         };
         config = Object.assign(defaults, config);
         config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush }, config.indexOptions);
-        if (!fs.existsSync(config.dataDirectory)) {
-            try {
-                mkdirpSync(config.dataDirectory);
-            } catch (e) {
-            }
-        }
+        ensureDirectory(config.dataDirectory);
         super(storageName, config);
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');

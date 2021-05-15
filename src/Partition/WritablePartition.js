@@ -1,7 +1,6 @@
 const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
 const ReadablePartition = require('./ReadablePartition');
-const { assert, buildMetadataHeader, alignTo } = require('../util');
+const { assert, buildMetadataHeader, alignTo, ensureDirectory } = require('../util');
 const Clock = require('../Clock');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
@@ -40,9 +39,7 @@ class WritablePartition extends ReadablePartition {
         config.metadata = Object.assign(defaults.metadata, config.metadata);
         config = Object.assign(defaults, config);
         super(name, config);
-        if (!fs.existsSync(this.dataDirectory)) {
-            mkdirpSync(this.dataDirectory);
-        }
+        ensureDirectory(this.dataDirectory);
         this.fileMode = 'a+';
         this.writeBufferSize = config.writeBufferSize >>> 0; // jshint ignore:line
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0; // jshint ignore:line

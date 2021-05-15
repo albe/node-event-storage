@@ -1,7 +1,6 @@
 const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
 const ReadableIndex = require('./ReadableIndex');
-const { assertEqual, buildMetadataHeader } = require('../util');
+const { assertEqual, buildMetadataHeader, ensureDirectory } = require('../util');
 
 /**
  * An index is a simple append-only file that stores an ordered list of entry elements pointing to the actual file position
@@ -45,9 +44,7 @@ class WritableIndex extends ReadableIndex {
      */
     initialize(options) {
         super.initialize(options);
-        if (!fs.existsSync(options.dataDirectory)) {
-            mkdirpSync(options.dataDirectory);
-        }
+        ensureDirectory(options.dataDirectory);
 
         this.fileMode = 'a+';
         this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0); // jshint ignore:line
