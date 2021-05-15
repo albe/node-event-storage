@@ -86,7 +86,7 @@ class WritableStorage extends ReadableStorage {
             partition.open();
             const tornSequenceNumber = partition.checkTornWrite();
             if (tornSequenceNumber >= 0) {
-                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSequenceNumber - 1);
+                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSequenceNumber);
             }
         });
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {

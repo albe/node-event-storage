@@ -363,7 +363,7 @@ class ReadablePartition extends events.EventEmitter {
             }
             position -= this.readBufferLength;
         } while (position > 0);
-        return position;
+        return Math.max(0, position);
     }
 
     /**
