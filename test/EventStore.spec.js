@@ -60,6 +60,33 @@ describe('EventStore', function() {
         fs.readdir = originalReaddir;
     });
 
+    it('repairs torn writes', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        const events = [{foo: 'bar'.repeat(500)}];
+        eventstore.on('ready', () => {
+            eventstore.commit('foo-bar', events, () => {
+                // Simulate a torn write (but indexes are still written)
+                fs.truncateSync(eventstore.storage.getPartition('foo-bar').fileName, 512);
+
+                // The previous instance was not closed, so the lock still exists
+                eventstore = new EventStore({
+                    storageDirectory,
+                    storageConfig: {
+                        lock: EventStore.LOCK_RECLAIM
+                    }
+                });
+                eventstore.on('ready', () => {
+                    expect(eventstore.length).to.be(0);
+                    expect(eventstore.getStreamVersion('foo-bar')).to.be(0);
+                    done();
+                });
+            });
+        });
+    });
+
     it('throws when trying to open non-existing store read-only', function() {
         expect(() => new EventStore({
             storageDirectory,
