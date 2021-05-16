@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const mkdirpSync = require('mkdirp').sync;
 
 /**
  * Assert that actual and expected match or throw an Error with the given message appended by information about expected and actual value.
@@ -183,6 +185,23 @@ function wrapAndCheck(index, length) {
     return index;
 }
 
+/**
+ * Ensure that the given directory exists.
+ * @param {string} dirName
+ * @return {boolean} true if the directory existed already
+ */
+function ensureDirectory(dirName) {
+    if (!fs.existsSync(dirName)) {
+        try {
+            mkdirpSync(dirName);
+        } catch (e) {
+        }
+        return false;
+    }
+    return true;
+}
+
+
 module.exports = {
     assert,
     assertEqual,
@@ -193,5 +212,6 @@ module.exports = {
     buildMetadataForMatcher,
     buildMatcherFromMetadata,
     buildMetadataHeader,
-    alignTo
+    alignTo,
+    ensureDirectory
 };

@@ -399,3 +399,5 @@ class EventStore extends events.EventEmitter {
 module.exports = EventStore;
 module.exports.ExpectedVersion = ExpectedVersion;
 module.exports.OptimisticConcurrencyError = OptimisticConcurrencyError;
+module.exports.LOCK_THROW = Storage.LOCK_THROW;
+module.exports.LOCK_RECLAIM = Storage.LOCK_RECLAIM;

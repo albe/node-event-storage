@@ -1,8 +1,7 @@
 const stream = require('stream');
 const fs = require('fs');
 const path = require('path');
-const mkdirpSync = require('mkdirp').sync;
-const { assert } = require('./util');
+const { assert, ensureDirectory } = require('./util');
 
 const Storage = require('./Storage/ReadableStorage');
 const MAX_CATCHUP_BATCH = 10;
@@ -59,9 +58,7 @@ class Consumer extends stream.Readable {
         this.indexName = indexName;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
-        if (!fs.existsSync(consumerDirectory)) {
-            mkdirpSync(consumerDirectory);
-        } else {
+        if (ensureDirectory(consumerDirectory)) {
             this.cleanUpFailedWrites();
         }
     }

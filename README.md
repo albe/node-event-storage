@@ -413,7 +413,18 @@ leads to every single document being flushed directly.
 
 #### Consistency
 
-Since the storage is append-only, consistency is automatically guaranteed.
+Since the storage is append-only, consistency is automatically guaranteed for all successful writes. Writes that fail in
+the middle, e.g. because the machine crashes before the full write buffer is flushed, will lead to a torn write. This is
+a partial invalid write. To recover from such a state, the storage will detect torn writes and truncate them when an existing
+lock is reclaimed. This can be done by instantiating the store with the following option:
+
+```javascript
+const eventstore = new EventStore('my-event-store', { storageConfig: { lock: EventStore.LOCK_RECLAIM } });
+```
+
+Note that this option will effectively bypass the lock that prevents multiple instances from being created, so you should
+not use this carelessly. Having multiple instances write to the same files will lead to inconsistent data that can not be
+easily recovered from.
 
 #### Isolation
 

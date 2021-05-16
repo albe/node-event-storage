@@ -1,12 +1,14 @@
 const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
 const path = require('path');
 const WritablePartition = require('../Partition/WritablePartition');
 const WritableIndex = require('../Index/WritableIndex');
 const ReadableStorage = require('./ReadableStorage');
-const { assert, matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('../util');
+const { assert, matches, buildMetadataForMatcher, buildMatcherFromMetadata, ensureDirectory } = require('../util');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
+
+const LOCK_RECLAIM = 0x1;
+const LOCK_THROW = 0x2;
 
 class StorageLockedError extends Error {}
 
@@ -37,6 +39,7 @@ class WritableStorage extends ReadableStorage {
      * @param {function(object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
      * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
+     * @param {number} [config.lock] One of LOCK_* constants that defines how an existing lock should be handled.
      */
     constructor(storageName = 'storage', config = {}) {
         if (typeof storageName !== 'string') {
@@ -53,13 +56,13 @@ class WritableStorage extends ReadableStorage {
         };
         config = Object.assign(defaults, config);
         config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush }, config.indexOptions);
-        if (!fs.existsSync(config.dataDirectory)) {
-            try {
-                mkdirpSync(config.dataDirectory);
-            } catch (e) {
-            }
-        }
+        ensureDirectory(config.dataDirectory);
         super(storageName, config);
+
+        this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
+        if (config.lock === LOCK_RECLAIM) {
+            this.unlock();
+        }
         this.partitioner = config.partitioner;
     }
 
@@ -76,6 +79,26 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * Check all partitions torn writes and truncate the storage to the position before the first torn write.
+     * This might delete correctly written events in partitions, if their sequence number is higher than the
+     * torn write in another partition.
+     */
+    checkTornWrites() {
+        let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
+        this.forEachPartition(partition => {
+            partition.open();
+            const tornSequenceNumber = partition.checkTornWrite();
+            if (tornSequenceNumber >= 0) {
+                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSequenceNumber);
+            }
+        });
+        if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
+            this.truncate(lastValidSequenceNumber);
+        }
+        this.forEachPartition(partition => partition.close());
+    }
+
+    /**
      * Attempt to lock this storage by means of a lock directory.
      * @returns {boolean} True if the lock was created or false if the lock is already in place.
      * @throws {StorageLockedError} If this storage is already locked by another process.
@@ -85,7 +108,6 @@ class WritableStorage extends ReadableStorage {
         if (this.locked) {
             return false;
         }
-        this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         try {
             fs.mkdirSync(this.lockFile);
             this.locked = true;
@@ -105,7 +127,12 @@ class WritableStorage extends ReadableStorage {
      * Current implementation just deletes a lock file that is named like the storage.
      */
     unlock() {
-        fs.rmdirSync(this.lockFile);
+        if (fs.existsSync(this.lockFile)) {
+            if (!this.locked) {
+                this.checkTornWrites();
+            }
+            fs.rmdirSync(this.lockFile);
+        }
         this.locked = false;
     }
 
@@ -371,3 +398,5 @@ class WritableStorage extends ReadableStorage {
 
 module.exports = WritableStorage;
 module.exports.StorageLockedError = StorageLockedError;
+module.exports.LOCK_THROW = LOCK_THROW;
+module.exports.LOCK_RECLAIM = LOCK_RECLAIM;
