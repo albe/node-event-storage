@@ -75,7 +75,7 @@ describe('JoinEventStream', function() {
     });
 
     it('can limit events fetched with min and max revision', function(){
-        stream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 0, 1);
+        stream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 1, 2);
         const fetchedEvents = stream.events;
 
         expect(fetchedEvents.length).to.be(2);
