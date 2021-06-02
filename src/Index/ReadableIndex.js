@@ -388,6 +388,9 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {number} The last index entry position that is lower than or equal to the `number`. Returns 0 if no index matches.
      */
     find(number, min = false) {
+        if (this.length < 1) {
+            return 0;
+        }
         // We only need to search until the searched number because entry.number is always >= position
         const [low, high] = binarySearch(number, Math.min(this.length, number), index => this.get(index).number);
         return min ? low : high;

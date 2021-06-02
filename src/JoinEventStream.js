@@ -33,7 +33,7 @@ class JoinEventStream extends EventStream {
             const streamIndex = eventStore.streams[streamName].index;
             const from = streamIndex.find(minRevision, !this.reverse);
             const until = streamIndex.find(maxRevision, this.reverse);
-            return eventStore.storage.readRange(from || 1, until, streamIndex);
+            return eventStore.storage.readRange(from, until, streamIndex);
         });
     }
 
