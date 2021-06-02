@@ -72,15 +72,16 @@ describe('EventStore', function() {
                 fs.truncateSync(eventstore.storage.getPartition('foo-bar').fileName, 512);
 
                 // The previous instance was not closed, so the lock still exists
-                eventstore = new EventStore({
+                const eventstore2 = new EventStore({
                     storageDirectory,
                     storageConfig: {
                         lock: EventStore.LOCK_RECLAIM
                     }
                 });
-                eventstore.on('ready', () => {
-                    expect(eventstore.length).to.be(0);
-                    expect(eventstore.getStreamVersion('foo-bar')).to.be(0);
+                eventstore2.on('ready', () => {
+                    expect(eventstore2.length).to.be(0);
+                    expect(eventstore2.getStreamVersion('foo-bar')).to.be(0);
+                    eventstore2.close();
                     done();
                 });
             });
