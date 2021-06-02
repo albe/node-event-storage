@@ -1,19 +1,5 @@
 const EventStream = require('./EventStream');
-
-/**
- * Translates an EventStore revision number to an index sequence number and wraps it around the given length, if it's < 0
- *
- * @param {number} rev The zero-based EventStore revision
- * @param {number} length The length of the store
- * @returns {number} The 1-based index sequence number
- */
-function wrapRevision(rev, length) {
-    rev++;
-    if (rev <= 0) {
-        rev += length;
-    }
-    return rev;
-}
+const { wrapAndCheck } = require('./util');
 
 /**
  * An event stream is a simple wrapper around an iterator over storage documents.
@@ -25,10 +11,10 @@ class JoinEventStream extends EventStream {
      * @param {string} name The name of the stream.
      * @param {Array<string>} streams The name of the streams to join together.
      * @param {EventStore} eventStore The event store to get the stream from.
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      */
-    constructor(name, streams, eventStore, minRevision = 0, maxRevision = -1) {
+    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1) {
         super(name, eventStore, minRevision, maxRevision);
         if (!(streams instanceof Array) || streams.length === 0) {
             throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
@@ -36,8 +22,8 @@ class JoinEventStream extends EventStream {
         this._next = new Array(streams.length).fill(undefined);
 
         // Translate revisions to index numbers (1-based) and wrap around negatives
-        minRevision = wrapRevision(minRevision, eventStore.length);
-        maxRevision = wrapRevision(maxRevision, eventStore.length);
+        minRevision = wrapAndCheck(minRevision, eventStore.length);
+        maxRevision = wrapAndCheck(maxRevision, eventStore.length);
 
         this.reverse = minRevision > maxRevision;
         this.iterator = streams.map(streamName => {

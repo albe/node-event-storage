@@ -2,19 +2,6 @@ const stream = require('stream');
 const { assert } = require('./util');
 
 /**
- * Adjusts a revision number from the EventStore/EventStream interface range into the underlying storage item number.
- *
- * @param {number} rev A zero-based revision number, or a negative number to denote a "from the end" position
- * @returns {number} A one-based storage item number
- */
-function adjustedRevision(rev) {
-    if (rev >= 0) {
-        return rev + 1;
-    }
-    return rev;
-}
-
-/**
  * Return the lower absolute version given a version and a maxVersion constraint.
  * @param {number} version
  * @param {number} maxVersion
@@ -36,7 +23,7 @@ class EventStream extends stream.Readable {
      * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
      */
-    constructor(name, eventStore, minRevision = 0, maxRevision = -1) {
+    constructor(name, eventStore, minRevision = 1, maxRevision = -1) {
         super({ objectMode: true });
         assert(typeof name === 'string' && name !== '', 'Need to specify a stream name.');
         assert(typeof eventStore === 'object' && eventStore !== null, `Need to provide EventStore instance to create EventStream ${name}.`);
@@ -45,8 +32,6 @@ class EventStream extends stream.Readable {
         if (eventStore.streams[name]) {
             const streamIndex = eventStore.streams[name].index;
             this.version = minVersion(streamIndex.length, maxRevision);
-            minRevision = adjustedRevision(minRevision);
-            maxRevision = adjustedRevision(maxRevision);
             this.iterator = eventStore.storage.readRange(minRevision, maxRevision, streamIndex);
         } else {
             this.version = -1;
