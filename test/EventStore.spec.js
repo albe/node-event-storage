@@ -369,11 +369,12 @@ describe('EventStore', function() {
                 eventstore.commit('foo-bar', [{key: i}]);
             }
 
-            let reverseStream = eventstore.getEventStream('foo-bar', -1, 0);
+            let reverseStream = eventstore.getEventStream('foo-bar', -1, 1);
             let i = 20;
             for (let event of reverseStream) {
                 expect(event).to.eql({ key: i-- });
             }
+            expect(i).to.be(0);
         });
 
         it('behaves as expected with ranges', function() {
