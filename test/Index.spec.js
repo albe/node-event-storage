@@ -47,6 +47,12 @@ describe('Index', function() {
         expect(index.isOpen()).to.be(true);
     });
 
+    it('can be opened multiple times', function() {
+        index = createIndex();
+        index.open();
+        expect(index.open()).to.be(false);
+    });
+
     it('defaults name to ".index"', function() {
         index = new Index({ dataDirectory });
         expect(index.name).to.be('.index');
@@ -337,6 +343,11 @@ describe('Index', function() {
     });
 
     describe('find', function() {
+
+        it('returns 0 on an empty index', function() {
+            index = createIndex();
+            expect(index.find(1)).to.be(0);
+        });
 
         it('returns 0 if no entry is lower or equal searched number', function() {
             index = setupIndexWithEntries(5, i => 5 + i);
