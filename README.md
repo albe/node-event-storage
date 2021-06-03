@@ -194,11 +194,11 @@ Apart from that, you can also specify the exact version range you want to iterat
 possible to iterate the stream in reverse, by specifying a lower `max` than `min` revision.
 
 ```javascript
-const stream0 = eventstore.getEventStream('my-stream', 0, -1); // all events from the start (#0) up to the last (-1 equals the last version)
-const stream1 = eventstore.getEventStream('my-stream', 0, 50); // all events from the start (#0) up to event #50, hence 51 events in total
-const stream2 = eventstore.getEventStream('my-stream', 10, -11); // the events starting from #10 up to the 10th last event
-const stream3 = eventstore.getEventStream('my-stream', -11, -1); // get the last ten events starting from the earliest
-const stream4 = eventstore.getEventStream('my-stream', -1, -11); // get the last ten events starting from the last in reverse order
+const stream0 = eventstore.getEventStream('my-stream', 1, -1); // all events from the start (#1) up to the last (-1 equals the last version)
+const stream1 = eventstore.getEventStream('my-stream', 1, 50); // all events from the start (#1) up to event #50, hence 50 events in total
+const stream2 = eventstore.getEventStream('my-stream', 10, -10); // the events starting from #10 up to the 10th last event
+const stream3 = eventstore.getEventStream('my-stream', -10, -1); // get the last ten events starting from the earliest
+const stream4 = eventstore.getEventStream('my-stream', -1, -10); // get the last ten events starting from the last in reverse order
 
 for (let event of stream{x}) {
    //...
