@@ -2,6 +2,17 @@ const stream = require('stream');
 const { assert } = require('./util');
 
 /**
+ * Calculate the actual version number from a possibly relative (negative) version number.
+ *
+ * @param {number} version The version to normalize.
+ * @param {number} length The maximum version number
+ * @returns {number} The absolute version number.
+ */
+function normalizeVersion(version, length) {
+    return version < 0 ? version + length + 1 : version;
+}
+
+/**
  * Return the lower absolute version given a version and a maxVersion constraint.
  * @param {number} version
  * @param {number} maxVersion
@@ -30,13 +41,131 @@ class EventStream extends stream.Readable {
 
         this.name = name;
         if (eventStore.streams[name]) {
-            const streamIndex = eventStore.streams[name].index;
-            this.version = minVersion(streamIndex.length, maxRevision);
-            this.iterator = eventStore.storage.readRange(minRevision, maxRevision, streamIndex);
+            this.streamIndex = eventStore.streams[name].index;
+            this.minRevision = normalizeVersion(minRevision, this.streamIndex.length);
+            this.maxRevision = normalizeVersion(maxRevision, this.streamIndex.length);
+            this.version = minVersion(this.streamIndex.length, maxRevision);
+            this.storage = eventStore.storage;
         } else {
             this.version = -1;
             this.iterator = { next() { return { done: true }; } };
         }
+    }
+
+    /**
+     * @param {number} revision
+     * @returns {EventStream}
+     */
+    from(revision) {
+        this.minRevision = normalizeVersion(revision, this.streamIndex.length);
+        return this;
+    }
+
+    /**
+     * @param {number} revision
+     * @returns {EventStream}
+     */
+    until(revision) {
+        this.maxRevision = normalizeVersion(revision, this.streamIndex.length);
+        this.version = minVersion(this.streamIndex.length, this.maxRevision);
+        return this;
+    }
+
+    /**
+     * @param {number} amount
+     * @returns {EventStream}
+     */
+    first(amount) {
+        return this.fromStart().following(amount);
+    }
+
+    /**
+     * @param {number} amount
+     * @returns {EventStream}
+     */
+    last(amount) {
+        return this.fromEnd().previous(amount).forwards();
+    }
+
+    /**
+     * @returns {EventStream}
+     */
+    fromStart() {
+        this.minRevision = 1;
+        return this;
+    }
+
+    /**
+     * @returns {EventStream}
+     */
+    fromEnd() {
+        this.minRevision = this.streamIndex.length;
+        return this;
+    }
+
+    /**
+     * @param {number} amount
+     * @returns {EventStream}
+     */
+    previous(amount) {
+        this.maxRevision = Math.max(1, this.minRevision - amount + 1);
+        return this;
+    }
+
+    /**
+     * @param {number} amount
+     * @returns {EventStream}
+     */
+    following(amount) {
+        this.maxRevision = Math.min(this.streamIndex.length, this.minRevision + amount - 1);
+        return this;
+    }
+
+    /**
+     * @returns {EventStream}
+     */
+    toEnd() {
+        this.maxRevision = this.version = this.streamIndex.length;
+        return this;
+    }
+
+    /**
+     * @returns {EventStream}
+     */
+    toStart() {
+        this.maxRevision = 1;
+        return this;
+    }
+
+    /**
+     * @returns {EventStream}
+     */
+    reverse() {
+        let tmp = this.maxRevision;
+        this.maxRevision = this.minRevision;
+        this.minRevision = tmp;
+        this.version = minVersion(this.streamIndex.length, this.maxRevision);
+        return this;
+    }
+
+    /**
+     * @returns {EventStream}
+     */
+    forwards() {
+        if (this.maxRevision < this.minRevision) {
+            this.reverse();
+        }
+        return this;
+    }
+
+    /**
+     * @returns {EventStream}
+     */
+    backwards() {
+        if (this.maxRevision > this.minRevision) {
+            this.reverse();
+        }
+        return this;
     }
 
     /**
@@ -83,6 +212,9 @@ class EventStream extends stream.Readable {
      * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
+        if (!this.iterator) {
+            this.iterator = this.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex);
+        }
         let next;
         try {
             next = this.iterator.next();

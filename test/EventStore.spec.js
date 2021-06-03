@@ -400,6 +400,52 @@ describe('EventStore', function() {
             }
         });
 
+        it('supports natural language range api', function(){
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            const allBackwards  = eventstore.getEventStream('foo-bar').backwards();
+            const first10       = eventstore.getEventStream('foo-bar').first(10);
+            const last10        = eventstore.getEventStream('foo-bar').last(10);
+            const after15       = eventstore.getEventStream('foo-bar').from(16).toEnd();
+            const before10      = eventstore.getEventStream('foo-bar').fromStart().until(10).backwards();
+            const middle10      = eventstore.getEventStream('foo-bar').from(5).following(10);
+            const middle10alt   = eventstore.getEventStream('foo-bar').from(14).previous(10).forwards();
+
+            expect(allBackwards.events.length).to.be(20);
+            expect(allBackwards.events[0].key).to.be(20);
+            expect(allBackwards.events[19].key).to.be(1);
+
+            expect(first10.events.length).to.be(10);
+            expect(first10.events[0].key).to.be(1);
+            expect(first10.events[9].key).to.be(10);
+
+            expect(last10.events.length).to.be(10);
+            expect(last10.events[0].key).to.be(11);
+            expect(last10.events[9].key).to.be(20);
+
+            expect(after15.events.length).to.be(5);
+            expect(after15.events[0].key).to.be(16);
+            expect(after15.events[4].key).to.be(20);
+
+            expect(before10.events.length).to.be(10);
+            expect(before10.events[0].key).to.be(10);
+            expect(before10.events[9].key).to.be(1);
+
+            expect(middle10.events.length).to.be(10);
+            expect(middle10.events[0].key).to.be(5);
+            expect(middle10.events[9].key).to.be(14);
+
+            expect(middle10alt.events.length).to.be(10);
+            expect(middle10alt.events[0].key).to.be(5);
+            expect(middle10alt.events[9].key).to.be(14);
+        });
+
         it('can open streams created in writer', function(done) {
             eventstore = new EventStore({
                 storageDirectory
@@ -504,7 +550,7 @@ describe('EventStore', function() {
                 eventstore.commit(i % 2 ? 'foo' : 'bar', [{key: i}]);
             }
 
-            let reverseStream = eventstore.fromStreams('foo-bar', ['foo', 'bar'],-1, 0);
+            let reverseStream = eventstore.fromStreams('foo-bar', ['foo', 'bar'],-1, 1);
             let i = 20;
             for (let event of reverseStream) {
                 expect(event).to.eql({ key: i-- });

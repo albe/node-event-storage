@@ -99,6 +99,44 @@ describe('EventStream', function() {
         expect(mockEventStore.storage.until).to.be(-1);
     });
 
+    it('allows specifying version range in natural language', function(){
+        stream.fromStart().toEnd();
+        // read all and convert to array
+        let events = stream.events;
+        expect(mockEventStore.storage.from).to.be(1);
+        expect(mockEventStore.storage.until).to.be(events.length);
+
+        stream = new EventStream('foo', mockEventStore).first(2);
+        // read all and convert to array
+        events = stream.events;
+        expect(mockEventStore.storage.from).to.be(1);
+        expect(mockEventStore.storage.until).to.be(2);
+
+        stream = new EventStream('foo', mockEventStore).last(2);
+        // read all and convert to array
+        events = stream.events;
+        expect(mockEventStore.storage.from).to.be(events.length - 1);
+        expect(mockEventStore.storage.until).to.be(events.length);
+
+        stream = new EventStream('foo', mockEventStore).from(2).toEnd();
+        // read all and convert to array
+        events = stream.events;
+        expect(mockEventStore.storage.from).to.be(2);
+        expect(mockEventStore.storage.until).to.be(events.length);
+
+        stream = new EventStream('foo', mockEventStore).fromEnd().toStart();
+        // read all and convert to array
+        events = stream.events;
+        expect(mockEventStore.storage.from).to.be(events.length);
+        expect(mockEventStore.storage.until).to.be(1);
+
+        stream = new EventStream('foo', mockEventStore).fromStart().toEnd().backwards();
+        // read all and convert to array
+        events = stream.events;
+        expect(mockEventStore.storage.from).to.be(events.length);
+        expect(mockEventStore.storage.until).to.be(1);
+    });
+
     it('is empty when stream does not exist', function(){
         stream = new EventStream('bar', mockEventStore);
         expect(stream.events).to.be.eql([]);
