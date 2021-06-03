@@ -90,13 +90,13 @@ describe('EventStream', function() {
         expect(mockEventStore.storage.until).to.be(2);
     });
 
-    it('leaves negative revisions untouched', function(){
+    it('adjusts negative revisions to stream length', function(){
         stream = new EventStream('foo', mockEventStore, -1, -1);
         // read all and convert to array
         const events = stream.events;
 
-        expect(mockEventStore.storage.from).to.be(-1);
-        expect(mockEventStore.storage.until).to.be(-1);
+        expect(mockEventStore.storage.from).to.be(events.length);
+        expect(mockEventStore.storage.until).to.be(events.length);
     });
 
     it('allows specifying version range in natural language', function(){
