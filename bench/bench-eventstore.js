@@ -23,8 +23,7 @@ function bench(store, cycle) {
 	}
 
 	let number = 0;
-	const startFrom = store.streams[streamName].index.length - WRITES;
-	for (let doc of store.getEventStream(streamName, startFrom)) {
+	for (let doc of store.getEventStream(streamName, -WRITES)) {
 		number++;
 	}
 	store.close();
