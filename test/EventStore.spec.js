@@ -376,6 +376,30 @@ describe('EventStore', function() {
             }
         });
 
+        it('behaves as expected with ranges', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            const last10 = eventstore.getEventStream('foo-bar', -10, -1);
+            expect(last10.events.length).to.be(10);
+            let i = 11;
+            for (let event of last10.events) {
+                expect(event).to.eql({ key: i++ });
+            }
+
+            const first10 = eventstore.getEventStream('foo-bar', 1, 10);
+            expect(first10.events.length).to.be(10);
+            i = 1;
+            for (let event of first10.events) {
+                expect(event).to.eql({ key: i++ });
+            }
+        });
+
         it('can open streams created in writer', function(done) {
             eventstore = new EventStore({
                 storageDirectory

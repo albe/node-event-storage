@@ -82,8 +82,8 @@ describe('EventStream', function() {
         });
     });
 
-    it('adjusts revisions to 1-based index', function(){
-        stream = new EventStream('foo', mockEventStore, 0, 1);
+    it('accepts revisions as 1-based index', function(){
+        stream = new EventStream('foo', mockEventStore, 1, 2);
         const events = stream.events;
 
         expect(mockEventStore.storage.from).to.be(1);
