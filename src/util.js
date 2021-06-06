@@ -169,7 +169,7 @@ function binarySearch(number, length, get) {
 /**
  * @param {number} index The 1-based index position to wrap around if < 0 and check against the bounds.
  * @param {number} length The length of the index and upper bound.
- * @returns {number} The wrapped index or -1 if index out of bounds.
+ * @returns {number} The wrapped index position or -1 if index out of bounds.
  */
 function wrapAndCheck(index, length) {
     if (typeof index !== 'number') {

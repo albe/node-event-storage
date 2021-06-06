@@ -45,15 +45,19 @@ class EventStream extends stream.Readable {
             this.minRevision = normalizeVersion(minRevision, this.streamIndex.length);
             this.maxRevision = normalizeVersion(maxRevision, this.streamIndex.length);
             this.version = minVersion(this.streamIndex.length, maxRevision);
-            this.storage = eventStore.storage;
+            this.fetch = function() {
+                return eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex);
+            }
         } else {
+            this.streamIndex = { length: 0 };
             this.version = -1;
             this.iterator = { next() { return { done: true }; } };
         }
     }
 
     /**
-     * @param {number} revision
+     * @api
+     * @param {number} revision The event revision to start reading from (inclusive).
      * @returns {EventStream}
      */
     from(revision) {
@@ -62,7 +66,8 @@ class EventStream extends stream.Readable {
     }
 
     /**
-     * @param {number} revision
+     * @api
+     * @param {number} revision The event revision to read until (inclusive).
      * @returns {EventStream}
      */
     until(revision) {
@@ -72,7 +77,8 @@ class EventStream extends stream.Readable {
     }
 
     /**
-     * @param {number} amount
+     * @api
+     * @param {number} amount The amount of events at the start of the stream to return in chronological order.
      * @returns {EventStream}
      */
     first(amount) {
@@ -80,7 +86,8 @@ class EventStream extends stream.Readable {
     }
 
     /**
-     * @param {number} amount
+     * @api
+     * @param {number} amount The amount of events at the end of the stream to return in chronological order.
      * @returns {EventStream}
      */
     last(amount) {
@@ -88,6 +95,7 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * @api
      * @returns {EventStream}
      */
     fromStart() {
@@ -96,6 +104,7 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * @api
      * @returns {EventStream}
      */
     fromEnd() {
@@ -104,7 +113,7 @@ class EventStream extends stream.Readable {
     }
 
     /**
-     * @param {number} amount
+     * @param {number} amount The amount of events to return in reverse chronological order.
      * @returns {EventStream}
      */
     previous(amount) {
@@ -113,7 +122,7 @@ class EventStream extends stream.Readable {
     }
 
     /**
-     * @param {number} amount
+     * @param {number} amount The amount of events to return in chronological order.
      * @returns {EventStream}
      */
     following(amount) {
@@ -122,6 +131,7 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * @api
      * @returns {EventStream}
      */
     toEnd() {
@@ -130,6 +140,7 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * @api
      * @returns {EventStream}
      */
     toStart() {
@@ -138,6 +149,7 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * Reverse the current range of events, no matter which direction it currently has.
      * @returns {EventStream}
      */
     reverse() {
@@ -149,9 +161,15 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * Make the current range of events read in forward chronological order.
+     * @api
+     * @param {number} [amount] Amount of events to read forward. If not specified, will read forward until the previously set limit.
      * @returns {EventStream}
      */
-    forwards() {
+    forwards(amount = 0) {
+        if (amount > 0) {
+            this.following(amount);
+        }
         if (this.maxRevision < this.minRevision) {
             this.reverse();
         }
@@ -159,9 +177,15 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * Make the current range of events read in backward chronological order.
+     * @api
+     * @param {number} [amount] Amount of events to read backward. If not specified, will read backward until the previously set limit.
      * @returns {EventStream}
      */
-    backwards() {
+    backwards(amount = 0) {
+        if (amount > 0) {
+            this.previous(amount);
+        }
         if (this.maxRevision > this.minRevision) {
             this.reverse();
         }
@@ -189,6 +213,7 @@ class EventStream extends stream.Readable {
      * Iterate over the events in this stream with a callback.
      * This method is useful to gain access to the event metadata.
      *
+     * @api
      * @param {function(object, object, string)} callback A callback function that will receive the event, the storage metadata and the original stream name for every event in this stream.
      */
     forEach(callback) {
@@ -209,11 +234,21 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * Reset this stream to the start so it can be iterated again.
+     * @returns {EventStream}
+     */
+    reset() {
+        this.iterator = null;
+        this._events = null;
+        return this;
+    }
+
+    /**
      * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
         if (!this.iterator) {
-            this.iterator = this.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex);
+            this.iterator = this.fetch();
         }
         let next;
         try {

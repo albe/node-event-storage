@@ -410,11 +410,11 @@ describe('EventStore', function() {
             }
 
             const allBackwards  = eventstore.getEventStream('foo-bar').backwards();
-            const first10       = eventstore.getEventStream('foo-bar').first(10);
-            const last10        = eventstore.getEventStream('foo-bar').last(10);
+            const first10       = eventstore.getEventStream('foo-bar').first(10); // fromStart().forwards(10)
+            const last10        = eventstore.getEventStream('foo-bar').last(10); // from(-10).forwards(), fromEnd().previous(10).forwards()
             const after15       = eventstore.getEventStream('foo-bar').from(16).toEnd();
-            const before10      = eventstore.getEventStream('foo-bar').fromStart().until(10).backwards();
-            const middle10      = eventstore.getEventStream('foo-bar').from(5).following(10);
+            const before10      = eventstore.getEventStream('foo-bar').fromStart().until(10).backwards(); // from(10).backwards(10)
+            const middle10      = eventstore.getEventStream('foo-bar').from(5).forwards(10);
             const middle10alt   = eventstore.getEventStream('foo-bar').from(14).previous(10).forwards();
             // Tests that `forwards()` and `backwards()` are noops on already like ordered ranges
             const allForwards   = eventstore.getEventStream('foo-bar').fromStart().toEnd().forwards();
