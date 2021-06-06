@@ -416,6 +416,7 @@ describe('EventStore', function() {
             const before10      = eventstore.getEventStream('foo-bar').fromStart().until(10).backwards(); // from(10).backwards(10)
             const middle10      = eventstore.getEventStream('foo-bar').from(5).forwards(10);
             const middle10alt   = eventstore.getEventStream('foo-bar').from(14).previous(10).forwards();
+            const last10backward= eventstore.getEventStream('foo-bar').fromEnd().backwards(10);
             // Tests that `forwards()` and `backwards()` are noops on already like ordered ranges
             const allForwards   = eventstore.getEventStream('foo-bar').fromStart().toEnd().forwards();
             const allBackwards2 = eventstore.getEventStream('foo-bar').fromEnd().toStart().backwards();
@@ -447,6 +448,10 @@ describe('EventStore', function() {
             expect(middle10alt.events.length).to.be(10);
             expect(middle10alt.events[0].key).to.be(5);
             expect(middle10alt.events[9].key).to.be(14);
+
+            expect(last10backward.events.length).to.be(10);
+            expect(last10backward.events[0].key).to.be(20);
+            expect(last10backward.events[9].key).to.be(11);
 
             expect(allForwards.events.length).to.be(20);
             expect(allForwards.events[0].key).to.be(1);
