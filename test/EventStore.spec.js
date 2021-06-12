@@ -2,6 +2,7 @@ const expect = require('expect.js');
 const fs = require('fs-extra');
 const path = require('path');
 const EventStore = require('../src/EventStore');
+const Consumer = require('../src/Consumer');
 
 const storageDirectory = __dirname + '/data';
 
@@ -638,6 +639,16 @@ describe('EventStore', function() {
 
     describe('getConsumer', function() {
 
+        it('returns a Consumer instance', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+
+            const consumer = eventstore.getConsumer('foo-bar', 'consumer2');
+            expect(consumer instanceof Consumer).to.be(true);
+        });
+
         it('returns a consumer for the given stream', function(done) {
             eventstore = new EventStore({
                 storageDirectory
@@ -646,7 +657,7 @@ describe('EventStore', function() {
 
             const consumer = eventstore.getConsumer('foo-bar', 'consumer1');
             consumer.on('data', event => {
-                expect(event.id).to.be(2);
+                expect(event.payload.id).to.be(2);
                 done();
             });
             eventstore.commit('foo', { foo: 'baz', id: 1 });

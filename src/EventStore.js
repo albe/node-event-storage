@@ -15,24 +15,6 @@ const ExpectedVersion = {
 
 class OptimisticConcurrencyError extends Error {}
 
-class EventUnwrapper extends stream.Transform {
-
-    constructor() {
-        super({ objectMode: true });
-    }
-
-    _transform(data, encoding, callback) {
-        /* istanbul ignore else */
-        if (data.stream && data.payload) {
-            this.push(data.payload);
-        } else {
-            this.push(data);
-        }
-        callback();
-    }
-
-}
-
 /**
  * An event store optimized for working with many streams.
  * An event stream is implemented as an iterator over an index on the storage, therefore indexes need to be lightweight
@@ -392,7 +374,7 @@ class EventStore extends events.EventEmitter {
     getConsumer(streamName, identifier, initialState = {}, since = 0) {
         const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, initialState, since);
         consumer.streamName = streamName;
-        return consumer.pipe(new EventUnwrapper());
+        return consumer;
     }
 }
 
