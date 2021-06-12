@@ -241,6 +241,9 @@ class WritableStorage extends ReadableStorage {
      * @throws {Error} if the index doesn't exist yet and no matcher was specified.
      */
     ensureIndex(name, matcher) {
+        if (name === '_all') {
+            return this.index;
+        }
         if (name in this.secondaryIndexes) {
             return this.secondaryIndexes[name].index;
         }
@@ -345,6 +348,7 @@ class WritableStorage extends ReadableStorage {
 
         this.index.truncate(after);
         this.forEachSecondaryIndex(index => {
+            /* istanbul ignore if */
             if (!(index instanceof WritableIndex)) {
                 return;
             }

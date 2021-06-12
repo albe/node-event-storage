@@ -664,6 +664,23 @@ describe('EventStore', function() {
             eventstore.commit('foo', { foo: 'bar', id: 2 });
         });
 
+        it('can return a consumer for the _all stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            const consumer = eventstore.getConsumer('_all', 'consumer1');
+            expect(consumer instanceof Consumer).to.be(true);
+            let i = 0;
+            consumer.on('data', event => {
+                expect(event.payload.id).to.be(++i);
+                if (i === 2) {
+                    done();
+                }
+            });
+            eventstore.commit('foo', { foo: 'bar', id: 1 });
+            eventstore.commit('bar', { foo: 'baz', id: 2 });
+        });
     });
 
 });
