@@ -5,7 +5,6 @@ const path = require('path');
 const events = require('events');
 const Storage = require('./Storage');
 const Consumer = require('./Consumer');
-const stream = require('stream');
 const { assert } = require('./util');
 
 const ExpectedVersion = {
