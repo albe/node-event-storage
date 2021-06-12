@@ -348,6 +348,7 @@ class WritableStorage extends ReadableStorage {
 
         this.index.truncate(after);
         this.forEachSecondaryIndex(index => {
+            /* istanbul ignore if */
             if (!(index instanceof WritableIndex)) {
                 return;
             }
