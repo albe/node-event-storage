@@ -372,7 +372,7 @@ class EventStore extends events.EventEmitter {
      * @returns {Consumer} A durable consumer for the given stream.
      */
     getConsumer(streamName, identifier, initialState = {}, since = 0) {
-        const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, initialState, since);
+        const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
         consumer.streamName = streamName;
         return consumer;
     }
