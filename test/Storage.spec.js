@@ -410,6 +410,12 @@ describe('Storage', function() {
             expect(fs.existsSync('test/data/storage.foo.index')).to.be(true);
         });
 
+        it('returns global index for `_all`', function() {
+            storage = createStorage();
+            const index = storage.ensureIndex('_all');
+            expect(index).to.be(storage.index);
+        })
+
         it('can be called multiple times', function() {
             storage = createStorage();
             storage.open();

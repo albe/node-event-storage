@@ -34,12 +34,11 @@ const WatchesFile = Base => class extends Base {
      * @returns {boolean}
      */
     open() {
-        if (this.fd) {
-            return false;
+        if (super.open()) {
+            this.watchFile();
+            return true;
         }
-
-        this.watchFile();
-        return super.open();
+        return false;
     }
 
     /**

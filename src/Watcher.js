@@ -28,6 +28,7 @@ class DirectoryWatcher extends events.EventEmitter {
         assert(fs.existsSync(directory), `Can not watch a non-existing directory "${directory}".`);
         assert(fs.statSync(directory).isDirectory(), `Can only watch directories, but "${directory}" is none.`);
         super();
+        this.setMaxListeners(1000);
         directoryWatchers.set(directory, this);
         this.directory = directory;
         this.watcher = fs.watch(directory, Object.assign({ persistent: false }, options), this.emit.bind(this));

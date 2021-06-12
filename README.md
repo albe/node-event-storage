@@ -1,8 +1,8 @@
 [![build](https://github.com/albe/node-event-storage/workflows/build/badge.svg)](https://github.com/albe/node-event-storage/actions)
 [![npm version](https://badge.fury.io/js/event-storage.svg)](https://badge.fury.io/js/event-storage)
 [![Code Climate](https://codeclimate.com/github/albe/node-event-storage/badges/gpa.svg)](https://codeclimate.com/github/albe/node-event-storage)
-[![Coverage Status](https://coveralls.io/repos/github/albe/node-event-storage/badge.svg?branch=master)](https://coveralls.io/github/albe/node-event-storage?branch=master)
-[![Code documentation](https://inch-ci.org/github/albe/node-event-storage.svg?branch=master)](https://inch-ci.org/github/albe/node-event-storage)
+[![Coverage Status](https://coveralls.io/repos/github/albe/node-event-storage/badge.svg?branch=main)](https://coveralls.io/github/albe/node-event-storage?branch=main)
+[![Code documentation](https://inch-ci.org/github/albe/node-event-storage.svg?branch=main)](https://inch-ci.org/github/albe/node-event-storage)
 
 # node-event-storage
 
@@ -194,19 +194,39 @@ Apart from that, you can also specify the exact version range you want to iterat
 possible to iterate the stream in reverse, by specifying a lower `max` than `min` revision.
 
 ```javascript
-const stream0 = eventstore.getEventStream('my-stream', 0, -1); // all events from the start (#0) up to the last (-1 equals the last version)
-const stream1 = eventstore.getEventStream('my-stream', 0, 50); // all events from the start (#0) up to event #50, hence 51 events in total
-const stream2 = eventstore.getEventStream('my-stream', 10, -11); // the events starting from #10 up to the 10th last event
-const stream3 = eventstore.getEventStream('my-stream', -11, -1); // get the last ten events starting from the earliest
-const stream4 = eventstore.getEventStream('my-stream', -1, -11); // get the last ten events starting from the last in reverse order
+const stream0 = eventstore.getEventStream('my-stream', 1, -1); // all events from the start (#1) up to the last (-1 equals the last version)
+const stream1 = eventstore.getEventStream('my-stream', 1, 50); // all events from the start (#1) up to event #50, hence 50 events in total
+const stream2 = eventstore.getEventStream('my-stream', 10, -10); // the events starting from #10 up to the 10th last event
+const stream3 = eventstore.getEventStream('my-stream', -10, -1); // get the last ten events starting from the earliest
+const stream4 = eventstore.getEventStream('my-stream', -1, -10); // get the last ten events starting from the last in reverse order
 
 for (let event of stream{x}) {
    //...
 }
 ```
 
+Since version 0.9 the EventStream API also allows specifying the version range with a natural language like this:
+```javascript
+const allBackwards  = eventstore.getEventStream('my-stream').backwards();
+                    // OR eventstore.getEventStream('my-stream').fromEnd().toStart();
+const first10       = eventstore.getEventStream('my-stream').first(10);
+                    // OR eventstore.getEventStream('my-stream').fromStart().forwards(10);
+const last10        = eventstore.getEventStream('my-stream').last(10);
+                    // OR eventstore.getEventStream('my-stream').from(-10).forwards(10);
+const last10reverse = eventstore.getEventStream('my-stream').last(10).backwards();
+                    // OR eventstore.getEventStream('my-stream').fromEnd().backwards(10);
+const after15       = eventstore.getEventStream('my-stream').from(16).toEnd();
+const before10      = eventstore.getEventStream('my-stream').from(10).toStart();
+                    // OR eventstore.getEventStream('my-stream').fromStart().until(10).backwards();
+const middle10      = eventstore.getEventStream('my-stream').from(5).forwards(10);
+                    // OR eventstore.getEventStream('my-stream').from(5).following(10);
+                    // OR eventstore.getEventStream('my-stream').from(14).previous(10).forwards();
+const from9to5      = eventstore.getEventStream('my-stream').from(9).until(5);
+                    // OR eventstore.getEventStream('my-stream').from(5).until(9).backwards();
+```
+
 **Note**
-> If a new event is appended right after the `getEventStream()` call, but before iterating, this event will **not** be included in the iteration.
+> If a new event is appended right after the `getEventStream()` (including range selection methods) call, but before iterating, this event will **not** be included in the iteration.
 > This is due to the revision boundary being fixed at the time of getting the stream reference. In some cases this might be unwanted, but those cases are
 > probably better covered by [consumers](#consumers).
 
@@ -413,7 +433,18 @@ leads to every single document being flushed directly.
 
 #### Consistency
 
-Since the storage is append-only, consistency is automatically guaranteed.
+Since the storage is append-only, consistency is automatically guaranteed for all successful writes. Writes that fail in
+the middle, e.g. because the machine crashes before the full write buffer is flushed, will lead to a torn write. This is
+a partial invalid write. To recover from such a state, the storage will detect torn writes and truncate them when an existing
+lock is reclaimed. This can be done by instantiating the store with the following option:
+
+```javascript
+const eventstore = new EventStore('my-event-store', { storageConfig: { lock: EventStore.LOCK_RECLAIM } });
+```
+
+Note that this option will effectively bypass the lock that prevents multiple instances from being created, so you should
+not use this carelessly. Having multiple instances write to the same files will lead to inconsistent data that can not be
+easily recovered from.
 
 #### Isolation
 

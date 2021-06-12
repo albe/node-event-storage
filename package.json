@@ -1,6 +1,6 @@
 {
   "name": "event-storage",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "An optimized embedded event store for node.js",
   "keywords": [
     "event-storage",
@@ -50,14 +50,18 @@
     }
   ],
   "engines": {
-    "node": ">=10.0"
+    "node": ">=12.0"
   },
   "dependencies": {
     "mkdirp": "^1.0.3"
   },
   "nyc": {
-    "include": [ "src/**/*.js" ],
-    "exclude": [ "bench/**/*.js" ]
+    "include": [
+      "src/**/*.js"
+    ],
+    "exclude": [
+      "bench/**/*.js"
+    ]
   },
   "devDependencies": {
     "coveralls": "^3.0.2",

@@ -124,6 +124,21 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * @returns {number} -1 if the partition is ok and the sequence number of the broken document if a torn write was detected.
+     */
+    checkTornWrite() {
+        const reader = this.prepareReadBufferBackwards(this.size);
+        const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
+        if (separator !== DOCUMENT_SEPARATOR) {
+            const position = this.findDocumentPositionBefore(this.size);
+            const reader = this.prepareReadBuffer(position);
+            const { sequenceNumber } = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+            return sequenceNumber;
+        }
+        return -1;
+    }
+
+    /**
      * Read the partition metadata from the file.
      *
      * @private
@@ -348,7 +363,7 @@ class ReadablePartition extends events.EventEmitter {
             }
             position -= this.readBufferLength;
         } while (position > 0);
-        return position;
+        return Math.max(0, position);
     }
 
     /**

@@ -5,7 +5,6 @@ const path = require('path');
 const events = require('events');
 const Storage = require('./Storage');
 const Consumer = require('./Consumer');
-const stream = require('stream');
 const { assert } = require('./util');
 
 const ExpectedVersion = {
@@ -14,24 +13,6 @@ const ExpectedVersion = {
 };
 
 class OptimisticConcurrencyError extends Error {}
-
-class EventUnwrapper extends stream.Transform {
-
-    constructor() {
-        super({ objectMode: true });
-    }
-
-    _transform(data, encoding, callback) {
-        /* istanbul ignore else */
-        if (data.stream && data.payload) {
-            this.push(data.payload);
-        } else {
-            this.push(data);
-        }
-        callback();
-    }
-
-}
 
 /**
  * An event store optimized for working with many streams.
@@ -265,11 +246,11 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string} streamName The name of the stream to get.
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @returns {EventStream|boolean} The event stream or false if a stream with the name doesn't exist.
      */
-    getEventStream(streamName, minRevision = 0, maxRevision = -1) {
+    getEventStream(streamName, minRevision = 1, maxRevision = -1) {
         if (!(streamName in this.streams)) {
             return false;
         }
@@ -281,11 +262,11 @@ class EventStore extends events.EventEmitter {
      * This is the same as `getEventStream('_all', ...)`.
      *
      * @api
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @returns {EventStream} The event stream.
      */
-    getAllEvents(minRevision = 0, maxRevision = -1) {
+    getAllEvents(minRevision = 1, maxRevision = -1) {
         return this.getEventStream('_all', minRevision, maxRevision);
     }
 
@@ -294,12 +275,12 @@ class EventStore extends events.EventEmitter {
      *
      * @param {string} streamName The (transient) name of the joined stream.
      * @param {Array<string>} streamNames An array of the stream names to join.
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @returns {EventStream} The joined event stream.
      * @throws {Error} if any of the streams doesn't exist.
      */
-    fromStreams(streamName, streamNames, minRevision = 0, maxRevision = -1) {
+    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1) {
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
         for (let stream of streamNames) {
@@ -318,12 +299,12 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string} categoryName The name of the category to get a stream for. A category is a stream name prefix.
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @returns {EventStream} The joined event stream for all streams of the given category.
      * @throws {Error} If no stream for this category exists.
      */
-    getEventStreamForCategory(categoryName, minRevision = 0, maxRevision = -1) {
+    getEventStreamForCategory(categoryName, minRevision = 1, maxRevision = -1) {
         if (categoryName in this.streams) {
             return this.getEventStream(categoryName, minRevision, maxRevision);
         }
@@ -390,12 +371,14 @@ class EventStore extends events.EventEmitter {
      * @returns {Consumer} A durable consumer for the given stream.
      */
     getConsumer(streamName, identifier, initialState = {}, since = 0) {
-        const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, initialState, since);
+        const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
         consumer.streamName = streamName;
-        return consumer.pipe(new EventUnwrapper());
+        return consumer;
     }
 }
 
 module.exports = EventStore;
 module.exports.ExpectedVersion = ExpectedVersion;
 module.exports.OptimisticConcurrencyError = OptimisticConcurrencyError;
+module.exports.LOCK_THROW = Storage.LOCK_THROW;
+module.exports.LOCK_RECLAIM = Storage.LOCK_RECLAIM;
