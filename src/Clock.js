@@ -29,7 +29,8 @@ class Clock {
     }
 
     /**
-     * Return the clock accuracy of the given timestamp.
+     * Return the clock accuracy of the given timestamp. This is only useful for calculating a consistent ordering
+     * ala TrueTime for multi-writer scenarios.
      * @param {number} time A timestamp measured by this clock.
      * @returns {number} The amount of µs accuracy this timestamp has.
      */

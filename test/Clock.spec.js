@@ -55,4 +55,16 @@ describe('Clock', function() {
 
 	});
 
+	describe('accuracy', function() {
+
+		it('returns the accuracy of the clock in ms', function() {
+			const HundredYearsInMs = 100 * 365 * 24 * 3600 * 1000;
+			const clock = new Clock(Date.now() - HundredYearsInMs);
+
+			expect(clock.accuracy(clock.time())).to.be.greaterThan(0);
+			expect(clock.accuracy(clock.time())).to.be.lessThan(100);
+		});
+
+	});
+
 });
