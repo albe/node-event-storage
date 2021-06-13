@@ -47,7 +47,7 @@ class JoinEventStream extends EventStream {
                 return eventStore.storage.readRange(from, until, streamIndex);
             });
         }
-        this.iterator = null;
+        this._iterator = null;
     }
 
     /**
@@ -56,7 +56,7 @@ class JoinEventStream extends EventStream {
      * @returns {*}
      */
     getValue(index) {
-        const next = this.iterator[index].next();
+        const next = this._iterator[index].next();
         return next.done ? false : next.value;
     }
 
@@ -75,8 +75,8 @@ class JoinEventStream extends EventStream {
      * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
-        if (!this.iterator) {
-            this.iterator = this.fetch();
+        if (!this._iterator) {
+            this._iterator = this.fetch();
         }
         let nextIndex = -1;
         this._next.forEach((value, index) => {
