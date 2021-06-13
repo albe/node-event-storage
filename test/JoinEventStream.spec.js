@@ -92,6 +92,37 @@ describe('JoinEventStream', function() {
         expect(fetchedEvents[1]).to.eql(events[2]);
     });
 
+    it('allows specifying version range in natural language', function(){
+        stream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore).fromStart().toEnd();
+
+        let fetchedEvents = stream.events;
+        expect(fetchedEvents.length).to.be(3);
+        expect(fetchedEvents).to.eql(events);
+
+        fetchedEvents = stream.reset().first(2).events;
+        expect(fetchedEvents.length).to.be(2);
+        expect(fetchedEvents[0]).to.eql(events[0]);
+        expect(fetchedEvents[1]).to.eql(events[1]);
+
+        fetchedEvents = stream.reset().last(2).events;
+        expect(fetchedEvents.length).to.be(2);
+        expect(fetchedEvents[0]).to.eql(events[1]);
+        expect(fetchedEvents[1]).to.eql(events[2]);
+
+        fetchedEvents = stream.reset().from(2).toEnd().events;
+        expect(fetchedEvents.length).to.be(2);
+        expect(fetchedEvents[0]).to.eql(events[1]);
+        expect(fetchedEvents[1]).to.eql(events[2]);
+
+        fetchedEvents = stream.reset().fromEnd().toStart().events;
+        expect(fetchedEvents.length).to.be(3);
+        expect(fetchedEvents).to.eql(Array.from(events).reverse());
+
+        fetchedEvents = stream.reset().fromStart().toEnd().backwards().events;
+        expect(fetchedEvents.length).to.be(3);
+        expect(fetchedEvents).to.eql(Array.from(events).reverse());
+    });
+
     it('is empty when stream does not exist', function(){
         stream = new JoinEventStream('foo-bar', ['baz'], eventstore);
         expect(stream.events).to.be.eql([]);

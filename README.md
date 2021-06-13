@@ -205,8 +205,28 @@ for (let event of stream{x}) {
 }
 ```
 
+Since version 0.9 the EventStream API also allows specifying the version range with a natural language like this:
+```javascript
+const allBackwards  = eventstore.getEventStream('my-stream').backwards();
+                    // OR eventstore.getEventStream('my-stream').fromEnd().toStart();
+const first10       = eventstore.getEventStream('my-stream').first(10);
+                    // OR eventstore.getEventStream('my-stream').fromStart().forwards(10);
+const last10        = eventstore.getEventStream('my-stream').last(10);
+                    // OR eventstore.getEventStream('my-stream').from(-10).forwards(10);
+const last10reverse = eventstore.getEventStream('my-stream').last(10).backwards();
+                    // OR eventstore.getEventStream('my-stream').fromEnd().backwards(10);
+const after15       = eventstore.getEventStream('my-stream').from(16).toEnd();
+const before10      = eventstore.getEventStream('my-stream').from(10).toStart();
+                    // OR eventstore.getEventStream('my-stream').fromStart().until(10).backwards();
+const middle10      = eventstore.getEventStream('my-stream').from(5).forwards(10);
+                    // OR eventstore.getEventStream('my-stream').from(5).following(10);
+                    // OR eventstore.getEventStream('my-stream').from(14).previous(10).forwards();
+const from9to5      = eventstore.getEventStream('my-stream').from(9).until(5);
+                    // OR eventstore.getEventStream('my-stream').from(5).until(9).backwards();
+```
+
 **Note**
-> If a new event is appended right after the `getEventStream()` call, but before iterating, this event will **not** be included in the iteration.
+> If a new event is appended right after the `getEventStream()` (including range selection methods) call, but before iterating, this event will **not** be included in the iteration.
 > This is due to the revision boundary being fixed at the time of getting the stream reference. In some cases this might be unwanted, but those cases are
 > probably better covered by [consumers](#consumers).
 

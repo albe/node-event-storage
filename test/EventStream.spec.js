@@ -90,13 +90,41 @@ describe('EventStream', function() {
         expect(mockEventStore.storage.until).to.be(2);
     });
 
-    it('leaves negative revisions untouched', function(){
+    it('adjusts negative revisions to stream length', function(){
         stream = new EventStream('foo', mockEventStore, -1, -1);
         // read all and convert to array
         const events = stream.events;
 
-        expect(mockEventStore.storage.from).to.be(-1);
-        expect(mockEventStore.storage.until).to.be(-1);
+        expect(mockEventStore.storage.from).to.be(events.length);
+        expect(mockEventStore.storage.until).to.be(events.length);
+    });
+
+    it('allows specifying version range in natural language', function(){
+        stream.fromStart().toEnd();
+        // read all and convert to array
+        let events = stream.events;
+        expect(mockEventStore.storage.from).to.be(1);
+        expect(mockEventStore.storage.until).to.be(events.length);
+
+        events = stream.reset().first(2).events;
+        expect(mockEventStore.storage.from).to.be(1);
+        expect(mockEventStore.storage.until).to.be(2);
+
+        events = stream.reset().last(2).events;
+        expect(mockEventStore.storage.from).to.be(events.length - 1);
+        expect(mockEventStore.storage.until).to.be(events.length);
+
+        events = stream.reset().from(2).toEnd().events;
+        expect(mockEventStore.storage.from).to.be(2);
+        expect(mockEventStore.storage.until).to.be(events.length);
+
+        events = stream.reset().fromEnd().toStart().events;
+        expect(mockEventStore.storage.from).to.be(events.length);
+        expect(mockEventStore.storage.until).to.be(1);
+
+        events = stream.reset().fromStart().toEnd().backwards().events;
+        expect(mockEventStore.storage.from).to.be(events.length);
+        expect(mockEventStore.storage.until).to.be(1);
     });
 
     it('is empty when stream does not exist', function(){

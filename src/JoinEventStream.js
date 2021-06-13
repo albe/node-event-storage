@@ -2,6 +2,17 @@ const EventStream = require('./EventStream');
 const { wrapAndCheck } = require('./util');
 
 /**
+ * Calculate the actual version number from a possibly relative (negative) version number.
+ *
+ * @param {number} version The version to normalize.
+ * @param {number} length The maximum version number
+ * @returns {number} The absolute version number.
+ */
+function normalizeVersion(version, length) {
+    return version < 0 ? version + length + 1 : version;
+}
+
+/**
  * An event stream is a simple wrapper around an iterator over storage documents.
  * It implements a node readable stream interface.
  */
@@ -19,22 +30,24 @@ class JoinEventStream extends EventStream {
         if (!(streams instanceof Array) || streams.length === 0) {
             throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
         }
-        this._next = new Array(streams.length).fill(undefined);
 
+        this.streamIndex = eventStore.storage.index;
         // Translate revisions to index numbers (1-based) and wrap around negatives
-        minRevision = wrapAndCheck(minRevision, eventStore.length);
-        maxRevision = wrapAndCheck(maxRevision, eventStore.length);
-
-        this.reverse = minRevision > maxRevision;
-        this.iterator = streams.map(streamName => {
-            if (!eventStore.streams[streamName]) {
-                return { next() { return { done: true }; } };
-            }
-            const streamIndex = eventStore.streams[streamName].index;
-            const from = streamIndex.find(minRevision, !this.reverse);
-            const until = streamIndex.find(maxRevision, this.reverse);
-            return eventStore.storage.readRange(from, until, streamIndex);
-        });
+        this.minRevision = normalizeVersion(minRevision, eventStore.length);
+        this.maxRevision = normalizeVersion(maxRevision, eventStore.length);
+        this.fetch = function() {
+            this._next = new Array(streams.length).fill(undefined);
+            return streams.map(streamName => {
+                if (!eventStore.streams[streamName]) {
+                    return { next() { return { done: true }; } };
+                }
+                const streamIndex = eventStore.streams[streamName].index;
+                const from = streamIndex.find(this.minRevision, this.minRevision <= this.maxRevision);
+                const until = streamIndex.find(this.maxRevision, this.minRevision > this.maxRevision);
+                return eventStore.storage.readRange(from, until, streamIndex);
+            });
+        }
+        this._iterator = null;
     }
 
     /**
@@ -43,7 +56,7 @@ class JoinEventStream extends EventStream {
      * @returns {*}
      */
     getValue(index) {
-        const next = this.iterator[index].next();
+        const next = this._iterator[index].next();
         return next.done ? false : next.value;
     }
 
@@ -51,10 +64,10 @@ class JoinEventStream extends EventStream {
      * @private
      * @param {number} first
      * @param {number} second
-     * @returns {boolean} If the first item follows after the second in the given read order determined by this.reverse flag.
+     * @returns {boolean} If the first item follows after the second in the given read order determined by this.minRevision and this.maxRevision.
      */
     follows(first, second) {
-        return (this.reverse ? first < second : first > second);
+        return (this.minRevision > this.maxRevision ? first < second : first > second);
     }
 
     /**
@@ -62,6 +75,9 @@ class JoinEventStream extends EventStream {
      * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
+        if (!this._iterator) {
+            this._iterator = this.fetch();
+        }
         let nextIndex = -1;
         this._next.forEach((value, index) => {
             if (typeof value === 'undefined') {

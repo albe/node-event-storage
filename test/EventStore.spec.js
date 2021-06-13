@@ -402,6 +402,68 @@ describe('EventStore', function() {
             }
         });
 
+        it('supports natural language range api', function(){
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            const allBackwards  = eventstore.getEventStream('foo-bar').backwards();
+            const first10       = eventstore.getEventStream('foo-bar').first(10); // fromStart().forwards(10)
+            const last10        = eventstore.getEventStream('foo-bar').last(10); // from(-10).forwards(), fromEnd().previous(10).forwards()
+            const after15       = eventstore.getEventStream('foo-bar').from(16).toEnd();
+            const before10      = eventstore.getEventStream('foo-bar').fromStart().until(10).backwards(); // from(10).backwards(10)
+            const middle10      = eventstore.getEventStream('foo-bar').from(5).forwards(10);
+            const middle10alt   = eventstore.getEventStream('foo-bar').from(14).previous(10).forwards();
+            const last10backward= eventstore.getEventStream('foo-bar').fromEnd().backwards(10);
+            // Tests that `forwards()` and `backwards()` are noops on already like ordered ranges
+            const allForwards   = eventstore.getEventStream('foo-bar').fromStart().toEnd().forwards();
+            const allBackwards2 = eventstore.getEventStream('foo-bar').fromEnd().toStart().backwards();
+
+            expect(allBackwards.events.length).to.be(20);
+            expect(allBackwards.events[0].key).to.be(20);
+            expect(allBackwards.events[19].key).to.be(1);
+
+            expect(first10.events.length).to.be(10);
+            expect(first10.events[0].key).to.be(1);
+            expect(first10.events[9].key).to.be(10);
+
+            expect(last10.events.length).to.be(10);
+            expect(last10.events[0].key).to.be(11);
+            expect(last10.events[9].key).to.be(20);
+
+            expect(after15.events.length).to.be(5);
+            expect(after15.events[0].key).to.be(16);
+            expect(after15.events[4].key).to.be(20);
+
+            expect(before10.events.length).to.be(10);
+            expect(before10.events[0].key).to.be(10);
+            expect(before10.events[9].key).to.be(1);
+
+            expect(middle10.events.length).to.be(10);
+            expect(middle10.events[0].key).to.be(5);
+            expect(middle10.events[9].key).to.be(14);
+
+            expect(middle10alt.events.length).to.be(10);
+            expect(middle10alt.events[0].key).to.be(5);
+            expect(middle10alt.events[9].key).to.be(14);
+
+            expect(last10backward.events.length).to.be(10);
+            expect(last10backward.events[0].key).to.be(20);
+            expect(last10backward.events[9].key).to.be(11);
+
+            expect(allForwards.events.length).to.be(20);
+            expect(allForwards.events[0].key).to.be(1);
+            expect(allForwards.events[19].key).to.be(20);
+
+            expect(allBackwards2.events.length).to.be(20);
+            expect(allBackwards2.events[0].key).to.be(20);
+            expect(allBackwards2.events[19].key).to.be(1);
+        });
+
         it('can open streams created in writer', function(done) {
             eventstore = new EventStore({
                 storageDirectory
@@ -506,7 +568,7 @@ describe('EventStore', function() {
                 eventstore.commit(i % 2 ? 'foo' : 'bar', [{key: i}]);
             }
 
-            let reverseStream = eventstore.fromStreams('foo-bar', ['foo', 'bar'],-1, 0);
+            let reverseStream = eventstore.fromStreams('foo-bar', ['foo', 'bar'],-1, 1);
             let i = 20;
             for (let event of reverseStream) {
                 expect(event).to.eql({ key: i-- });
