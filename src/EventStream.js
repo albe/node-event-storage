@@ -45,13 +45,14 @@ class EventStream extends stream.Readable {
             this.minRevision = normalizeVersion(minRevision, this.streamIndex.length);
             this.maxRevision = normalizeVersion(maxRevision, this.streamIndex.length);
             this.version = minVersion(this.streamIndex.length, maxRevision);
+            this._iterator = null;
             this.fetch = function() {
                 return eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex);
             }
         } else {
             this.streamIndex = { length: 0 };
             this.version = -1;
-            this.iterator = { next() { return { done: true }; } };
+            this._iterator = { next() { return { done: true }; } };
         }
     }
 
@@ -238,7 +239,7 @@ class EventStream extends stream.Readable {
      * @returns {EventStream}
      */
     reset() {
-        this.iterator = null;
+        this._iterator = null;
         this._events = null;
         return this;
     }
@@ -247,12 +248,12 @@ class EventStream extends stream.Readable {
      * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
-        if (!this.iterator) {
-            this.iterator = this.fetch();
+        if (!this._iterator) {
+            this._iterator = this.fetch();
         }
         let next;
         try {
-            next = this.iterator.next();
+            next = this._iterator.next();
         } catch(e) {
             return false;
         }
