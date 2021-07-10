@@ -745,4 +745,41 @@ describe('EventStore', function() {
         });
     });
 
+    describe('scanConsumers', function() {
+
+        it('returns an empty list if no consumers defined', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+
+            eventstore.scanConsumers((err, consumers) => {
+                expect(consumers).to.eql([]);
+                done();
+            });
+        });
+
+        it('returns the list of consumer names', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+            eventstore.commit('foo', { foo: 'bar', id: 1 });
+
+            const consumer1 = eventstore.getConsumer('_all', 'consumer1');
+            consumer1.on('data', (e) => consumer1.setState(e.payload.id));
+            const consumer2 = eventstore.getConsumer('foo-bar', 'consumer2');
+            consumer2.on('data', (e) => consumer2.setState({ [e.payload.foo]: e.payload.id }));
+
+            consumer2.on('caught-up', () =>
+                eventstore.scanConsumers((err, consumers) => {
+                    expect(consumers).to.contain('_all.consumer1');
+                    expect(consumers).to.contain('stream-foo-bar.consumer2');
+                    done();
+                })
+            );
+        });
+
+    });
+
 });

@@ -387,8 +387,9 @@ class EventStore extends events.EventEmitter {
             return;
         }
         fs.readdir(consumersPath, (err, files) => {
+            /* istanbul ignore if */
             if (err) {
-                return callback(err);
+                return callback(err, []);
             }
             let matches;
             const regex = new RegExp(`^${this.storage.storageFile}\.([^.]*\..*)$`);
