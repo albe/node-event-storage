@@ -1,3 +1,5 @@
+![event-storage](logo/color.png)
+
 [![build](https://github.com/albe/node-event-storage/workflows/build/badge.svg)](https://github.com/albe/node-event-storage/actions)
 [![npm version](https://badge.fury.io/js/event-storage.svg)](https://badge.fury.io/js/event-storage)
 [![Code Climate](https://codeclimate.com/github/albe/node-event-storage/badges/gpa.svg)](https://codeclimate.com/github/albe/node-event-storage)
