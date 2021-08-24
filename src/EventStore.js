@@ -375,6 +375,33 @@ class EventStore extends events.EventEmitter {
         consumer.streamName = streamName;
         return consumer;
     }
+
+    /**
+     * Scan the existing consumers on this EventStore and asynchronously return a list of their names.
+     * @param {function(error: Error, consumers: array)} callback A callback that will receive an error as first and the list of consumers as second argument.
+     */
+    scanConsumers(callback) {
+        const consumersPath = path.join(this.storage.indexDirectory, 'consumers');
+        if (!fs.existsSync(consumersPath)) {
+            callback(null, []);
+            return;
+        }
+        fs.readdir(consumersPath, (err, files) => {
+            /* istanbul ignore if */
+            if (err) {
+                return callback(err, []);
+            }
+            let matches;
+            const regex = new RegExp(`^${this.storage.storageFile}\.([^.]*\..*)$`);
+            const consumers = [];
+            for (let file of files) {
+                if ((matches = file.match(regex)) !== null) {
+                    consumers.push(matches[1]);
+                }
+            }
+            callback(null, consumers);
+        });
+    }
 }
 
 module.exports = EventStore;
