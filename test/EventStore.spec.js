@@ -844,6 +844,40 @@ describe('EventStore', function() {
             });
         });
 
+        it('is reflected in a concurrent reader instance', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                storageConfig: { syncOnFlush: true }
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                // Flush all write buffers (including stream index) before opening the reader
+                eventstore.storage.flush();
+
+                const readstore = new EventStore({
+                    storageDirectory,
+                    readOnly: true
+                });
+
+                readstore.on('ready', () => {
+                    expect(readstore.getStreamVersion('foo-bar')).to.be(1);
+
+                    // Reader emits 'stream-closed' when it detects the rename via file watcher
+                    readstore.on('stream-closed', (streamName) => {
+                        expect(streamName).to.be('foo-bar');
+                        expect(readstore.getStreamVersion('foo-bar')).to.be(1);
+                        const stream = readstore.getEventStream('foo-bar');
+                        expect(stream).to.not.be(false);
+                        expect(stream.events.length).to.be(1);
+                        readstore.close();
+                        done();
+                    });
+
+                    eventstore.closeEventStream('foo-bar');
+                });
+            });
+        });
+
     });
 
     describe('getConsumer', function() {

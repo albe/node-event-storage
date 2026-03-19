@@ -111,19 +111,36 @@ class EventStore extends events.EventEmitter {
         if (!name.startsWith('stream-')) {
             return;
         }
-        const streamName = name.substr(7, name.length - 7);
-        /* istanbul ignore if */
+        let streamName = name.slice(7);
+        // Detect the `.closed` suffix, e.g. when the writer renames the index file while a
+        // reader process has the stream open and the directory watcher emits 'index-created'
+        // with the new filename (e.g. 'stream-foo-bar.closed').
+        let isClosed = closed;
+        if (streamName.endsWith('.closed')) {
+            streamName = streamName.slice(0, -7);
+            isClosed = true;
+        }
         if (streamName in this.streams) {
+            if (isClosed && !this.streams[streamName].closed) {
+                // The stream was renamed to .closed while this instance had it open.
+                // The old ReadOnlyIndex was already closed via onRename, so we open the new one.
+                const closedIndexName = 'stream-' + streamName + '.closed';
+                const closedIndex = this.storage.openIndex(closedIndexName);
+                delete this.storage.secondaryIndexes[closedIndexName];
+                // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
+                this.streams[streamName] = { index: closedIndex, closed: true };
+                this.emit('stream-closed', streamName);
+            }
             return;
         }
-        const indexName = closed ? 'stream-' + streamName + '.closed' : 'stream-' + streamName;
+        const indexName = isClosed ? 'stream-' + streamName + '.closed' : 'stream-' + streamName;
         const index = this.storage.openIndex(indexName);
-        if (closed) {
+        if (isClosed) {
             // Remove from secondary indexes so new writes are not indexed into a closed stream
             delete this.storage.secondaryIndexes[indexName];
         }
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
-        this.streams[streamName] = { index, closed };
+        this.streams[streamName] = { index, closed: isClosed };
         this.emit('stream-available', streamName);
     }
 
