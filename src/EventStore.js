@@ -90,7 +90,9 @@ class EventStore extends events.EventEmitter {
             }
             let matches;
             for (let file of files) {
-                if ((matches = file.match(/(stream-.*)\.index$/)) !== null) {
+                if ((matches = file.match(/(stream-.*)\.closed\.index$/)) !== null) {
+                    this.registerStream(matches[1], true);
+                } else if ((matches = file.match(/(stream-.*)\.index$/)) !== null) {
                     this.registerStream(matches[1]);
                 }
             }
@@ -102,8 +104,9 @@ class EventStore extends events.EventEmitter {
     /**
      * @private
      * @param {string} name The full stream name, including the `stream-` prefix.
+     * @param {boolean} [closed] Whether the stream is closed.
      */
-    registerStream(name) {
+    registerStream(name, closed = false) {
         /* istanbul ignore if */
         if (!name.startsWith('stream-')) {
             return;
@@ -113,9 +116,14 @@ class EventStore extends events.EventEmitter {
         if (streamName in this.streams) {
             return;
         }
-        const index = this.storage.openIndex('stream-'+streamName);
+        const indexName = closed ? 'stream-' + streamName + '.closed' : 'stream-' + streamName;
+        const index = this.storage.openIndex(indexName);
+        if (closed) {
+            // Remove from secondary indexes so new writes are not indexed into a closed stream
+            delete this.storage.secondaryIndexes[indexName];
+        }
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
-        this.streams[streamName] = { index };
+        this.streams[streamName] = { index, closed };
         this.emit('stream-available', streamName);
     }
 
@@ -125,6 +133,12 @@ class EventStore extends events.EventEmitter {
      * @api
      */
     close() {
+        // Close indexes for closed streams that are not tracked by storage secondary indexes
+        for (let streamName of Object.keys(this.streams)) {
+            if (this.streams[streamName].closed) {
+                this.streams[streamName].index.close();
+            }
+        }
         this.storage.close();
     }
 
@@ -194,6 +208,7 @@ class EventStore extends events.EventEmitter {
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName });
         }
+        assert(!this.streams[streamName].closed, `Stream "${streamName}" is closed and cannot be written to.`);
         let streamVersion = this.streams[streamName].index.length;
         if (expectedVersion !== ExpectedVersion.Any && streamVersion !== expectedVersion) {
             throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
@@ -359,6 +374,47 @@ class EventStore extends events.EventEmitter {
         this.streams[streamName].index.destroy();
         delete this.streams[streamName];
         this.emit('stream-deleted', streamName);
+    }
+
+    /**
+     * Close a stream so that no new events are indexed into it.
+     * The stream will still be readable, but any attempt to write to it will throw an error.
+     * A closed stream is persisted by renaming its index file to include a `.closed` marker
+     * (e.g. `stream-X.closed.index`), so it will be recognized as closed when the store is reopened.
+     *
+     * @api
+     * @param {string} streamName The name of the stream to close.
+     * @returns void
+     * @throws {Error} If the storage is read-only.
+     * @throws {Error} If the stream does not exist.
+     * @throws {Error} If the stream is already closed.
+     */
+    closeEventStream(streamName) {
+        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not close a stream on it.');
+        assert(streamName in this.streams, `Stream "${streamName}" does not exist.`);
+        assert(!this.streams[streamName].closed, `Stream "${streamName}" is already closed.`);
+
+        const indexName = 'stream-' + streamName;
+        const { index } = this.streams[streamName];
+
+        // Flush and close the index before renaming the file
+        index.close();
+
+        // Rename the index file to mark it as closed (e.g. stream-foo.index -> stream-foo.closed.index)
+        const closedFileName = index.fileName.replace(/\.index$/, '.closed.index');
+        fs.renameSync(index.fileName, closedFileName);
+
+        // Remove from secondary indexes so that new writes are no longer indexed into this stream
+        delete this.storage.secondaryIndexes[indexName];
+
+        // Reopen the renamed index for read access and keep it out of secondary indexes
+        const closedIndexName = indexName + '.closed';
+        const closedIndex = this.storage.openIndex(closedIndexName);
+        delete this.storage.secondaryIndexes[closedIndexName];
+
+        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
+        this.streams[streamName] = { index: closedIndex, closed: true };
+        this.emit('stream-closed', streamName);
     }
 
     /**
