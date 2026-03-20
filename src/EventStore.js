@@ -88,12 +88,10 @@ class EventStore extends events.EventEmitter {
             if (err) {
                 return callback(err);
             }
-            let matches;
+            let match;
             for (let file of files) {
-                if ((matches = file.match(/(stream-.*\.closed)\.index$/)) !== null) {
-                    this.registerStream(matches[1]);
-                } else if ((matches = file.match(/(stream-.*)\.index$/)) !== null) {
-                    this.registerStream(matches[1]);
+                if ((match = file.match(/(stream-.*)\.index$/)) !== null) {
+                    this.registerStream(match[1]);
                 }
             }
             callback();
