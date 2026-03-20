@@ -66,6 +66,8 @@ class ReadableStorage extends events.EventEmitter {
 
         this.dataDirectory = path.resolve(config.dataDirectory);
 
+        this.preReadHook = null;
+
         this.initializeIndexes(config);
         this.scanPartitions(config);
     }
@@ -198,6 +200,17 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
+     * Register a hook that is called before a document is returned from a read operation.
+     * The hook receives the document and the partition metadata and may throw to abort the read.
+     *
+     * @api
+     * @param {function(object, object): void} hook A function receiving (document, partitionMetadata).
+     */
+    preRead(hook) {
+        this.preReadHook = hook;
+    }
+
+    /**
      * @protected
      * @param {number} partitionId The partition to read from.
      * @param {number} position The file position to read from.
@@ -208,7 +221,11 @@ class ReadableStorage extends events.EventEmitter {
     readFrom(partitionId, position, size) {
         const partition = this.getPartition(partitionId);
         const data = partition.readFrom(position, size);
-        return this.serializer.deserialize(data);
+        const document = this.serializer.deserialize(data);
+        if (this.preReadHook) {
+            this.preReadHook(document, partition.metadata);
+        }
+        return document;
     }
 
     /**

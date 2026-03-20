@@ -64,6 +64,7 @@ class WritableStorage extends ReadableStorage {
             this.unlock();
         }
         this.partitioner = config.partitioner;
+        this.preCommitHook = null;
     }
 
     /**
@@ -179,6 +180,17 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * Register a hook that is called before a document is written to storage.
+     * The hook receives the document and the partition metadata and may throw to abort the write.
+     *
+     * @api
+     * @param {function(object, object): void} hook A function receiving (document, partitionMetadata).
+     */
+    preCommit(hook) {
+        this.preCommitHook = hook;
+    }
+
+    /**
      * Get a partition either by name or by id.
      * If a partition with the given name does not exist, a new one will be created.
      * If a partition with the given id does not exist, an error is thrown.
@@ -190,10 +202,14 @@ class WritableStorage extends ReadableStorage {
      */
     getPartition(partitionIdentifier) {
         if (typeof partitionIdentifier === 'string') {
+            const partitionShortName = partitionIdentifier;
             const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
             partitionIdentifier = WritablePartition.idFor(partitionName);
             if (!this.partitions[partitionIdentifier]) {
-                this.partitions[partitionIdentifier] = this.createPartition(partitionName, this.partitionConfig);
+                const partitionConfig = typeof this.partitionConfig.metadata === 'function'
+                    ? { ...this.partitionConfig, metadata: this.partitionConfig.metadata(partitionShortName) }
+                    : this.partitionConfig;
+                this.partitions[partitionIdentifier] = this.createPartition(partitionName, partitionConfig);
                 this.emit('partition-created', partitionIdentifier);
             }
             this.partitions[partitionIdentifier].open();
@@ -214,6 +230,9 @@ class WritableStorage extends ReadableStorage {
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
+        if (this.preCommitHook) {
+            this.preCommitHook(document, partition.metadata);
+        }
         const position = partition.write(data, this.length, callback);
 
         assert(position !== false, 'Error writing document.');
