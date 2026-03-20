@@ -699,6 +699,187 @@ describe('EventStore', function() {
 
     });
 
+    describe('closeEventStream', function() {
+
+        it('throws in read-only mode', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', () => true);
+
+            let readstore = new EventStore({
+                storageDirectory,
+                readOnly: true
+            });
+            readstore.on('ready', () => {
+                expect(() => readstore.closeEventStream('foo-bar')).to.throwError();
+                readstore.close();
+                done();
+            });
+        });
+
+        it('throws when stream does not exist', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            expect(() => eventstore.closeEventStream('non-existing')).to.throwError();
+        });
+
+        it('throws when stream is already closed', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.closeEventStream('foo-bar');
+                expect(() => eventstore.closeEventStream('foo-bar')).to.throwError();
+                done();
+            });
+        });
+
+        it('renames the index file to .closed.index', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                expect(fs.existsSync(storageDirectory + '/streams/eventstore.stream-foo-bar.index')).to.be(true);
+                eventstore.closeEventStream('foo-bar');
+                expect(fs.existsSync(storageDirectory + '/streams/eventstore.stream-foo-bar.index')).to.be(false);
+                expect(fs.existsSync(storageDirectory + '/streams/eventstore.stream-foo-bar.closed.index')).to.be(true);
+                done();
+            });
+        });
+
+        it('emits stream-closed event', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.on('stream-closed', (streamName) => {
+                    expect(streamName).to.be('foo-bar');
+                    done();
+                });
+                eventstore.closeEventStream('foo-bar');
+            });
+        });
+
+        it('makes the stream still readable after closing', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            const events = [{ foo: 'bar' }, { foo: 'baz' }];
+            eventstore.commit('foo-bar', events, () => {
+                eventstore.closeEventStream('foo-bar');
+                const stream = eventstore.getEventStream('foo-bar');
+                expect(stream).to.not.be(false);
+                let i = 0;
+                for (let event of stream) {
+                    expect(event).to.eql(events[i++]);
+                }
+                expect(i).to.be(2);
+                done();
+            });
+        });
+
+        it('prevents writing to a closed stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.closeEventStream('foo-bar');
+                expect(() => eventstore.commit('foo-bar', [{ foo: 'baz' }])).to.throwError();
+                done();
+            });
+        });
+
+        it('does not index new events into a closed stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                const streamBefore = eventstore.getEventStream('foo-bar');
+                expect(streamBefore.events.length).to.be(1);
+
+                eventstore.closeEventStream('foo-bar');
+
+                // Commit event to a different stream that would otherwise match
+                eventstore.commit('other-stream', [{ foo: 'baz' }], () => {
+                    const streamAfter = eventstore.getEventStream('foo-bar');
+                    expect(streamAfter.events.length).to.be(1);
+                    done();
+                });
+            });
+        });
+
+        it('prevents creating a stream with the same name as a closed stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.closeEventStream('foo-bar');
+                expect(() => eventstore.createEventStream('foo-bar', () => true)).to.throwError();
+                done();
+            });
+        });
+
+        it('is recognized as closed after reopening the store', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.closeEventStream('foo-bar');
+                eventstore.close();
+                eventstore = null;
+
+                const eventstore2 = new EventStore({
+                    storageDirectory
+                });
+                eventstore2.on('ready', () => {
+                    expect(() => eventstore2.commit('foo-bar', [{ foo: 'baz' }])).to.throwError();
+                    const stream = eventstore2.getEventStream('foo-bar');
+                    expect(stream).to.not.be(false);
+                    expect(stream.events.length).to.be(1);
+                    eventstore2.close();
+                    done();
+                });
+            });
+        });
+
+        it('is reflected in a concurrent reader instance', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                storageConfig: { syncOnFlush: true }
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                // Flush all write buffers (including stream index) before opening the reader
+                eventstore.storage.flush();
+
+                const readstore = new EventStore({
+                    storageDirectory,
+                    readOnly: true
+                });
+
+                readstore.on('ready', () => {
+                    expect(readstore.getStreamVersion('foo-bar')).to.be(1);
+
+                    // Reader emits 'stream-closed' when it detects the rename via file watcher
+                    readstore.on('stream-closed', (streamName) => {
+                        expect(streamName).to.be('foo-bar');
+                        expect(readstore.getStreamVersion('foo-bar')).to.be(1);
+                        const stream = readstore.getEventStream('foo-bar');
+                        expect(stream).to.not.be(false);
+                        expect(stream.events.length).to.be(1);
+                        readstore.close();
+                        done();
+                    });
+
+                    eventstore.closeEventStream('foo-bar');
+                });
+            });
+        });
+
+    });
+
     describe('getConsumer', function() {
 
         it('returns a Consumer instance', function() {

@@ -109,6 +109,7 @@ class ReadableStorage extends events.EventEmitter {
         const { index } = this.createIndex(config.indexFile, this.indexOptions);
         this.index = index;
         this.secondaryIndexes = {};
+        this.readonlyIndexes = {};
     }
 
     /**
@@ -172,6 +173,9 @@ class ReadableStorage extends events.EventEmitter {
     close() {
         this.index.close();
         this.forEachSecondaryIndex(index => index.close());
+        for (let index of Object.values(this.readonlyIndexes)) {
+            index.close();
+        }
         this.forEachPartition(partition => partition.close());
         this.emit('closed');
     }
@@ -276,6 +280,27 @@ class ReadableStorage extends events.EventEmitter {
             const document = this.readFrom(entry.partition, entry.position, entry.size);
             yield document;
         }
+    }
+
+    /**
+     * Open an existing readonly index for reading, without registering it in the secondary indexes write path.
+     * Use this for indexes whose files carry a status marker (e.g. `stream-foo.closed.index`).
+     *
+     * @api
+     * @param {string} name The readonly index name (e.g. 'stream-foo.closed').
+     * @returns {ReadableIndex}
+     * @throws {Error} if the readonly index does not exist.
+     */
+    openReadonlyIndex(name) {
+        if (name in this.readonlyIndexes) {
+            return this.readonlyIndexes[name];
+        }
+        const indexName = this.storageFile + '.' + name + '.index';
+        assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
+        const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions));
+        index.open();
+        this.readonlyIndexes[name] = index;
+        return index;
     }
 
     /**
