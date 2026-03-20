@@ -90,8 +90,8 @@ class EventStore extends events.EventEmitter {
             }
             let matches;
             for (let file of files) {
-                if ((matches = file.match(/(stream-.*)\.closed\.index$/)) !== null) {
-                    this.registerStream(matches[1], true);
+                if ((matches = file.match(/(stream-.*\.closed)\.index$/)) !== null) {
+                    this.registerStream(matches[1]);
                 } else if ((matches = file.match(/(stream-.*)\.index$/)) !== null) {
                     this.registerStream(matches[1]);
                 }
@@ -103,19 +103,17 @@ class EventStore extends events.EventEmitter {
 
     /**
      * @private
-     * @param {string} name The full stream name, including the `stream-` prefix.
-     * @param {boolean} [closed] Whether the stream is closed.
+     * @param {string} name The full stream name, including the `stream-` prefix (and optional `.closed` suffix).
      */
-    registerStream(name, closed = false) {
+    registerStream(name) {
         /* istanbul ignore if */
         if (!name.startsWith('stream-')) {
             return;
         }
         let streamName = name.slice(7);
-        // Detect the `.closed` suffix, e.g. when the writer renames the index file while a
-        // reader process has the stream open and the directory watcher emits 'index-created'
-        // with the new filename (e.g. 'stream-foo-bar.closed').
-        let isClosed = closed;
+        // Detect the `.closed` suffix — present both in the initial scan and when the directory
+        // watcher emits 'index-created' after a writer renames the file (e.g. 'stream-foo-bar.closed').
+        let isClosed = false;
         if (streamName.endsWith('.closed')) {
             streamName = streamName.slice(0, -7);
             isClosed = true;
@@ -125,20 +123,16 @@ class EventStore extends events.EventEmitter {
                 // The stream was renamed to .closed while this instance had it open.
                 // The old ReadOnlyIndex was already closed via onRename, so we open the new one.
                 const closedIndexName = 'stream-' + streamName + '.closed';
-                const closedIndex = this.storage.openIndex(closedIndexName);
-                delete this.storage.secondaryIndexes[closedIndexName];
+                const closedIndex = this.storage.openClosedIndex(closedIndexName);
                 // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
                 this.streams[streamName] = { index: closedIndex, closed: true };
                 this.emit('stream-closed', streamName);
             }
             return;
         }
-        const indexName = isClosed ? 'stream-' + streamName + '.closed' : 'stream-' + streamName;
-        const index = this.storage.openIndex(indexName);
-        if (isClosed) {
-            // Remove from secondary indexes so new writes are not indexed into a closed stream
-            delete this.storage.secondaryIndexes[indexName];
-        }
+        const index = isClosed
+            ? this.storage.openClosedIndex(name)
+            : this.storage.openIndex(name);
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index, closed: isClosed };
         this.emit('stream-available', streamName);
@@ -424,10 +418,9 @@ class EventStore extends events.EventEmitter {
         // Remove from secondary indexes so that new writes are no longer indexed into this stream
         delete this.storage.secondaryIndexes[indexName];
 
-        // Reopen the renamed index for read access and keep it out of secondary indexes
+        // Reopen the renamed index for read access, outside the secondary indexes write path
         const closedIndexName = indexName + '.closed';
-        const closedIndex = this.storage.openIndex(closedIndexName);
-        delete this.storage.secondaryIndexes[closedIndexName];
+        const closedIndex = this.storage.openClosedIndex(closedIndexName);
 
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index: closedIndex, closed: true };

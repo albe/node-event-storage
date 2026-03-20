@@ -279,6 +279,23 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
+     * Open an existing closed index for reading, without registering it in the secondary indexes write path.
+     * Use this for indexes whose files carry the `.closed` marker (e.g. `stream-foo.closed.index`).
+     *
+     * @api
+     * @param {string} name The closed index name, including the `.closed` suffix (e.g. 'stream-foo.closed').
+     * @returns {ReadableIndex}
+     * @throws {Error} if the closed index does not exist.
+     */
+    openClosedIndex(name) {
+        const indexName = this.storageFile + '.' + name + '.index';
+        assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
+        const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions));
+        index.open();
+        return index;
+    }
+
+    /**
      * Open an existing index.
      *
      * @api
