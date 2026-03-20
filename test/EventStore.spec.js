@@ -963,4 +963,130 @@ describe('EventStore', function() {
 
     });
 
+    describe('preCommit', function() {
+
+        it('calls the hook before writing with the event and partition metadata', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push({ event, metadata }));
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['admin']);
+            expect(calls[0].event.payload.type).to.be('FooCreated');
+        });
+
+        it('aborts the write when the hook throws', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.preCommit((event, metadata) => {
+                if (!metadata.allowedRoles.includes('user')) {
+                    throw new Error('Not authorized');
+                }
+            });
+            expect(() => eventstore.commit('foo', [{ type: 'FooCreated' }])).to.throwError(/Not authorized/);
+            expect(eventstore.length).to.be(0);
+        });
+
+        it('supports per-stream metadata via a function', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: (streamName) => ({ streamName })
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push(metadata));
+            eventstore.commit('foo', [{ type: 'A' }]);
+            eventstore.commit('bar', [{ type: 'B' }]);
+            expect(calls[0].streamName).to.be('foo');
+            expect(calls[1].streamName).to.be('bar');
+        });
+
+        it('throws when the storage is opened in read-only mode', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.close();
+
+            const readOnly = new EventStore({
+                storageDirectory,
+                storageConfig: { readOnly: true }
+            });
+            readOnly.on('ready', () => {
+                expect(() => readOnly.preCommit(() => {})).to.throwError();
+                readOnly.close();
+                eventstore = null;
+                done();
+            });
+        });
+
+    });
+
+    describe('preRead', function() {
+
+        it('calls the hook before reading with the position and partition metadata', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const calls = [];
+            eventstore.preRead((position, metadata) => calls.push({ position, metadata }));
+
+            const stream = eventstore.getEventStream('foo');
+            const events = Array.from(stream);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['user']);
+            expect(typeof calls[0].position).to.be('number');
+        });
+
+        it('aborts the read when the hook throws', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.preRead((position, metadata) => {
+                if (!metadata.allowedRoles.includes('user')) {
+                    throw new Error('Not authorized to read');
+                }
+            });
+
+            // EventStream.next() catches iterator errors, so iteration stops with no events
+            const stream = eventstore.getEventStream('foo');
+            const result = Array.from(stream);
+            expect(result).to.have.length(0);
+        });
+
+        it('works on a read-only store', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.close();
+
+            const readOnly = new EventStore({
+                storageDirectory,
+                storageConfig: { readOnly: true }
+            });
+            readOnly.on('ready', () => {
+                const calls = [];
+                expect(() => readOnly.preRead((pos, meta) => calls.push(meta))).to.not.throwError();
+                const stream = readOnly.getEventStream('foo');
+                Array.from(stream);
+                expect(calls).to.have.length(1);
+                readOnly.close();
+                eventstore = null;
+                done();
+            });
+        });
+
+    });
+
 });

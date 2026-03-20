@@ -28,6 +28,10 @@ class EventStore extends events.EventEmitter {
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
+     * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
+     *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
+     *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
+     *   `config.storageConfig.metadata` is not also set.
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
@@ -44,6 +48,17 @@ class EventStore extends events.EventEmitter {
             readOnly: config.readOnly || false
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
+
+        // Translate the high-level streamMetadata option into the storage-level metadata function,
+        // but only when the caller has not already provided a lower-level storageConfig.metadata.
+        if (config.streamMetadata !== undefined && storageConfig.metadata === undefined) {
+            if (typeof config.streamMetadata === 'function') {
+                storageConfig.metadata = config.streamMetadata;
+            } else {
+                storageConfig.metadata = (streamName) => config.streamMetadata[streamName] || {};
+            }
+        }
+
         this.initialize(storeName, storageConfig);
     }
 
@@ -143,6 +158,32 @@ class EventStore extends events.EventEmitter {
      */
     close() {
         this.storage.close();
+    }
+
+    /**
+     * Register a hook that is called before an event is committed to storage.
+     * The hook receives `(event, partitionMetadata)` and may throw to abort the write.
+     * The hook is invoked on every write, so its logic should be cheap, fast, and synchronous.
+     *
+     * @api
+     * @param {function(object, object): void} hook A function receiving (event, partitionMetadata).
+     * @throws {Error} If the storage was opened in read-only mode.
+     */
+    preCommit(hook) {
+        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not register a preCommit hook on it.');
+        this.storage.preCommit(hook);
+    }
+
+    /**
+     * Register a hook that is called before an event is read from storage.
+     * The hook receives `(position, partitionMetadata)` and may throw to abort the read.
+     * The hook is invoked on every read, so its logic should be cheap, fast, and synchronous.
+     *
+     * @api
+     * @param {function(number, object): void} hook A function receiving (position, partitionMetadata).
+     */
+    preRead(hook) {
+        this.storage.preRead(hook);
     }
 
     /**
