@@ -191,6 +191,8 @@ describe('EventStore', function() {
                         expect(i).to.be(committedEvents.length);
                         // The torn stream-b write must have been removed from the primary storage
                         expect(eventstore2.length).to.be(committedEvents.length);
+                        // The secondary stream index for stream-b must also be repaired
+                        expect(eventstore2.getStreamVersion('stream-b')).to.be(0);
                         eventstore2.close();
                         done();
                     });

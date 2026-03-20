@@ -694,6 +694,38 @@ describe('Storage', function() {
             index.open();
             expect(index.length).to.be(3);
         });
+
+        it('repairs stale secondary index when opened after a primary index truncation', function() {
+            // Simulate the case where checkTornWrites() truncated the primary index before
+            // secondary indexes were loaded (e.g. after LOCK_RECLAIM on an unclean shutdown).
+            storage = createStorage();
+            storage.open();
+            // Write 10 documents and ensure a secondary index (matches even-numbered foo)
+            const totalDocuments = 10;
+            const truncateAt = 6; // simulated truncation point
+            const expectedSecondaryCount = Math.floor(truncateAt / 2); // even numbers in 1..truncateAt
+            storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
+            for (let i = 1; i <= totalDocuments; i++) {
+                storage.write({foo: i});
+            }
+            storage.flush();
+            storage.close();
+
+            // Re-open and truncate primary index directly (simulating checkTornWrites running
+            // before secondary indexes are loaded)
+            storage = createStorage();
+            storage.open();
+            storage.index.truncate(truncateAt); // truncate primary index without going through full truncate()
+            // Close without touching secondary index on disk
+            storage.index.flush();
+            storage.close();
+
+            // Re-open: openIndex() should detect the stale secondary index and repair it
+            storage = createStorage();
+            storage.open();
+            const repairedIndex = storage.openIndex('foobar');
+            expect(repairedIndex.length).to.be(expectedSecondaryCount); // only entries 2,4,6 are still valid
+        });
     });
 
     describe('matches', function() {
