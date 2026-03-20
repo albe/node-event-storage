@@ -121,7 +121,7 @@ class EventStore extends events.EventEmitter {
                 // The stream was renamed to .closed while this instance had it open.
                 // The old ReadOnlyIndex was already closed via onRename, so we open the new one.
                 const closedIndexName = 'stream-' + streamName + '.closed';
-                const closedIndex = this.storage.openClosedIndex(closedIndexName);
+                const closedIndex = this.storage.openReadonlyIndex(closedIndexName);
                 // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
                 this.streams[streamName] = { index: closedIndex, closed: true };
                 this.emit('stream-closed', streamName);
@@ -129,7 +129,7 @@ class EventStore extends events.EventEmitter {
             return;
         }
         const index = isClosed
-            ? this.storage.openClosedIndex(name)
+            ? this.storage.openReadonlyIndex(name)
             : this.storage.openIndex(name);
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index, closed: isClosed };
@@ -142,12 +142,6 @@ class EventStore extends events.EventEmitter {
      * @api
      */
     close() {
-        // Close indexes for closed streams that are not tracked by storage secondary indexes
-        for (let streamName of Object.keys(this.streams)) {
-            if (this.streams[streamName].closed) {
-                this.streams[streamName].index.close();
-            }
-        }
         this.storage.close();
     }
 
@@ -418,7 +412,7 @@ class EventStore extends events.EventEmitter {
 
         // Reopen the renamed index for read access, outside the secondary indexes write path
         const closedIndexName = indexName + '.closed';
-        const closedIndex = this.storage.openClosedIndex(closedIndexName);
+        const closedIndex = this.storage.openReadonlyIndex(closedIndexName);
 
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index: closedIndex, closed: true };
