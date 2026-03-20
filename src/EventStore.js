@@ -92,22 +92,10 @@ class EventStore extends events.EventEmitter {
             // commitId = global sequence number at which the commit started
             this.storage.truncate(lastEvent.metadata.commitId);
         } else if (truncateIndex) {
-            // The index contained items that are not in the storage file, so truncate it after the last valid event
-            this.storage.truncate(position + 1);
+            // The index contained items that are not in the storage file; truncate everything
+            // after `position`, the last sequence number that was successfully read.
+            this.storage.truncate(position);
         }
-    }
-
-    /**
-     * @private
-     * @param {string} name
-     * @param {object} config
-     * @returns {ReadableStorage|WritableStorage}
-     */
-    createStorage(name, config) {
-        if (config.readOnly === true) {
-            return new Storage.ReadOnly(name, config);
-        }
-        return new Storage(name, config);
     }
 
     /**
