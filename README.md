@@ -614,6 +614,10 @@ Two hooks can be registered on the storage to intercept reads and writes:
 - **`preRead(hook)`** — called inside `readFrom()` with `(position, partitionMetadata)` *before* the document is
   read from disk. Throw from the hook to abort the read.
 
+> **Performance note:** Both hooks are invoked synchronously on *every* read and write operation. Keep the hook
+> logic as cheap and fast as possible — avoid I/O, async operations, or any non-trivial computation inside a hook,
+> as the overhead will be paid on every document accessed.
+
 Because the metadata is defined per partition, you can store different access control information for each
 stream/partition. Pass a function as `config.metadata` and it will be called with the partition name whenever a
 new partition is created:
