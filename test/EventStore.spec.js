@@ -114,6 +114,44 @@ describe('EventStore', function() {
         });
     });
 
+    it('repairs stale index entries when last readable event has a complete commit', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        eventstore.on('ready', () => {
+            // Commit two separate single-event commits to different streams
+            eventstore.commit('stream-a', [{ key: 1 }], () => {
+                eventstore.commit('stream-b', [{ key: 2 }], () => {
+                    // Truncate the partition at the second event's file position, making
+                    // the second index entry point beyond the end of the file, while the
+                    // first event (a complete single-event commit) remains fully intact.
+                    const entry = eventstore.storage.index.get(2);
+                    eventstore.storage.getPartition(entry.partition).truncate(entry.position);
+                    // Close flushes all indexes to disk so the index still has 2 entries
+                    eventstore.close();
+
+                    // Reopen: checkUnfinishedCommits detects the stale entry and truncates
+                    // the index to the last valid event (the else-if (truncateIndex) path)
+                    eventstore = new EventStore({
+                        storageDirectory
+                    });
+                    eventstore.on('ready', () => {
+                        // The first event (stream-a) must still be accessible
+                        expect(eventstore.length).to.be(1);
+                        expect(eventstore.getStreamVersion('stream-a')).to.be(1);
+                        const stream = eventstore.getEventStream('stream-a');
+                        expect(stream.events.length).to.be(1);
+                        expect(stream.events[0]).to.eql({ key: 1 });
+                        // The stale stream-b entry must have been removed
+                        expect(eventstore.getStreamVersion('stream-b')).to.be(0);
+                        done();
+                    });
+                });
+            });
+        });
+    });
+
     it('does not lose previously committed data after repairing an unfinished commit', function(done) {
         eventstore = new EventStore({
             storageDirectory

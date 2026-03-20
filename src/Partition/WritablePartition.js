@@ -314,7 +314,7 @@ class WritablePartition extends ReadablePartition {
      * @param {number} after The file position after which to truncate the partition.
      */
     truncate(after) {
-        if (after > this.size) {
+        if (after >= this.size) {
             return;
         }
         this.open();
