@@ -1,17 +1,33 @@
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const Partition = require('../Partition');
 const Index = require('../Index');
-const { assert, createHmac, matches, buildMetadataForMatcher } = require('../util');
+const { assert, createHmac, matches, wrapAndCheck, buildMetadataForMatcher } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
+
+/**
+ * Reverses the items of an iterable
+ * @param {Generator|Iterable} iterator
+ * @returns {Generator<*>}
+ */
+function *reverse(iterator) {
+    const items = Array.from(iterator);
+    for (let i = items.length - 1; i >= 0; i--) {
+        yield items[i];
+    }
+}
+
+/**
+ * @typedef {object|function(object):boolean} Matcher
+ */
 
 /**
  * An append-only storage with highly performant positional range scans.
  * It's highly optimized for an event-store and hence does not support compaction or data-rewrite, nor any querying
  */
-class ReadableStorage extends EventEmitter {
+class ReadableStorage extends events.EventEmitter {
 
     /**
      * @param {string} [storageName] The name of the storage.
@@ -58,7 +74,7 @@ class ReadableStorage extends EventEmitter {
      * @protected
      * @param {string} name
      * @param {object} [options]
-     * @returns {{ index: ReadableIndex, matcher?: object|function }}
+     * @returns {{ index: ReadableIndex, matcher?: Matcher }}
      */
     createIndex(name, options = {}) {
         /** @type ReadableIndex */
@@ -93,6 +109,7 @@ class ReadableStorage extends EventEmitter {
         const { index } = this.createIndex(config.indexFile, this.indexOptions);
         this.index = index;
         this.secondaryIndexes = {};
+        this.readonlyIndexes = {};
     }
 
     /**
@@ -116,12 +133,13 @@ class ReadableStorage extends EventEmitter {
             readBufferSize: DEFAULT_READ_BUFFER_SIZE
         };
         this.partitionConfig = Object.assign(defaults, config);
-        this.partitions = {};
+        this.partitions = Object.create(null);
 
         const files = fs.readdirSync(this.dataDirectory);
         for (let file of files) {
             if (file.substr(-6) === '.index') continue;
             if (file.substr(-7) === '.branch') continue;
+            if (file.substr(-5) === '.lock') continue;
             if (file.substr(0, this.storageFile.length) !== this.storageFile) continue;
 
             const partition = this.createPartition(file, this.partitionConfig);
@@ -155,6 +173,9 @@ class ReadableStorage extends EventEmitter {
     close() {
         this.index.close();
         this.forEachSecondaryIndex(index => index.close());
+        for (let index of Object.values(this.readonlyIndexes)) {
+            index.close();
+        }
         this.forEachPartition(partition => partition.close());
         this.emit('closed');
     }
@@ -186,7 +207,7 @@ class ReadableStorage extends EventEmitter {
      */
     readFrom(partitionId, position, size) {
         const partition = this.getPartition(partitionId);
-        const data = partition.readFrom(position);
+        const data = partition.readFrom(position, size);
         return this.serializer.deserialize(data);
     }
 
@@ -221,18 +242,40 @@ class ReadableStorage extends EventEmitter {
      * @param {number} from The 1-based document number (inclusive) to start reading from.
      * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
      * @param {ReadableIndex} [index] The index to use for finding the documents in the range.
-     * @returns {Generator} A generator that will read each document in the range one by one.
+     * @returns {Generator<object>} A generator that will read each document in the range one by one.
      */
-    *readRange(from, until, index) {
+    *readRange(from, until = -1, index = null) {
         index = index || this.index;
+        index.open();
 
-        if (!index.isOpen()) {
-            index.open();
+        const readFrom = wrapAndCheck(from, index.length);
+        const readUntil = wrapAndCheck(until, index.length);
+        assert(readFrom > 0 && readUntil > 0, `Range scan error for range ${from} - ${until}.`);
+
+        if (readFrom > readUntil) {
+            const batchSize = 10;
+            let batchUntil = readFrom;
+            while (batchUntil > readUntil) {
+                const batchFrom = Math.max(readUntil, batchUntil - batchSize);
+                yield* reverse(this.iterateRange(batchFrom, batchUntil, index));
+                batchUntil = batchFrom - 1;
+            }
+            return undefined;
         }
 
-        const entries = index.range(from, until);
-        assert(entries !== false, `Range scan error for range ${from} - ${until}.`);
+        yield* this.iterateRange(readFrom, readUntil, index);
+    }
 
+    /**
+     * Iterate all documents in this storage in range from to until inside the index.
+     * @private
+     * @param {number} from
+     * @param {number} until
+     * @param {ReadableIndex} index
+     * @returns {Generator<object>}
+     */
+    *iterateRange(from, until, index) {
+        const entries = index.range(from, until);
         for (let entry of entries) {
             const document = this.readFrom(entry.partition, entry.position, entry.size);
             yield document;
@@ -240,16 +283,40 @@ class ReadableStorage extends EventEmitter {
     }
 
     /**
+     * Open an existing readonly index for reading, without registering it in the secondary indexes write path.
+     * Use this for indexes whose files carry a status marker (e.g. `stream-foo.closed.index`).
+     *
+     * @api
+     * @param {string} name The readonly index name (e.g. 'stream-foo.closed').
+     * @returns {ReadableIndex}
+     * @throws {Error} if the readonly index does not exist.
+     */
+    openReadonlyIndex(name) {
+        if (name in this.readonlyIndexes) {
+            return this.readonlyIndexes[name];
+        }
+        const indexName = this.storageFile + '.' + name + '.index';
+        assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
+        const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions));
+        index.open();
+        this.readonlyIndexes[name] = index;
+        return index;
+    }
+
+    /**
      * Open an existing index.
      *
      * @api
      * @param {string} name The index name.
-     * @param {object|function} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
+     * @param {Matcher} [matcher] The matcher object or function that the index needs to have been defined with. If not given it will not be validated.
      * @returns {ReadableIndex}
      * @throws {Error} if the index with that name does not exist.
      * @throws {Error} if the HMAC for the matcher does not match.
      */
     openIndex(name, matcher) {
+        if (name === '_all') {
+            return this.index;
+        }
         if (name in this.secondaryIndexes) {
             return this.secondaryIndexes[name].index;
         }

@@ -1,11 +1,24 @@
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const Entry = require('../IndexEntry');
 const { assert, wrapAndCheck, binarySearch } = require('../util');
 
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";
+
+class CorruptedIndexError extends Error {}
+
+/**
+ * Returns a constructor for a CorruptedIndexError with the given size property.
+ */
+function CorruptedIndexErrorFactory(size) {
+    return function (...args) {
+        let error = new CorruptedIndexError(...args);
+        error.size = size;
+        return error;
+    };
+}
 
 /**
  * An index is a simple append-only file that stores an ordered list of entry elements pointing to the actual file position
@@ -18,7 +31,7 @@ const HEADER_MAGIC = "nesidx01";
  *
  * The index basically functions like a simplified LSM list.
  */
-class ReadableIndex extends EventEmitter {
+class ReadableIndex extends events.EventEmitter {
 
     /**
      * @param {string} [name] The name of the file to use for storing the index.
@@ -52,6 +65,7 @@ class ReadableIndex extends EventEmitter {
      * @param {object} options
      */
     initialize(options) {
+        /* @type Array<Entry> */
         this.data = [];
         this.fd = null;
         this.fileMode = 'r';
@@ -110,14 +124,13 @@ class ReadableIndex extends EventEmitter {
         const stat = fs.fstatSync(this.fd);
         if (stat.size === 0) {
             return -1;
-        } else {
-            stat.size -= this.readMetadata();
-            assert(stat.size >= 0, 'Invalid index file!');
         }
 
+        stat.size -= this.readMetadata();
+        assert(stat.size >= 0, 'Invalid index file!');
+
         const length = Math.floor(stat.size / this.EntryClass.size);
-        // Corrupt index file
-        assert(stat.size === length * this.EntryClass.size, 'Index file is corrupt!');
+        assert(stat.size === length * this.EntryClass.size, 'Index file is corrupt!', CorruptedIndexErrorFactory(length));
 
         return length;
     }
@@ -237,7 +250,7 @@ class ReadableIndex extends EventEmitter {
      * @returns {Entry} The index entry at the given position.
      */
     read(index) {
-        index--;
+        index = Number(index) - 1;
 
         fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
         if (index === this.readUntil + 1) {
@@ -306,7 +319,7 @@ class ReadableIndex extends EventEmitter {
      */
     get(index) {
         index = wrapAndCheck(index, this.length);
-        if (index === false) {
+        if (index <= 0) {
             return false;
         }
 
@@ -344,7 +357,7 @@ class ReadableIndex extends EventEmitter {
         from = wrapAndCheck(from, this.length);
         until = wrapAndCheck(until, this.length);
 
-        if (from === false || until < from) {
+        if (from <= 0 || until < from) {
             return false;
         }
 
@@ -375,6 +388,9 @@ class ReadableIndex extends EventEmitter {
      * @returns {number} The last index entry position that is lower than or equal to the `number`. Returns 0 if no index matches.
      */
     find(number, min = false) {
+        if (this.length < 1) {
+            return 0;
+        }
         // We only need to search until the searched number because entry.number is always >= position
         const [low, high] = binarySearch(number, Math.min(this.length, number), index => this.get(index).number);
         return min ? low : high;
@@ -384,3 +400,4 @@ class ReadableIndex extends EventEmitter {
 module.exports = ReadableIndex;
 module.exports.Entry = Entry;
 module.exports.HEADER_MAGIC = HEADER_MAGIC;
+module.exports.CorruptedIndexError = CorruptedIndexError;

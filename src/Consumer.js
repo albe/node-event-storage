@@ -1,14 +1,28 @@
 const stream = require('stream');
 const fs = require('fs');
 const path = require('path');
-const mkdirpSync = require('mkdirp').sync;
-const { assert } = require('./util');
+const { assert, ensureDirectory } = require('./util');
 
 const Storage = require('./Storage/ReadableStorage');
 const MAX_CATCHUP_BATCH = 10;
 
 /**
- * Implements an event-driven durable Consumer that provides at-least-once delivery semantics.
+ * Safely unlink a file and ignore if it doesn't exist.
+ * @param {string} filename
+ */
+const safeUnlink = (filename) => {
+    /* istanbul ignore next */
+    try {
+        fs.unlinkSync(filename);
+    } catch (e) {
+        if (e.code !== "ENOENT") {
+            throw e;
+        }
+    }
+};
+
+/**
+ * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
  */
 class Consumer extends stream.Readable {
 
@@ -16,9 +30,10 @@ class Consumer extends stream.Readable {
      * @param {Storage} storage The storage to create the consumer for.
      * @param {string} indexName The name of the index to consume.
      * @param {string} identifier The unique name to identify this consumer.
+     * @param {object} [initialState] The initial state of the consumer.
      * @param {number} [startFrom] The revision to start from within the index to consume.
      */
-    constructor(storage, indexName, identifier, startFrom = 0) {
+    constructor(storage, indexName, identifier, initialState = {}, startFrom = 0) {
         super({ objectMode: true });
 
         assert(storage instanceof Storage, 'Must provide a storage for the consumer.');
@@ -26,7 +41,7 @@ class Consumer extends stream.Readable {
         assert(typeof identifier === 'string' && identifier !== '', 'Must specify an identifier name for the consumer.');
 
         this.initializeStorage(storage, indexName, identifier);
-        this.restoreState(startFrom);
+        this.restoreState(initialState, startFrom);
         this.handler = this.handleNewDocument.bind(this);
         this.on('error', () => (this.handleDocument = false));
     }
@@ -42,20 +57,40 @@ class Consumer extends stream.Readable {
         this.index = this.storage.openIndex(indexName);
         this.indexName = indexName;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
-        if (!fs.existsSync(consumerDirectory)) {
-            mkdirpSync(consumerDirectory);
-        }
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
+        if (ensureDirectory(consumerDirectory)) {
+            this.cleanUpFailedWrites();
+        }
+    }
+
+    /**
+     * Iterate over all files in the directory of this consumer and unlink any file that starts with the filename followed by a dot.
+     * @private
+     */
+    cleanUpFailedWrites() {
+        const consumerNamePrefix = path.basename(this.fileName) + '.';
+        const consumerDirectory = path.dirname(this.fileName);
+        const files = fs.readdirSync(consumerDirectory);
+        for (let file of files) {
+            if (file.startsWith(consumerNamePrefix)) {
+                safeUnlink(path.join(consumerDirectory, file));
+            }
+        }
     }
 
     /**
      * @private
+     * @param {object} initialState The initial state if no persisted state exists.
      * @param {number} startFrom The revision to start from within the index to consume.
      */
-    restoreState(startFrom) {
+    restoreState(initialState, startFrom) {
         /* istanbul ignore if */
         if (!this.fileName) {
             return;
+        }
+        if (typeof initialState === 'number') {
+            startFrom = initialState;
+            initialState = {};
         }
         try {
             const consumerData = fs.readFileSync(this.fileName);
@@ -63,8 +98,9 @@ class Consumer extends stream.Readable {
             this.state = JSON.parse(consumerData.toString('utf8', 4));
         } catch (e) {
             this.position = startFrom;
-            this.state = {};
+            this.state = initialState;
         }
+        Object.freeze(this.state);
 
         this.persisting = null;
         this.consuming = false;
@@ -74,13 +110,18 @@ class Consumer extends stream.Readable {
      * Update the state of this consumer transactionally with the position.
      * May only be called from within the document handling callback.
      *
-     * @param {object} newState
+     * @param {object|function(object):object} newState
+     * @param {boolean} [persist] Set to false if this state update should not be persisted yet
      * @api
      */
-    setState(newState) {
+    setState(newState, persist = true) {
         assert(this.handleDocument, 'Called setState outside of document handler!');
 
+        if (typeof newState === 'function') {
+            newState = newState(this.state);
+        }
         this.state = Object.freeze(newState);
+        this.doPersist = persist;
     }
 
     /**
@@ -96,6 +137,7 @@ class Consumer extends stream.Readable {
             return;
         }
 
+        /* istanbul ignore if */
         if (this.position !== position - 1) {
             return;
         }
@@ -106,7 +148,9 @@ class Consumer extends stream.Readable {
             this.stop();
         }
         this.position = position;
-        this.persist();
+        if (this.doPersist) {
+            this.persist();
+        }
     }
 
     /**
@@ -124,9 +168,21 @@ class Consumer extends stream.Readable {
             const consumerData = Buffer.allocUnsafe(4 + consumerState.length);
             consumerData.writeInt32LE(this.position, 0);
             consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
-            fs.writeFileSync(this.fileName, consumerData);
+            const tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
-            this.emit('persisted');
+            /* istanbul ignore if */
+            if (fs.existsSync(tmpFile)) {
+                throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
+            }
+            try {
+                fs.writeFileSync(tmpFile, consumerData);
+                // If the write fails (half-way), the consumer state file will not be corrupted
+                fs.renameSync(tmpFile, this.fileName);
+                this.emit('persisted', consumerState);
+            } catch (e) {
+                /* istanbul ignore next */
+                safeUnlink(tmpFile);
+            }
         });
     }
 
@@ -208,6 +264,29 @@ class Consumer extends stream.Readable {
         this.handleDocument = false;
     }
 
+    /**
+     * Reset this projection to restart processing all documents again.
+     * NOTE: This will overwrite the current state of the projection and hence be destructive.
+     * @param {object} [initialState] The initial state of the consumer.
+     * @param {number} [startFrom] The revision to start from within the index to consume.
+     * @api
+     */
+    reset(initialState = {}, startFrom = 0) {
+        if (typeof initialState === 'number') {
+            startFrom = initialState;
+            initialState = {};
+        }
+        const restart = this.consuming;
+        this.stop();
+        this.state = Object.freeze(initialState);
+        this.position = startFrom;
+        this.persist();
+        if (restart) {
+            this.start();
+        }
+    }
+
+    // noinspection JSUnusedGlobalSymbols
     /**
      * Readable stream implementation.
      * @private

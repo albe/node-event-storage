@@ -5,6 +5,7 @@
  */
 class EntryInterface {
     /**
+     * @abstract
      * @returns {number} The byte size of this Entry.
      */
     static get size() {}
@@ -12,6 +13,7 @@ class EntryInterface {
     /**
      * Read a new Entry from a Buffer object at the given offset.
      *
+     * @abstract
      * @param {Buffer} buffer The buffer object to read the index data from. 
      * @param {number} [offset] The buffer offset to start reading from. Default 0.
      * @returns {EntryInterface} A new entry matching the values from the Buffer.
@@ -21,6 +23,7 @@ class EntryInterface {
     /**
      * Write this Entry into a Buffer object at the given offset.
      *
+     * @abstract
      * @param {Buffer} buffer The buffer object to write the index entry data to.
      * @param {number} offset The offset to start writing into the buffer.
      * @returns {number} The size of the data written.
@@ -48,7 +51,8 @@ function assertValidEntryClass(EntryClass) {
 
 /**
  * Default Entry item contains information about the sequence number, the file position, the document size and the partition number.
- * @type Array<number>
+ * @extends Array<number>
+ * @implements EntryInterface
  */
 class Entry extends Array {
 

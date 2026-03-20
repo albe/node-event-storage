@@ -1,6 +1,6 @@
 {
   "name": "event-storage",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "description": "An optimized embedded event store for node.js",
   "keywords": [
     "event-storage",
@@ -21,7 +21,7 @@
     "url": "https://github.com/albe/node-event-storage/issues"
   },
   "scripts": {
-    "test": "nyc --reporter=html mocha test/*.spec.js",
+    "test": "nyc --reporter=lcov mocha test/*.spec.js",
     "coverage": "nyc report --reporter=text-lcov | coveralls"
   },
   "files": [
@@ -34,13 +34,13 @@
     "*/Partition*.js",
     "*/Storage*.js",
     "*/Watcher*.js",
-    "/Index/*.js",
-    "/Partition/*.js",
-    "/Storage/*.js",
-    "/Clock.js",
-    "/WatchesFile.js",
-    "/util.js",
-    "/index.js"
+    "*/Clock*.js",
+    "*/Index/*.js",
+    "*/Partition/*.js",
+    "*/Storage/*.js",
+    "src/WatchesFile.js",
+    "src/util.js",
+    "index.js"
   ],
   "license": "MIT",
   "maintainers": [
@@ -50,16 +50,24 @@
     }
   ],
   "engines": {
-    "node": ">=8.0"
+    "node": ">=18.0"
   },
   "dependencies": {
-    "mkdirp": "^1.0.3"
+    "mkdirp": "^3.0.1"
+  },
+  "nyc": {
+    "include": [
+      "src/**/*.js"
+    ],
+    "exclude": [
+      "bench/**/*.js"
+    ]
   },
   "devDependencies": {
-    "coveralls": "^3.0.2",
+    "coveralls-next": "^6.0.1",
     "expect.js": "^0.3.1",
-    "fs-extra": "^8.0.1",
-    "mocha": "^7.0.0",
-    "nyc": "^15.0.0"
+    "fs-extra": "^11.3.4",
+    "mocha": "^11.7.5",
+    "nyc": "^18.0.0"
   }
 }

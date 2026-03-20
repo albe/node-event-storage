@@ -1,6 +1,8 @@
 const expect = require('expect.js');
 const fs = require('fs-extra');
+const path = require('path');
 const EventStore = require('../src/EventStore');
+const Consumer = require('../src/Consumer');
 
 const storageDirectory = __dirname + '/data';
 
@@ -13,7 +15,9 @@ describe('EventStore', function() {
     });
 
     afterEach(function () {
-        if (eventstore) eventstore.close();
+        if (eventstore) {
+            eventstore.close();
+        }
         eventstore = null;
     });
 
@@ -32,6 +36,17 @@ describe('EventStore', function() {
                 }
                 done();
             });
+        });
+    });
+
+    it('can be created with custom name', function(done) {
+        eventstore = new EventStore('custom-store', {
+            storageDirectory
+        });
+
+        eventstore.commit('foo-bar', [{ type: 'foo'}], () => {
+            expect(fs.existsSync(path.join(storageDirectory, 'custom-store.foo-bar'))).to.be(true);
+            done();
         });
     });
 
@@ -76,19 +91,23 @@ describe('EventStore', function() {
             storageDirectory
         });
 
-        let events = [{foo: 'bar'.repeat(500)}];
+        const events = [{foo: 'bar'.repeat(500)}];
         eventstore.on('ready', () => {
             eventstore.commit('foo-bar', events, () => {
                 // Simulate a torn write (but indexes are still written)
                 fs.truncateSync(eventstore.storage.getPartition('foo-bar').fileName, 512);
-                eventstore.close();
 
-                eventstore = new EventStore({
-                    storageDirectory
+                // The previous instance was not closed, so the lock still exists
+                const eventstore2 = new EventStore({
+                    storageDirectory,
+                    storageConfig: {
+                        lock: EventStore.LOCK_RECLAIM
+                    }
                 });
-                eventstore.on('ready', () => {
-                    expect(eventstore.length).to.be(0);
-                    expect(eventstore.getStreamVersion('foo-bar')).to.be(0);
+                eventstore2.on('ready', () => {
+                    expect(eventstore2.length).to.be(0);
+                    expect(eventstore2.getStreamVersion('foo-bar')).to.be(0);
+                    eventstore2.close();
                     done();
                 });
             });
@@ -367,7 +386,153 @@ describe('EventStore', function() {
             });
         });
 
-        it('needs to be tested.');
+        it('can iterate events in reverse order', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            let reverseStream = eventstore.getEventStream('foo-bar', -1, 1);
+            let i = 20;
+            for (let event of reverseStream) {
+                expect(event).to.eql({ key: i-- });
+            }
+            expect(i).to.be(0);
+        });
+
+        it('behaves as expected with ranges', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            const last10 = eventstore.getEventStream('foo-bar', -10, -1);
+            expect(last10.events.length).to.be(10);
+            let i = 11;
+            for (let event of last10.events) {
+                expect(event).to.eql({ key: i++ });
+            }
+
+            const first10 = eventstore.getEventStream('foo-bar', 1, 10);
+            expect(first10.events.length).to.be(10);
+            i = 1;
+            for (let event of first10.events) {
+                expect(event).to.eql({ key: i++ });
+            }
+        });
+
+        it('supports natural language range api', function(){
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            const allBackwards  = eventstore.getEventStream('foo-bar').backwards();
+            const first10       = eventstore.getEventStream('foo-bar').first(10); // fromStart().forwards(10)
+            const last10        = eventstore.getEventStream('foo-bar').last(10); // from(-10).forwards(), fromEnd().previous(10).forwards()
+            const after15       = eventstore.getEventStream('foo-bar').from(16).toEnd();
+            const before10      = eventstore.getEventStream('foo-bar').fromStart().until(10).backwards(); // from(10).backwards(10)
+            const middle10      = eventstore.getEventStream('foo-bar').from(5).forwards(10);
+            const middle10alt   = eventstore.getEventStream('foo-bar').from(14).previous(10).forwards();
+            const last10backward= eventstore.getEventStream('foo-bar').fromEnd().backwards(10);
+            // Tests that `forwards()` and `backwards()` are noops on already like ordered ranges
+            const allForwards   = eventstore.getEventStream('foo-bar').fromStart().toEnd().forwards();
+            const allBackwards2 = eventstore.getEventStream('foo-bar').fromEnd().toStart().backwards();
+
+            expect(allBackwards.events.length).to.be(20);
+            expect(allBackwards.events[0].key).to.be(20);
+            expect(allBackwards.events[19].key).to.be(1);
+
+            expect(first10.events.length).to.be(10);
+            expect(first10.events[0].key).to.be(1);
+            expect(first10.events[9].key).to.be(10);
+
+            expect(last10.events.length).to.be(10);
+            expect(last10.events[0].key).to.be(11);
+            expect(last10.events[9].key).to.be(20);
+
+            expect(after15.events.length).to.be(5);
+            expect(after15.events[0].key).to.be(16);
+            expect(after15.events[4].key).to.be(20);
+
+            expect(before10.events.length).to.be(10);
+            expect(before10.events[0].key).to.be(10);
+            expect(before10.events[9].key).to.be(1);
+
+            expect(middle10.events.length).to.be(10);
+            expect(middle10.events[0].key).to.be(5);
+            expect(middle10.events[9].key).to.be(14);
+
+            expect(middle10alt.events.length).to.be(10);
+            expect(middle10alt.events[0].key).to.be(5);
+            expect(middle10alt.events[9].key).to.be(14);
+
+            expect(last10backward.events.length).to.be(10);
+            expect(last10backward.events[0].key).to.be(20);
+            expect(last10backward.events[9].key).to.be(11);
+
+            expect(allForwards.events.length).to.be(20);
+            expect(allForwards.events[0].key).to.be(1);
+            expect(allForwards.events[19].key).to.be(20);
+
+            expect(allBackwards2.events.length).to.be(20);
+            expect(allBackwards2.events[0].key).to.be(20);
+            expect(allBackwards2.events[19].key).to.be(1);
+        });
+
+        it('can open streams created in writer', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            const readstore = new EventStore({
+                storageDirectory,
+                readOnly: true
+            });
+
+            expect(readstore.getStreamVersion('foo')).to.be(-1);
+
+            readstore.on('stream-available', (streamName) => {
+                if (streamName === 'foo') {
+                    expect(readstore.getStreamVersion('foo')).to.be(0);
+                    readstore.close();
+                    done();
+                }
+            });
+
+            eventstore.createEventStream('foo', { type: 'foo' });
+        });
+
+        it('needs to be tested further.');
+    });
+
+    describe('getAllEvents', function() {
+
+        it('returns stream for all events', function (done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-bar', [{key: i}]);
+            }
+
+            eventstore.on('ready', () => {
+                const stream = eventstore.getAllEvents();
+                expect(stream.events.length).to.be(20);
+                done();
+            });
+        });
+
     });
 
     describe('fromStreams', function() {
@@ -417,6 +582,72 @@ describe('EventStore', function() {
                     });
                 });
             });
+        });
+
+        it('iterates events from multiple streams in reverse order', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=20; i++) {
+                eventstore.commit(i % 2 ? 'foo' : 'bar', [{key: i}]);
+            }
+
+            let reverseStream = eventstore.fromStreams('foo-bar', ['foo', 'bar'],-1, 1);
+            let i = 20;
+            for (let event of reverseStream) {
+                expect(event).to.eql({ key: i-- });
+            }
+            expect(i).to.be(0);
+        });
+
+    });
+
+    describe('getEventStreamForCategory', function() {
+
+        it('throws when not specifying category without streams', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            expect(() => eventstore.getEventStreamForCategory('non-existing-category')).to.throwError();
+        });
+
+        it('iterates events for all streams with a given category prefix', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('bar', [{key: 0}]);
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-' + i, [{key: i}]);
+            }
+            eventstore.commit('foobar', [{key: 21}]);
+
+            let categoryStream = eventstore.getEventStreamForCategory('foo');
+            let i = 1;
+            for (let event of categoryStream) {
+                expect(event).to.eql({ key: i++ });
+            }
+            expect(i).to.be(21);
+        });
+
+        it('works with a dedicated stream for the category', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.createEventStream('foo', e => e.stream.startsWith('foo-'));
+            for (let i=1; i<=20; i++) {
+                eventstore.commit('foo-' + i, [{key: i}]);
+            }
+
+            let categoryStream = eventstore.getEventStreamForCategory('foo');
+            let i = 1;
+            for (let event of categoryStream) {
+                expect(event).to.eql({ key: i++ });
+            }
+            expect(i).to.be(21);
         });
 
     });
@@ -493,98 +724,198 @@ describe('EventStore', function() {
 
     });
 
-    describe('getCommits', function() {
+    describe('closeEventStream', function() {
 
-        function commitAll(streamName, commits, callback) {
-            for (let i = 0; i < commits.length; i++) {
-                eventstore.commit(streamName, commits[i], i === commits.length - 1 ? callback : undefined);
-            }
-        }
-
-        it('returns empty iterator if no commits in store', function() {
+        it('throws in read-only mode', function(done) {
             eventstore = new EventStore({
                 storageDirectory
             });
+            eventstore.createEventStream('foo-bar', () => true);
 
-            const commits = eventstore.getCommits(0);
-            expect(commits.next()).to.eql({ value: undefined, done: true });
-        });
-
-        it('returns a list of all commits', function(done) {
-            eventstore = new EventStore({
-                storageDirectory
+            let readstore = new EventStore({
+                storageDirectory,
+                readOnly: true
             });
-            const events = [
-                [{ foo: 1 }, { foo: 2 }],
-                [{ bar: 1 }],
-                [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
-            ];
-            commitAll('foo-bar', events, () => {
-                const commits = eventstore.getCommits(0);
-                let streamVersion = 0;
-                let commitNumber = 0;
-                for (let commit of commits) {
-                    expect(commit.streamName).to.be('foo-bar');
-                    expect(commit.streamVersion).to.be(streamVersion);
-                    expect(commit.events).to.eql(events[commitNumber++]);
-                    streamVersion += commit.events.length;
-                }
-                expect(commitNumber).to.be(3);
+            readstore.on('ready', () => {
+                expect(() => readstore.closeEventStream('foo-bar')).to.throwError();
+                readstore.close();
                 done();
             });
         });
 
-        it('returns only commits after the given revision', function(done) {
+        it('throws when stream does not exist', function() {
             eventstore = new EventStore({
                 storageDirectory
             });
-            const events = [
-                [{ foo: 1 }, { foo: 2 }],
-                [{ bar: 1 }],
-                [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
-            ];
-            commitAll('foo-bar', events, () => {
-                const commits = eventstore.getCommits(4);
-                let streamVersion = 3;
-                let commitNumber = 2;
-                for (let commit of commits) {
-                    expect(commit.streamName).to.be('foo-bar');
-                    expect(commit.streamVersion).to.be(streamVersion);
-                    expect(commit.events).to.eql(events[commitNumber++]);
-                    streamVersion += commit.events.length;
-                }
-                expect(commitNumber).to.be(3);
+            expect(() => eventstore.closeEventStream('non-existing')).to.throwError();
+        });
+
+        it('throws when stream is already closed', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.closeEventStream('foo-bar');
+                expect(() => eventstore.closeEventStream('foo-bar')).to.throwError();
                 done();
             });
         });
 
-        it('returns the full commit if given revision is within a single commit', function(done) {
+        it('renames the index file to .closed.index', function(done) {
             eventstore = new EventStore({
                 storageDirectory
             });
-            const events = [
-                [{ foo: 1 }, { foo: 2 }],
-                [{ bar: 1 }],
-                [{ baz: 1 }, { baz: 2 }, { baz: 3 }]
-            ];
-            commitAll('foo-bar', events, () => {
-                const commits = eventstore.getCommits(5);
-                let streamVersion = 3;
-                let commitNumber = 2;
-                for (let commit of commits) {
-                    expect(commit.streamName).to.be('foo-bar');
-                    expect(commit.streamVersion).to.be(streamVersion);
-                    expect(commit.events).to.eql(events[commitNumber++]);
-                    streamVersion += commit.events.length;
-                }
-                expect(commitNumber).to.be(3);
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                expect(fs.existsSync(storageDirectory + '/streams/eventstore.stream-foo-bar.index')).to.be(true);
+                eventstore.closeEventStream('foo-bar');
+                expect(fs.existsSync(storageDirectory + '/streams/eventstore.stream-foo-bar.index')).to.be(false);
+                expect(fs.existsSync(storageDirectory + '/streams/eventstore.stream-foo-bar.closed.index')).to.be(true);
                 done();
+            });
+        });
+
+        it('emits stream-closed event', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.on('stream-closed', (streamName) => {
+                    expect(streamName).to.be('foo-bar');
+                    done();
+                });
+                eventstore.closeEventStream('foo-bar');
+            });
+        });
+
+        it('makes the stream still readable after closing', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            const events = [{ foo: 'bar' }, { foo: 'baz' }];
+            eventstore.commit('foo-bar', events, () => {
+                eventstore.closeEventStream('foo-bar');
+                const stream = eventstore.getEventStream('foo-bar');
+                expect(stream).to.not.be(false);
+                let i = 0;
+                for (let event of stream) {
+                    expect(event).to.eql(events[i++]);
+                }
+                expect(i).to.be(2);
+                done();
+            });
+        });
+
+        it('prevents writing to a closed stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.closeEventStream('foo-bar');
+                expect(() => eventstore.commit('foo-bar', [{ foo: 'baz' }])).to.throwError();
+                done();
+            });
+        });
+
+        it('does not index new events into a closed stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                const streamBefore = eventstore.getEventStream('foo-bar');
+                expect(streamBefore.events.length).to.be(1);
+
+                eventstore.closeEventStream('foo-bar');
+
+                // Commit event to a different stream that would otherwise match
+                eventstore.commit('other-stream', [{ foo: 'baz' }], () => {
+                    const streamAfter = eventstore.getEventStream('foo-bar');
+                    expect(streamAfter.events.length).to.be(1);
+                    done();
+                });
+            });
+        });
+
+        it('prevents creating a stream with the same name as a closed stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.closeEventStream('foo-bar');
+                expect(() => eventstore.createEventStream('foo-bar', () => true)).to.throwError();
+                done();
+            });
+        });
+
+        it('is recognized as closed after reopening the store', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.closeEventStream('foo-bar');
+                eventstore.close();
+                eventstore = null;
+
+                const eventstore2 = new EventStore({
+                    storageDirectory
+                });
+                eventstore2.on('ready', () => {
+                    expect(() => eventstore2.commit('foo-bar', [{ foo: 'baz' }])).to.throwError();
+                    const stream = eventstore2.getEventStream('foo-bar');
+                    expect(stream).to.not.be(false);
+                    expect(stream.events.length).to.be(1);
+                    eventstore2.close();
+                    done();
+                });
+            });
+        });
+
+        it('is reflected in a concurrent reader instance', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                storageConfig: { syncOnFlush: true }
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                // Flush all write buffers (including stream index) before opening the reader
+                eventstore.storage.flush();
+
+                const readstore = new EventStore({
+                    storageDirectory,
+                    readOnly: true
+                });
+
+                readstore.on('ready', () => {
+                    expect(readstore.getStreamVersion('foo-bar')).to.be(1);
+
+                    // Reader emits 'stream-closed' when it detects the rename via file watcher
+                    readstore.on('stream-closed', (streamName) => {
+                        expect(streamName).to.be('foo-bar');
+                        expect(readstore.getStreamVersion('foo-bar')).to.be(1);
+                        const stream = readstore.getEventStream('foo-bar');
+                        expect(stream).to.not.be(false);
+                        expect(stream.events.length).to.be(1);
+                        readstore.close();
+                        done();
+                    });
+
+                    eventstore.closeEventStream('foo-bar');
+                });
             });
         });
 
     });
 
     describe('getConsumer', function() {
+
+        it('returns a Consumer instance', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+
+            const consumer = eventstore.getConsumer('foo-bar', 'consumer2');
+            expect(consumer instanceof Consumer).to.be(true);
+        });
 
         it('returns a consumer for the given stream', function(done) {
             eventstore = new EventStore({
@@ -594,11 +925,65 @@ describe('EventStore', function() {
 
             const consumer = eventstore.getConsumer('foo-bar', 'consumer1');
             consumer.on('data', event => {
-                expect(event.id).to.be(2);
+                expect(event.payload.id).to.be(2);
                 done();
             });
             eventstore.commit('foo', { foo: 'baz', id: 1 });
             eventstore.commit('foo', { foo: 'bar', id: 2 });
+        });
+
+        it('can return a consumer for the _all stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            const consumer = eventstore.getConsumer('_all', 'consumer1');
+            expect(consumer instanceof Consumer).to.be(true);
+            let i = 0;
+            consumer.on('data', event => {
+                expect(event.payload.id).to.be(++i);
+                if (i === 2) {
+                    done();
+                }
+            });
+            eventstore.commit('foo', { foo: 'bar', id: 1 });
+            eventstore.commit('bar', { foo: 'baz', id: 2 });
+        });
+    });
+
+    describe('scanConsumers', function() {
+
+        it('returns an empty list if no consumers defined', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+
+            eventstore.scanConsumers((err, consumers) => {
+                expect(consumers).to.eql([]);
+                done();
+            });
+        });
+
+        it('returns the list of consumer names', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+            eventstore.commit('foo', { foo: 'bar', id: 1 });
+
+            const consumer1 = eventstore.getConsumer('_all', 'consumer1');
+            consumer1.on('data', (e) => consumer1.setState(e.payload.id));
+            const consumer2 = eventstore.getConsumer('foo-bar', 'consumer2');
+            consumer2.on('data', (e) => consumer2.setState({ [e.payload.foo]: e.payload.id }));
+
+            consumer2.on('caught-up', () =>
+                eventstore.scanConsumers((err, consumers) => {
+                    expect(consumers).to.contain('_all.consumer1');
+                    expect(consumers).to.contain('stream-foo-bar.consumer2');
+                    done();
+                })
+            );
         });
 
     });

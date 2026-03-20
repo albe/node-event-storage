@@ -1,15 +1,16 @@
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const { assert } = require('./util');
 
-const directoryWatchers = {};
+/** @type {Map<string, DirectoryWatcher>} */
+const directoryWatchers = new Map();
 
 /**
  * A reference counting singleton nodejs watcher for directories.
  * Emits events 'change' and 'rename' with the file name as argument.
  */
-class DirectoryWatcher extends EventEmitter {
+class DirectoryWatcher extends events.EventEmitter {
 
     /**
      * @param {string} directory
@@ -18,14 +19,17 @@ class DirectoryWatcher extends EventEmitter {
      */
     constructor(directory, options = {}) {
         directory = path.normalize(directory);
-        assert(fs.existsSync(directory), 'Can not watch a non-existing directory.');
 
-        if (directoryWatchers[directory]) {
-            directoryWatchers[directory].references++;
-            return directoryWatchers[directory];
+        if (directoryWatchers.has(directory)) {
+            const watcher = directoryWatchers.get(directory);
+            watcher.references++;
+            return watcher;
         }
+        assert(fs.existsSync(directory), `Can not watch a non-existing directory "${directory}".`);
+        assert(fs.statSync(directory).isDirectory(), `Can only watch directories, but "${directory}" is none.`);
         super();
-        directoryWatchers[directory] = this;
+        this.setMaxListeners(1000);
+        directoryWatchers.set(directory, this);
         this.directory = directory;
         this.watcher = fs.watch(directory, Object.assign({ persistent: false }, options), this.emit.bind(this));
         this.references = 1;
@@ -40,7 +44,7 @@ class DirectoryWatcher extends EventEmitter {
         if (this.references === 0 && this.watcher) {
             this.watcher.close();
             this.watcher = null;
-            directoryWatchers[this.directory] = null;
+            directoryWatchers.delete(this.directory);
         }
     }
 
@@ -52,30 +56,36 @@ class DirectoryWatcher extends EventEmitter {
 class Watcher {
 
     /**
-     * @param {string} fileOrDirectory
-     * @param {function(string): boolean} [fileFilter] A filter that will receive a filename and needs to return true if this watcher should be invoked.
+     * @param {string|string[]} fileOrDirectory The filename or directory or list of directories to watch
+     * @param {function(string): boolean} [fileFilter] A filter that will receive a filename and needs to return true if this watcher should be invoked. Will be ignored if the first argument is a file.
      * @returns {Watcher}
      */
     constructor(fileOrDirectory, fileFilter = null) {
-        const isDirectory = fs.statSync(fileOrDirectory).isDirectory();
-        let directory = fileOrDirectory;
-        if (!isDirectory) {
-            directory = path.dirname(fileOrDirectory);
+        let directories;
+        if (typeof fileOrDirectory === 'string') {
+            directories = [fileOrDirectory];
+            if (!fs.statSync(fileOrDirectory).isDirectory()) {
+                directories = [path.dirname(fileOrDirectory)];
+                const filename = path.basename(fileOrDirectory);
+                fileFilter = changedFilename => changedFilename === filename;
+            }
+        } else {
+            directories = [...new Set(fileOrDirectory.map(path.normalize))];
         }
-        this.watcher = new DirectoryWatcher(directory);
 
-        if (!isDirectory) {
-            const filename = path.basename(fileOrDirectory);
-            fileFilter = changedFilename => changedFilename === filename;
-        } else if (fileFilter === null) {
+        this.watchers = directories.map(dir => new DirectoryWatcher(dir));
+
+        if (fileFilter === null) {
             fileFilter = () => true;
         }
 
         this.fileFilter = fileFilter;
         this.onChange = this.onChange.bind(this);
         this.onRename = this.onRename.bind(this);
-        this.watcher.on('change', this.onChange);
-        this.watcher.on('rename', this.onRename);
+        this.watchers.forEach(watcher => {
+            watcher.on('change', this.onChange);
+            watcher.on('rename', this.onRename);
+        });
         this.handlers = { change: [], rename: [] };
     }
 
@@ -126,13 +136,12 @@ class Watcher {
      * @api
      */
     close() {
-        if (!(this.watcher instanceof EventEmitter)) {
-            return;
-        }
-        this.watcher.removeListener('change', this.onChange);
-        this.watcher.removeListener('rename', this.onRename);
-        this.watcher.close();
-        this.watcher = null;
+        this.watchers.forEach(watcher => {
+            watcher.removeListener('change', this.onChange);
+            watcher.removeListener('rename', this.onRename);
+            watcher.close();
+        });
+        this.watchers = [];
         this.handlers = { change: [], rename: [] };
     }
 

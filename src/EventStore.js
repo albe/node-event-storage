@@ -2,10 +2,9 @@ const EventStream = require('./EventStream');
 const JoinEventStream = require('./JoinEventStream');
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
+const events = require('events');
 const Storage = require('./Storage');
 const Consumer = require('./Consumer');
-const stream = require('stream');
 const { assert } = require('./util');
 
 const ExpectedVersion = {
@@ -15,30 +14,12 @@ const ExpectedVersion = {
 
 class OptimisticConcurrencyError extends Error {}
 
-class EventUnwrapper extends stream.Transform {
-
-    constructor() {
-        super({ objectMode: true });
-    }
-
-    _transform(data, encoding, callback) {
-        /* istanbul ignore else */
-        if (data.stream && data.payload) {
-            this.push(data.payload);
-        } else {
-            this.push(data);
-        }
-        callback();
-    }
-
-}
-
 /**
  * An event store optimized for working with many streams.
  * An event stream is implemented as an iterator over an index on the storage, therefore indexes need to be lightweight
  * and highly performant in read-only mode.
  */
-class EventStore extends EventEmitter {
+class EventStore extends events.EventEmitter {
 
     /**
      * @param {string} [storeName] The name of the store which will be used as storage prefix. Default 'eventstore'.
@@ -55,7 +36,7 @@ class EventStore extends EventEmitter {
             storeName = 'eventstore';
         }
 
-        this.storageDirectory = path.resolve(config.storageDirectory || './data');
+        this.storageDirectory = path.resolve(config.storageDirectory || /* istanbul ignore next */ './data');
         let defaults = {
             dataDirectory: this.storageDirectory,
             indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
@@ -63,12 +44,24 @@ class EventStore extends EventEmitter {
             readOnly: config.readOnly || false
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
+        this.initialize(storeName, storageConfig);
+    }
+
+    /**
+     * @private
+     * @param {string} storeName
+     * @param {object} storageConfig
+     */
+    initialize(storeName, storageConfig) {
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
 
         this.storeName = storeName;
-        this.storage = this.createStorage(this.storeName, storageConfig);
+        this.storage = (storageConfig.readOnly === true) ?
+                        new Storage.ReadOnly(storeName, storageConfig)
+                        : new Storage(storeName, storageConfig);
         this.storage.open();
-        this.streams = { _all: { index: this.storage.index } };
+        this.streams = Object.create(null);
+        this.streams._all = { index: this.storage.index };
 
         this.scanStreams((err) => {
             if (err) {
@@ -197,17 +190,52 @@ class EventStore extends EventEmitter {
             if (err) {
                 return callback(err);
             }
-            let matches;
+            let match;
             for (let file of files) {
-                if ((matches = file.match(/(stream-(.*))\.index$/)) !== null) {
-                    const streamName = matches[2];
-                    const index = this.storage.openIndex(matches[1]);
-                    this.streams[streamName] = { index };
-                    this.emit('stream-available', streamName);
+                if ((match = file.match(/(stream-.*)\.index$/)) !== null) {
+                    this.registerStream(match[1]);
                 }
             }
             callback();
         });
+        this.storage.on('index-created', this.registerStream.bind(this));
+    }
+
+    /**
+     * @private
+     * @param {string} name The full stream name, including the `stream-` prefix (and optional `.closed` suffix).
+     */
+    registerStream(name) {
+        /* istanbul ignore if */
+        if (!name.startsWith('stream-')) {
+            return;
+        }
+        let streamName = name.slice(7);
+        // Detect the `.closed` suffix — present both in the initial scan and when the directory
+        // watcher emits 'index-created' after a writer renames the file (e.g. 'stream-foo-bar.closed').
+        let isClosed = false;
+        if (streamName.endsWith('.closed')) {
+            streamName = streamName.slice(0, -7);
+            isClosed = true;
+        }
+        if (streamName in this.streams) {
+            if (isClosed && !this.streams[streamName].closed) {
+                // The stream was renamed to .closed while this instance had it open.
+                // The old ReadOnlyIndex was already closed via onRename, so we open the new one.
+                const closedIndexName = 'stream-' + streamName + '.closed';
+                const closedIndex = this.storage.openReadonlyIndex(closedIndexName);
+                // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
+                this.streams[streamName] = { index: closedIndex, closed: true };
+                this.emit('stream-closed', streamName);
+            }
+            return;
+        }
+        const index = isClosed
+            ? this.storage.openReadonlyIndex(name)
+            : this.storage.openIndex(name);
+        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
+        this.streams[streamName] = { index, closed: isClosed };
+        this.emit('stream-available', streamName);
     }
 
     /**
@@ -239,7 +267,7 @@ class EventStore extends EventEmitter {
      * @private
      * @param {Array<object>|object} events
      * @param {number} [expectedVersion]
-     * @param {object} [metadata]
+     * @param {object|function} [metadata]
      * @param {function} [callback]
      * @returns {{events: Array<object>, metadata: object, callback: function, expectedVersion: number}}
      */
@@ -285,9 +313,14 @@ class EventStore extends EventEmitter {
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName });
         }
+        assert(!this.streams[streamName].closed, `Stream "${streamName}" is closed and cannot be written to.`);
         let streamVersion = this.streams[streamName].index.length;
         if (expectedVersion !== ExpectedVersion.Any && streamVersion !== expectedVersion) {
             throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
+        }
+
+        if (events.length > 1) {
+            delete metadata.commitVersion;
         }
 
         const commitId = this.length;
@@ -307,7 +340,7 @@ class EventStore extends EventEmitter {
             callback(commit);
         };
         for (let event of events) {
-            const eventMetadata = Object.assign({ commitId, committedAt }, metadata, { commitVersion, commitSize, streamVersion });
+            const eventMetadata = Object.assign({ commitId, committedAt, commitVersion, commitSize }, metadata, { streamVersion });
             const storedEvent = { stream: streamName, payload: event, metadata: eventMetadata };
             commitVersion++;
             streamVersion++;
@@ -333,11 +366,11 @@ class EventStore extends EventEmitter {
      *
      * @api
      * @param {string} streamName The name of the stream to get.
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @returns {EventStream|boolean} The event stream or false if a stream with the name doesn't exist.
      */
-    getEventStream(streamName, minRevision = 0, maxRevision = -1) {
+    getEventStream(streamName, minRevision = 1, maxRevision = -1) {
         if (!(streamName in this.streams)) {
             return false;
         }
@@ -349,31 +382,58 @@ class EventStore extends EventEmitter {
      * This is the same as `getEventStream('_all', ...)`.
      *
      * @api
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @returns {EventStream} The event stream.
      */
-    getAllEvents(minRevision = 0, maxRevision = -1) {
+    getAllEvents(minRevision = 1, maxRevision = -1) {
         return this.getEventStream('_all', minRevision, maxRevision);
     }
 
     /**
-     * Create a new (transient) event stream from existing streams by joining them.
+     * Create a virtual event stream from existing streams by joining them.
      *
      * @param {string} streamName The (transient) name of the joined stream.
      * @param {Array<string>} streamNames An array of the stream names to join.
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @returns {EventStream} The joined event stream.
      * @throws {Error} if any of the streams doesn't exist.
      */
-    fromStreams(streamName, streamNames, minRevision = 0, maxRevision = -1) {
+    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1) {
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
         for (let stream of streamNames) {
             assert(stream in this.streams, `Stream "${stream}" does not exist.`);
         }
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision);
+    }
+
+    /**
+     * Get a stream for a category of streams. This will effectively return a joined stream of all streams that start
+     * with the given `categoryName` followed by a dash.
+     * If you frequently use this for a category consisting of a lot of streams (e.g. `users`), consider creating a
+     * dedicated physical stream for the category:
+     *
+     *    `eventstore.createEventStream('users', e => e.stream.startsWith('users-'))`
+     *
+     * @api
+     * @param {string} categoryName The name of the category to get a stream for. A category is a stream name prefix.
+     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @returns {EventStream} The joined event stream for all streams of the given category.
+     * @throws {Error} If no stream for this category exists.
+     */
+    getEventStreamForCategory(categoryName, minRevision = 1, maxRevision = -1) {
+        if (categoryName in this.streams) {
+            return this.getEventStream(categoryName, minRevision, maxRevision);
+        }
+        const categoryStreams = Object.keys(this.streams).filter(streamName => streamName.startsWith(categoryName + '-'));
+
+        if (categoryStreams.length === 0) {
+            throw new Error(`No streams for category '${categoryName}' exist.`);
+        }
+        return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision);
     }
 
     /**
@@ -394,6 +454,7 @@ class EventStore extends EventEmitter {
         const index = this.storage.ensureIndex(streamIndexName, matcher);
         assert(index !== null, `Error creating stream index ${streamName}.`);
 
+        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index, matcher };
         this.emit('stream-created', streamName);
         return new EventStream(streamName, this);
@@ -421,56 +482,90 @@ class EventStore extends EventEmitter {
     }
 
     /**
+     * Close a stream so that no new events are indexed into it.
+     * The stream will still be readable, but any attempt to write to it will throw an error.
+     * A closed stream is persisted by renaming its index file to include a `.closed` marker
+     * (e.g. `stream-X.closed.index`), so it will be recognized as closed when the store is reopened.
+     *
+     * @api
+     * @param {string} streamName The name of the stream to close.
+     * @returns void
+     * @throws {Error} If the storage is read-only.
+     * @throws {Error} If the stream does not exist.
+     * @throws {Error} If the stream is already closed.
+     */
+    closeEventStream(streamName) {
+        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not close a stream on it.');
+        assert(streamName in this.streams, `Stream "${streamName}" does not exist.`);
+        assert(!this.streams[streamName].closed, `Stream "${streamName}" is already closed.`);
+
+        const indexName = 'stream-' + streamName;
+        const { index } = this.streams[streamName];
+
+        // Flush and close the index before renaming the file
+        index.close();
+
+        // Rename the index file to mark it as closed (e.g. stream-foo.index -> stream-foo.closed.index)
+        const closedFileName = index.fileName.replace(/\.index$/, '.closed.index');
+        fs.renameSync(index.fileName, closedFileName);
+
+        // Remove from secondary indexes so that new writes are no longer indexed into this stream
+        delete this.storage.secondaryIndexes[indexName];
+
+        // Reopen the renamed index for read access, outside the secondary indexes write path
+        const closedIndexName = indexName + '.closed';
+        const closedIndex = this.storage.openReadonlyIndex(closedIndexName);
+
+        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
+        this.streams[streamName] = { index: closedIndex, closed: true };
+        this.emit('stream-closed', streamName);
+    }
+
+    /**
      * Get a durable consumer for the given stream that will keep receiving events from the last position.
      *
      * @param {string} streamName The name of the stream to consume.
      * @param {string} identifier The unique identifying name of this consumer.
+     * @param {object} [initialState] The initial state of the consumer.
      * @param {number} [since] The stream revision to start consuming from.
      * @returns {Consumer} A durable consumer for the given stream.
      */
-    getConsumer(streamName, identifier, since = 0) {
-        const consumer = new Consumer(this.storage, 'stream-' + streamName, identifier, since);
-        return consumer.pipe(new EventUnwrapper());
+    getConsumer(streamName, identifier, initialState = {}, since = 0) {
+        const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
+        consumer.streamName = streamName;
+        return consumer;
     }
 
     /**
-     * Get all commits that happened since the given store revision.
-     *
-     * @param {number} [since] The event revision since when to return commits (inclusive). If since is within a commit, the full commit will be returned.
-     * @returns {Generator<object>} A generator of commit objects, each containing the commit metadata and the array of events.
+     * Scan the existing consumers on this EventStore and asynchronously return a list of their names.
+     * @param {function(error: Error, consumers: array)} callback A callback that will receive an error as first and the list of consumers as second argument.
      */
-    *getCommits(since = 0) {
-        let commit;
-        let eventStream = this.getAllEvents(since);
-        let storedEvent;
-        while ((storedEvent = eventStream.next()) !== false) {
-            const { metadata, stream, payload } = storedEvent;
-
-            if (!commit && metadata.commitVersion > 0) {
-                eventStream = this.getAllEvents(since - metadata.commitVersion);
-                continue;
+    scanConsumers(callback) {
+        const consumersPath = path.join(this.storage.indexDirectory, 'consumers');
+        if (!fs.existsSync(consumersPath)) {
+            callback(null, []);
+            return;
+        }
+        fs.readdir(consumersPath, (err, files) => {
+            /* istanbul ignore if */
+            if (err) {
+                return callback(err, []);
             }
-
-            if (!commit || commit.commitId !== metadata.commitId) {
-                if (commit) {
-                    yield commit;
+            let matches;
+            const regex = new RegExp(`^${this.storage.storageFile}\.([^.]*\..*)$`);
+            const consumers = [];
+            for (let file of files) {
+                if ((matches = file.match(regex)) !== null) {
+                    consumers.push(matches[1]);
                 }
-                commit = {
-                    commitId: metadata.commitId,
-                    committedAt: metadata.committedAt,
-                    streamName: stream,
-                    streamVersion: metadata.streamVersion,
-                    events: []
-                };
             }
-            commit.events.push(payload);
-        }
-        if (commit) {
-            yield commit;
-        }
+            callback(null, consumers);
+        });
     }
 }
 
 module.exports = EventStore;
 module.exports.ExpectedVersion = ExpectedVersion;
 module.exports.OptimisticConcurrencyError = OptimisticConcurrencyError;
+module.exports.LOCK_THROW = Storage.LOCK_THROW;
+module.exports.LOCK_RECLAIM = Storage.LOCK_RECLAIM;

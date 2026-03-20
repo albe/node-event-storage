@@ -1,14 +1,18 @@
 const fs = require('fs');
 const path = require('path');
-const EventEmitter = require('events');
-const { assert } = require('../util');
+const events = require('events');
+const { assert, alignTo } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
+const DOCUMENT_SEPARATOR = "\x00\x00\x1E\n";
+const DOCUMENT_FOOTER_SIZE = 4 /* additional data size footer */ + DOCUMENT_SEPARATOR.length;
 
-// node-event-store partition V02
-const HEADER_MAGIC = "nesprt02";
+// node-event-store partition V03
+const HEADER_MAGIC = "nesprt03";
+
+const NES_EPOCH = new Date('2020-01-01T00:00:00');
 
 class CorruptFileError extends Error {}
 class InvalidDataSizeError extends Error {}
@@ -20,6 +24,7 @@ class InvalidDataSizeError extends Error {}
  * @returns {number}
  */
 function hash(str) {
+    /* istanbul ignore if */
     if (str.length === 0) {
         return 0;
     }
@@ -40,7 +45,7 @@ function hash(str) {
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
  * In the case of an event store, this is most likely the (write) streams.
  */
-class ReadablePartition extends EventEmitter {
+class ReadablePartition extends events.EventEmitter {
 
     /**
      * Get the id for a specific partition name.
@@ -109,12 +114,28 @@ class ReadablePartition extends EventEmitter {
         this.headerSize = 0;
         this.size = this.readFileSize();
         if (this.size <= 0) {
+            this.close();
             return false;
         }
 
         this.size -= this.readMetadata();
 
         return true;
+    }
+
+    /**
+     * @returns {number} -1 if the partition is ok and the sequence number of the broken document if a torn write was detected.
+     */
+    checkTornWrite() {
+        const reader = this.prepareReadBufferBackwards(this.size);
+        const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
+        if (separator !== DOCUMENT_SEPARATOR) {
+            const position = this.findDocumentPositionBefore(this.size);
+            const reader = this.prepareReadBuffer(position);
+            const { sequenceNumber } = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+            return sequenceNumber;
+        }
+        return -1;
     }
 
     /**
@@ -146,6 +167,7 @@ class ReadablePartition extends EventEmitter {
         const metadata = metadataBuffer.toString('utf8').trim();
         try {
             this.metadata = JSON.parse(metadata);
+            this.metadata.epoch = this.metadata.epoch /* istanbul ignore next */|| NES_EPOCH.getTime();
         } catch (e) {
             throw new Error('Invalid metadata.');
         }
@@ -160,12 +182,12 @@ class ReadablePartition extends EventEmitter {
      * @returns {number} The size of the data including header, padded to 16 bytes alignment and ended with a line break.
      */
     documentWriteSize(dataSize) {
-        const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 1) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
-        return dataSize + 1 + padSize + DOCUMENT_HEADER_SIZE;
+        const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
+        return DOCUMENT_HEADER_SIZE + dataSize + padSize + DOCUMENT_FOOTER_SIZE;
     }
 
     /**
-     * @private
+     * @protected
      * @returns {number} The file size not including the file header.
      */
     readFileSize() {
@@ -208,7 +230,7 @@ class ReadablePartition extends EventEmitter {
      * @param {number} offset The position inside the buffer to start reading from.
      * @param {number} position The file position to start reading from.
      * @param {number} [size] The expected byte size of the document at the given position.
-     * @returns {{ dataSize: number, sequenceNumber, number, time64: number }} The metadata fields of the document
+     * @returns {{ dataSize: number, sequenceNumber: number, time64: number }} The metadata fields of the document
      * @throws {Error} if the storage entry at the given position is corrupted.
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
@@ -219,10 +241,6 @@ class ReadablePartition extends EventEmitter {
 
         if (size && dataSize !== size) {
             throw new InvalidDataSizeError(`Invalid document size ${dataSize} at position ${position}, expected ${size}.`);
-        }
-
-        if (position + dataSize + DOCUMENT_HEADER_SIZE > this.size) {
-            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
         }
 
         const sequenceNumber = buffer.readUInt32BE(offset + 4);
@@ -250,6 +268,25 @@ class ReadablePartition extends EventEmitter {
     }
 
     /**
+     * Prepare the read buffer for reading *before* the specified position. Don't try to reader *after* the returned cursor.
+     *
+     * @protected
+     * @param {number} position The position in the file to prepare the read buffer for reading before.
+     * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object with properties `buffer`, `cursor` and `length`.
+     */
+    prepareReadBufferBackwards(position) {
+        if (position < 0) {
+            return ({ buffer: null, cursor: 0, length: 0 });
+        }
+        let bufferCursor = position - this.readBufferPos;
+        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE)) {
+            this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
+            bufferCursor = position - this.readBufferPos;
+        }
+        return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
+    }
+
+    /**
      * Read the data from the given position.
      *
      * @api
@@ -261,11 +298,8 @@ class ReadablePartition extends EventEmitter {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readFrom(position, size = 0) {
-        if (!this.fd) {
-            return false;
-        }
-
-        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
+        assert(this.fd, 'Partition is not opened.');
+        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
         const reader = this.prepareReadBuffer(position);
         if (reader.length < size + DOCUMENT_HEADER_SIZE) {
@@ -274,6 +308,12 @@ class ReadablePartition extends EventEmitter {
 
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
         const { dataSize } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
+
+        // TODO: This should only be checked on opening
+        const writeSize = this.documentWriteSize(dataSize);
+        if (position + writeSize > this.size) {
+            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
+        }
 
         if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
             //console.log('sync read for large document size', dataLength, 'at position', position);
@@ -291,11 +331,48 @@ class ReadablePartition extends EventEmitter {
     }
 
     /**
-     * @api
-     * @returns {Generator} A generator that returns all documents in this partition.
+     * Find the start position of the document that precedes the given position.
+     *
+     * @protected
+     * @param {number} position The file position to read backwards from.
+     * @returns {number|boolean} The start position of the first document before the given position or false if no header could be found.
      */
-    *readAll() {
-        let position = 0;
+    findDocumentPositionBefore(position) {
+        assert(this.fd, 'Partition is not opened.');
+        position -= (position % DOCUMENT_ALIGNMENT);
+        if (position <= 0) {
+            return false;
+        }
+
+        const separatorSize = DOCUMENT_SEPARATOR.length;
+        // Optimization if we are at an exact document boundary, where we can just read the document size
+        let reader = this.prepareReadBufferBackwards(position);
+        const block = reader.buffer.toString('ascii', reader.cursor - separatorSize, reader.cursor);
+        if (block === DOCUMENT_SEPARATOR) {
+            const dataSize = reader.buffer.readUInt32BE(reader.cursor - separatorSize - 4);
+            return position - this.documentWriteSize(dataSize);
+        }
+
+        do {
+            reader = this.prepareReadBufferBackwards(position - separatorSize);
+
+            const bufferSeparatorPosition = reader.buffer.lastIndexOf(DOCUMENT_SEPARATOR, reader.cursor - separatorSize, 'ascii');
+            if (bufferSeparatorPosition >= 0) {
+                position = this.readBufferPos + bufferSeparatorPosition + separatorSize;
+                break;
+            }
+            position -= this.readBufferLength;
+        } while (position > 0);
+        return Math.max(0, position);
+    }
+
+    /**
+     * @api
+     * @param {number} [after] The document position to start reading from.
+     * @returns {Generator<string>} A generator that returns all documents in this partition.
+     */
+    *readAll(after = 0) {
+        let position = after < 0 ? this.size + after + 1 : after;
         let data;
         while ((data = this.readFrom(position)) !== false) {
             yield data;
@@ -303,9 +380,25 @@ class ReadablePartition extends EventEmitter {
         }
     }
 
+    /**
+     * @api
+     * @param {number} [before] The document position to start reading backward from.
+     * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
+     */
+    *readAllBackwards(before = -1) {
+        let position = before < 0 ? this.size + before + 1 : before;
+        while ((position = this.findDocumentPositionBefore(position)) !== false) {
+            const data = this.readFrom(position);
+            yield data;
+        }
+    }
 }
 
 module.exports = ReadablePartition;
 module.exports.CorruptFileError = CorruptFileError;
 module.exports.InvalidDataSizeError = InvalidDataSizeError;
 module.exports.HEADER_MAGIC = HEADER_MAGIC;
+module.exports.DOCUMENT_SEPARATOR = DOCUMENT_SEPARATOR;
+module.exports.DOCUMENT_ALIGNMENT = DOCUMENT_ALIGNMENT;
+module.exports.DOCUMENT_HEADER_SIZE = DOCUMENT_HEADER_SIZE;
+module.exports.DOCUMENT_FOOTER_SIZE = DOCUMENT_FOOTER_SIZE;

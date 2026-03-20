@@ -1,24 +1,11 @@
 const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
 const ReadablePartition = require('./ReadablePartition');
-const { assert, buildMetadataHeader } = require('../util');
+const { assert, buildMetadataHeader, alignTo, ensureDirectory } = require('../util');
 const Clock = require('../Clock');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
-const DOCUMENT_HEADER_SIZE = 16;
-const DOCUMENT_ALIGNMENT = 4;
-const DOCUMENT_PAD = ' '.repeat(15) + "\n";
-
-const NES_EPOCH = new Date('2020-01-01T00:00:00');
-
-/**
- * @param {number} dataSize
- * @returns {string} The data padded to 16 bytes alignment and ended with a line break.
- */
-function padData(dataSize) {
-    const padSize = (DOCUMENT_ALIGNMENT - ((dataSize + 1) % DOCUMENT_ALIGNMENT)) % DOCUMENT_ALIGNMENT;
-    return DOCUMENT_PAD.substr(-padSize - 1);
-}
+const { DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } = ReadablePartition;
+const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
 
 /**
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
@@ -49,11 +36,10 @@ class WritablePartition extends ReadablePartition {
             },
             clock: Clock
         };
+        config.metadata = Object.assign(defaults.metadata, config.metadata);
         config = Object.assign(defaults, config);
         super(name, config);
-        if (!fs.existsSync(this.dataDirectory)) {
-            mkdirpSync(this.dataDirectory);
-        }
+        ensureDirectory(this.dataDirectory);
         this.fileMode = 'a+';
         this.writeBufferSize = config.writeBufferSize >>> 0; // jshint ignore:line
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0; // jshint ignore:line
@@ -75,25 +61,26 @@ class WritablePartition extends ReadablePartition {
             return true;
         }
 
-        this.writeBuffer = Buffer.allocUnsafeSlow(this.writeBufferSize);
+        let success = super.open();
+        if (!success) {
+            if (this.size + this.headerSize !== 0) {
+                // If file is not empty, we can not open and initialize it
+                return false;
+            }
+            this.writeMetadata();
+            success = super.open();
+        }
+
+        this.writeBuffer = success && Buffer.allocUnsafeSlow(this.writeBufferSize);
         // Where inside the write buffer the next write is added
         this.writeBufferCursor = 0;
         // How many documents are currently in the write buffer
         this.writeBufferDocuments = 0;
         this.flushCallbacks = [];
 
-        if (super.open() === false) {
-            const stat = fs.statSync(this.fileName);
-            if (stat.size !== 0) {
-                return false;
-            }
-            this.metadata.epoch = Date.now();
-            this.writeMetadata();
-            this.size = 0;
-        }
-        this.clock = new this.ClockConstructor(this.metadata.epoch || NES_EPOCH.getTime());
+        this.clock = new this.ClockConstructor(this.metadata.epoch);
 
-        return true;
+        return success;
     }
 
     /**
@@ -103,11 +90,10 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     close() {
-        if (this.fd) {
+        if (this.fd && this.writeBuffer) {
             this.flush();
             fs.fsyncSync(this.fd);
-        }
-        if (this.writeBuffer) {
+
             this.writeBuffer = null;
             this.writeBufferCursor = 0;
             this.writeBufferDocuments = 0;
@@ -123,7 +109,7 @@ class WritablePartition extends ReadablePartition {
      */
     writeMetadata() {
         const metadataBuffer = buildMetadataHeader(ReadablePartition.HEADER_MAGIC, this.metadata);
-        fs.writeSync(this.fd, metadataBuffer, 0, metadataBuffer.byteLength, 0);
+        fs.writeFileSync(this.fileName, metadataBuffer);
         this.headerSize = metadataBuffer.byteLength;
     }
 
@@ -192,6 +178,7 @@ class WritablePartition extends ReadablePartition {
         if (time64 === null) {
             time64 = this.clock.time();
         }
+        /* istanbul ignore if */
         if (time64 < 0) {
             throw new Error('Time may not be negative!');
         }
@@ -218,6 +205,12 @@ class WritablePartition extends ReadablePartition {
         let bytesWritten = 0;
         bytesWritten += fs.writeSync(this.fd, dataHeader);
         bytesWritten += fs.writeSync(this.fd, data);
+        const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
+        bytesWritten += fs.writeSync(this.fd, DOCUMENT_PAD.substr(0, padSize));
+        const dataSizeBuffer = Buffer.alloc(4);
+        dataSizeBuffer.writeUInt32BE(dataSize, 0);
+        bytesWritten += fs.writeSync(this.fd, dataSizeBuffer);
+        bytesWritten += fs.writeSync(this.fd, DOCUMENT_SEPARATOR);
         if (typeof callback === 'function') {
             process.nextTick(callback);
         }
@@ -234,12 +227,17 @@ class WritablePartition extends ReadablePartition {
      * @returns {number} Number of bytes written.
      */
     writeBuffered(data, dataSize, sequenceNumber, callback) {
-        const bytesToWrite = Buffer.byteLength(data, 'utf8') + DOCUMENT_HEADER_SIZE;
+        const bytesToWrite = this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
         this.flushIfWriteBufferTooSmall(bytesToWrite);
 
         let bytesWritten = 0;
         bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
         bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
+        const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
+        bytesWritten += this.writeBuffer.write(DOCUMENT_PAD.substr(0, padSize), this.writeBufferCursor + bytesWritten, 'utf8');
+        this.writeBuffer.writeUInt32BE(dataSize, this.writeBufferCursor + bytesWritten);
+        bytesWritten += 4;
+        bytesWritten += this.writeBuffer.write(DOCUMENT_SEPARATOR, this.writeBufferCursor + bytesWritten, 'utf8');
         this.writeBufferCursor += bytesWritten;
         this.writeBufferDocuments++;
         if (typeof callback === 'function') {
@@ -257,9 +255,7 @@ class WritablePartition extends ReadablePartition {
      * @returns {number|boolean} The file position at which the data was written or false on error.
      */
     write(data, sequenceNumber, callback) {
-        if (!this.fd) {
-            return false;
-        }
+        assert(this.fd, 'Partition is not opened.');
         if (typeof sequenceNumber === 'function') {
             callback = sequenceNumber;
             sequenceNumber = null;
@@ -267,7 +263,6 @@ class WritablePartition extends ReadablePartition {
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
-        data += padData(dataSize);
         const dataPosition = this.size;
         if (dataSize + DOCUMENT_HEADER_SIZE >= this.writeBuffer.byteLength * 4 / 5) {
             this.size += this.writeUnbuffered(data, dataSize, sequenceNumber, callback);
@@ -299,6 +294,8 @@ class WritablePartition extends ReadablePartition {
 
     /**
      * Truncate the internal read buffer after the given position.
+     *
+     * @internal
      * @param {number} after The byte position to truncate the read buffer after.
      */
     truncateReadBuffer(after) {
@@ -313,40 +310,52 @@ class WritablePartition extends ReadablePartition {
     /**
      * Truncate the partition storage at the given position.
      *
+     * @api
      * @param {number} after The file position after which to truncate the partition.
      */
     truncate(after) {
         if (after > this.size) {
             return;
         }
+        this.open();
         after = Math.max(0, after);
         this.flush();
 
         let position = after, data;
-        let skipDeleteLog = false;
         try {
-            data = this.readFrom(position);
+            this.readFrom(after);
+            // copy all truncated documents to some delete log
+            this.branchOff('truncated-' + Date.now(), after);
         } catch (e) {
             if (!(e instanceof ReadablePartition.CorruptFileError)) {
                 throw new Error('Can only truncate on valid document boundaries.');
             }
-            skipDeleteLog = true;
-        }
-        if (!skipDeleteLog) {
-            // copy all truncated documents to some delete log
-            const deletedBranch = new WritablePartition(this.name + '-' + after + '.branch', { dataDirectory: this.dataDirectory });
-            deletedBranch.open();
-            while (data) {
-                deletedBranch.write(data);
-                position += this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
-                data = this.readFrom(position);
-            }
-            deletedBranch.close();
         }
 
         fs.truncateSync(this.fileName, this.headerSize + after);
         this.truncateReadBuffer(after);
         this.size = after;
+        this.emit('truncated', after);
+    }
+
+    /**
+     * Create a branch of this partition starting from the given position.
+     *
+     * @internal
+     * @param {string} branchName The name that identifies the branch (will be prefixed with this partition name and suffixed with the position)
+     * @param {number} position The file position from where to branch off
+     * @returns {WritablePartition} The branched off partition
+     */
+    branchOff(branchName, position) {
+        const deletedBranch = new WritablePartition(this.name + '-' + branchName + '-' + position + '.branch', { dataDirectory: this.dataDirectory, metadata: { epoch: this.metadata.epoch } });
+        deletedBranch.open();
+        do {
+            const reader = this.prepareReadBuffer(position);
+            fs.writeSync(deletedBranch.fd, reader.buffer, reader.cursor, reader.length);
+            position += reader.length;
+        } while (position < this.size);
+        deletedBranch.close();
+        return deletedBranch;
     }
 }
 

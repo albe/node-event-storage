@@ -1,6 +1,6 @@
-const TIME_BASE = process.hrtime();
-const DATE_BASE_US = Date.now() * 1000.0 + 999.0; // DATE_BASE_US should match the TIME_BASE with lower resolution, but never be less
-const US_PER_SEC = 1.0e6;
+const TIME_BASE = process.hrtime.bigint();
+const DATE_FACTOR = 1000000n;
+const DATE_BASE_NS = BigInt(Date.now() + 1) * DATE_FACTOR - 1n;
 const CLOCK_ACCURACY_US = 1; // two process.hrtime() calls take roughly this long, so this is the accuracy we can measure time
 
 /**
@@ -14,16 +14,28 @@ class Clock {
      * @param {Date|number} epoch The epoch to base this clock on, either as a Date or a number of the amount of milliseconds since the unix epoch
      */
     constructor(epoch) {
-        this.epoch = Math.floor((epoch instanceof Date ? epoch.getTime() : Number(epoch)) * 1000.0);
+        this.epoch = BigInt(epoch instanceof Date ? epoch.getTime() : Number(epoch)) * DATE_FACTOR;
+        this.lastTime = 0;
     }
 
     /**
-     * @returns {number} The number of microseconds since the epoch given in the constructor. The decimal part denotes the accuracy of the clock in milliseconds.
-     * @note Needs to allow at least tens of ms accuracy, better hundreds of ms
+     * @returns {number} The number of microseconds since the epoch given in the constructor.
+     * @note Needs to allow at least tenths of ms accuracy, better hundredths of ms
      */
     time() {
-        const delta = process.hrtime(TIME_BASE);
-        return DATE_BASE_US - this.epoch + (delta[0] * US_PER_SEC + Math.floor(delta[1] / 1000)) + (CLOCK_ACCURACY_US / 1000.0);
+        const delta = process.hrtime.bigint() - TIME_BASE;
+        const timeSinceEpoch = Number((DATE_BASE_NS - this.epoch + delta) / 1000n);
+        return this.lastTime = Math.max(this.lastTime + 1, timeSinceEpoch);
+    }
+
+    /**
+     * Return the clock accuracy of the given timestamp. This is only useful for calculating a consistent ordering
+     * ala TrueTime for multi-writer scenarios.
+     * @param {number} time A timestamp measured by this clock.
+     * @returns {number} The amount of µs accuracy this timestamp has.
+     */
+    accuracy(time) {
+        return CLOCK_ACCURACY_US;
     }
 
 }

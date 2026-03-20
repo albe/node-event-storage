@@ -13,6 +13,8 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     constructor(storageName = 'storage', config = {}) {
         super(storageName, config);
+        this.storageFilesFilter = this.storageFilesFilter.bind(this);
+        this.onStorageFileChanged = this.onStorageFileChanged.bind(this);
     }
 
     /**
@@ -33,8 +35,8 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     open() {
         if (!this.watcher) {
-            this.watcher = new Watcher(this.dataDirectory, this.storageFilesFilter.bind(this));
-            this.watcher.on('rename', this.onStorageFileChanged.bind(this));
+            this.watcher = new Watcher([this.dataDirectory, this.indexDirectory], this.storageFilesFilter);
+            this.watcher.on('rename', this.onStorageFileChanged);
         }
         return super.open();
     }
@@ -45,8 +47,9 @@ class ReadOnlyStorage extends ReadableStorage {
      */
     onStorageFileChanged(filename) {
         if (filename.substr(-6) === '.index') {
+            const indexName = filename.substr(this.storageFile.length + 1, filename.length - this.storageFile.length - 7);
             // New indexes are not automatically opened in the reader
-            this.emit('index-created', filename);
+            this.emit('index-created', indexName);
             return;
         }
 
@@ -83,6 +86,10 @@ class ReadOnlyStorage extends ReadableStorage {
         const { index } = super.createIndex(name, options);
         const indexShortName = name.replace(this.storageFile + '.', '').replace('.index', '');
         index.on('append', (prevLength, newLength) => {
+            if (!this.watcher) {
+                // If the watcher has been removed, this means this storage was closed and we don't want to handle events any more
+                return;
+            }
             const entries = index.range(prevLength + 1, newLength);
             /* istanbul ignore if */
             if (entries === false) {

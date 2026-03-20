@@ -239,6 +239,23 @@ describe('Storage', function() {
             expect(index.isOpen()).to.be(true);
         });
 
+        it('works with arbitrarily sized documents', function() {
+            storage = createStorage({ writeBufferSize: 1024 });
+            storage.open();
+
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ foo: i, pad: ' '.repeat(storage.partitionConfig.writeBufferSize * i / 12) });
+            }
+
+            storage.close();
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 8; i++) {
+                expect(storage.read(i).foo).to.eql(i);
+            }
+        });
+
     });
 
     describe('readRange', function() {
@@ -259,6 +276,24 @@ describe('Storage', function() {
                 expect(doc).to.eql({ foo: i++ });
             }
             expect(i).to.be(11);
+        });
+
+        it('can read full range in reverse', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 20; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            let i = 20;
+            let documents = storage.readRange(i, 1);
+            for (let doc of documents) {
+                expect(doc).to.eql({ foo: i-- });
+            }
+            expect(i).to.be(0);
         });
 
         it('can read a sub range', function() {
@@ -348,7 +383,6 @@ describe('Storage', function() {
             expect(() => storage.readRange(0).next()).to.throwError();
             expect(() => storage.readRange(11).next()).to.throwError();
             expect(() => storage.readRange(1, 14).next()).to.throwError();
-            expect(() => storage.readRange(8, 4).next()).to.throwError();
         });
 
         it('can open secondary indexes lazily', function() {
@@ -375,6 +409,12 @@ describe('Storage', function() {
             storage.ensureIndex('foo', () => true);
             expect(fs.existsSync('test/data/storage.foo.index')).to.be(true);
         });
+
+        it('returns global index for `_all`', function() {
+            storage = createStorage();
+            const index = storage.ensureIndex('_all');
+            expect(index).to.be(storage.index);
+        })
 
         it('can be called multiple times', function() {
             storage = createStorage();
@@ -410,6 +450,19 @@ describe('Storage', function() {
             storage.write({type: 'Foo'});
             storage.write({type: 'Baz'});
             expect(index.length).to.be(1);
+        });
+
+        it('indexes documents by property object matcher ignoring undefined properties', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.write({type: 'Bar', other: '1'});
+            storage.write({type: 'Foo', other: '2'});
+            storage.write({type: 'Baz', other: '3'}, () => {
+                let index = storage.ensureIndex('foo', {type: 'Foo', other: undefined});
+
+                expect(index.length).to.be(1);
+                done();
+            });
         });
 
         it('reopens existing indexes', function() {
@@ -850,7 +903,24 @@ describe('Storage', function() {
             let reader = createReader();
             reader.open();
             reader.on('index-created', (name) => {
-                expect(name.substr(-9, 3)).to.be('one');
+                expect(name).to.be('one');
+                expect(reader.secondaryIndexes[name]).to.be(undefined);
+                reader.close();
+                done();
+            });
+
+            storage.ensureIndex('one', doc => doc.type === 'one');
+            storage.flush();
+        });
+
+        it('recognizes new indexes created in different directory by writer', function(done){
+            storage = createStorage({ indexDirectory: dataDirectory + '/indexes', syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader( { indexDirectory: dataDirectory + '/indexes' });
+            reader.open();
+            reader.on('index-created', (name) => {
+                expect(name).to.be('one');
                 expect(reader.secondaryIndexes[name]).to.be(undefined);
                 reader.close();
                 done();
@@ -934,5 +1004,20 @@ describe('Storage', function() {
             reader.close();
         });
 
+        it('partitions are opened only once', function(done){
+            storage = createStorage({ syncOnFlush: true, partitioner:  (document, number) => document.type });
+            storage.open();
+
+            let reader = createReader();
+            reader.open();
+            reader.on('partition-created', (id) => {
+                const partitionInstance = reader.getPartition(id);
+                expect(reader.getPartition(id)).to.be(partitionInstance);
+                reader.close();
+                done();
+            });
+
+            storage.getPartition('');
+        });
     });
 });

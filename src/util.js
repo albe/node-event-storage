@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const mkdirpSync = require('mkdirp').sync;
 
 /**
  * Assert that actual and expected match or throw an Error with the given message appended by information about expected and actual value.
@@ -27,6 +29,17 @@ function assert(condition, message, ErrorType = Error) {
 }
 
 /**
+ * Return the amount required to align value to the given alignment.
+ * It calculates the difference of the alignment and the modulo of value by alignment.
+ * @param {number} value
+ * @param {number} alignment
+ * @returns {number}
+ */
+function alignTo(value, alignment) {
+    return (alignment - (value % alignment)) % alignment;
+}
+
+/**
  * @param {string} secret The secret to use for calculating further HMACs
  * @returns {function(string)} A function that calculates the HMAC for a given string
  */
@@ -37,8 +50,12 @@ const createHmac = secret => string => {
     };
 
 /**
+ * @typedef {object|function(object):boolean} Matcher
+ */
+
+/**
  * @param {object} document The document to check against the matcher.
- * @param {object|function} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
+ * @param {Matcher} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
  * @returns {boolean} True if the document matches the matcher or false otherwise.
  */
 function matches(document, matcher) {
@@ -52,7 +69,7 @@ function matches(document, matcher) {
             if (!matches(document[prop], matcher[prop])) {
                 return false;
             }
-        } else if (document[prop] !== matcher[prop]) {
+        } else if (typeof matcher[prop] !== 'undefined' && document[prop] !== matcher[prop]) {
             return false;
         }
     }
@@ -60,7 +77,7 @@ function matches(document, matcher) {
 }
 
 /**
- * @param {object|function} matcher The matcher object or function that should be serialized.
+ * @param {Matcher} matcher The matcher object or function that should be serialized.
  * @param {function(string)} hmac A function that calculates a HMAC of the given string.
  * @returns {{matcher: string|object, hmac?: string}}
  */
@@ -78,7 +95,7 @@ function buildMetadataForMatcher(matcher, hmac) {
 /**
  * @param {{matcher: string|object, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
  * @param {function(string)} hmac A function that calculates a HMAC of the given string.
- * @returns {object|function} The matcher object or function.
+ * @returns {Matcher} The matcher object or function.
  */
 function buildMatcherFromMetadata(matcherMetadata, hmac) {
     let matcher;
@@ -152,21 +169,38 @@ function binarySearch(number, length, get) {
 /**
  * @param {number} index The 1-based index position to wrap around if < 0 and check against the bounds.
  * @param {number} length The length of the index and upper bound.
- * @returns {number|boolean} The wrapped index or false if index out of bounds.
+ * @returns {number} The wrapped index position or -1 if index out of bounds.
  */
 function wrapAndCheck(index, length) {
     if (typeof index !== 'number') {
-        return false;
+        return -1;
     }
 
     if (index < 0) {
         index += length + 1;
     }
     if (index < 1 || index > length) {
-        return false;
+        return -1;
     }
     return index;
 }
+
+/**
+ * Ensure that the given directory exists.
+ * @param {string} dirName
+ * @return {boolean} true if the directory existed already
+ */
+function ensureDirectory(dirName) {
+    if (!fs.existsSync(dirName)) {
+        try {
+            mkdirpSync(dirName);
+        } catch (e) {
+        }
+        return false;
+    }
+    return true;
+}
+
 
 module.exports = {
     assert,
@@ -177,5 +211,7 @@ module.exports = {
     matches,
     buildMetadataForMatcher,
     buildMatcherFromMetadata,
-    buildMetadataHeader
+    buildMetadataHeader,
+    alignTo,
+    ensureDirectory
 };
