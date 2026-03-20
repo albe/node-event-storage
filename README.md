@@ -600,3 +600,70 @@ specify an own unique random secret for this in production.
 
 Alternatively you should always explicitly specify your matchers when opening an existing index, since that will
 check the specified matcher matches the one in the index file.
+
+### Partition Metadata and Access Control Hooks
+
+Each partition can carry an arbitrary metadata object that is written once into the partition's file header at
+creation time and cannot be changed afterwards. This makes it a stable anchor for access control policies that
+need to be defined when a stream is first created.
+
+Two hooks can be registered on the storage to intercept reads and writes:
+
+- **`preCommit(hook)`** — called inside `write()` with `(document, partitionMetadata)` *before* the document is
+  written. Throw from the hook to abort the write.
+- **`preRead(hook)`** — called inside `readFrom()` with `(position, partitionMetadata)` *before* the document is
+  read from disk. Throw from the hook to abort the read.
+
+Because the metadata is defined per partition, you can store different access control information for each
+stream/partition. Pass a function as `config.metadata` and it will be called with the partition name whenever a
+new partition is created:
+
+```javascript
+const EventStore = require('event-storage');
+
+// Application-owned context — not part of the library
+const globalContext = { authorizedRoles: ['user'] };
+
+const eventstore = new EventStore('my-event-store', {
+    storageDirectory: './data',
+    storageConfig: {
+        // Called once per partition at creation time; the result is persisted in the file header
+        metadata: (partitionName) => ({
+            allowedRoles: partitionName === 'admin-stream' ? ['admin'] : ['user']
+        })
+    }
+});
+
+eventstore.on('ready', () => {
+    const storage = eventstore.storage;
+
+    // Reject writes to partitions whose allowedRoles don't overlap with the caller's roles
+    storage.preCommit((document, partitionMetadata) => {
+        if (!partitionMetadata.allowedRoles.some(role => globalContext.authorizedRoles.includes(role))) {
+            throw new Error(
+                'Not authorized to write to this partition with roles ' +
+                JSON.stringify(globalContext.authorizedRoles)
+            );
+        }
+    });
+
+    // Reject reads from partitions whose allowedRoles don't overlap with the caller's roles
+    storage.preRead((position, partitionMetadata) => {
+        if (!partitionMetadata.allowedRoles.some(role => globalContext.authorizedRoles.includes(role))) {
+            throw new Error(
+                'Not authorized to read from this partition with roles ' +
+                JSON.stringify(globalContext.authorizedRoles)
+            );
+        }
+    });
+
+    // This write succeeds — 'user' is in allowedRoles for 'user-stream'
+    eventstore.commit('user-stream', [{ type: 'UserCreated', id: 1 }], 0);
+
+    // This write throws — 'admin' is NOT in globalContext.authorizedRoles
+    eventstore.commit('admin-stream', [{ type: 'AdminAction' }], 0);
+});
+```
+
+The `globalContext` object is entirely application-owned. The library only calls the hook with the position (or
+document for `preCommit`) and the stored partition metadata — everything else is up to the application.
