@@ -1109,21 +1109,21 @@ describe('Storage', function() {
 
     describe('preRead', function() {
 
-        it('calls the hook after reading with the document and partition metadata', function() {
+        it('calls the hook before reading with the position and partition metadata', function() {
             storage = createStorage({ metadata: { allowedRoles: ['admin'] } });
             storage.open();
             storage.write({ foo: 'bar' });
 
-            let hookDocument, hookMetadata;
-            storage.preRead((document, partitionMetadata) => {
-                hookDocument = document;
+            let hookPosition, hookMetadata;
+            storage.preRead((position, partitionMetadata) => {
+                hookPosition = position;
                 hookMetadata = partitionMetadata;
             });
 
             const result = storage.read(1);
 
             expect(result).to.eql({ foo: 'bar' });
-            expect(hookDocument).to.eql({ foo: 'bar' });
+            expect(typeof hookPosition).to.be('number');
             expect(hookMetadata.allowedRoles).to.eql(['admin']);
         });
 
@@ -1148,8 +1148,8 @@ describe('Storage', function() {
             }
 
             const hookCalls = [];
-            storage.preRead((document, partitionMetadata) => {
-                hookCalls.push({ document, metadata: partitionMetadata });
+            storage.preRead((position, partitionMetadata) => {
+                hookCalls.push({ position, metadata: partitionMetadata });
             });
 
             const docs = Array.from(storage.readRange(1, 3));
