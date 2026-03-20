@@ -200,11 +200,11 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Register a hook that is called before a document is returned from a read operation.
-     * The hook receives the document and the partition metadata and may throw to abort the read.
+     * Register a hook that is called before a document is read from a partition.
+     * The hook receives the position and the partition metadata and may throw to abort the read.
      *
      * @api
-     * @param {function(object, object): void} hook A function receiving (document, partitionMetadata).
+     * @param {function(number, object): void} hook A function receiving (position, partitionMetadata).
      */
     preRead(hook) {
         this.preReadHook = hook;
@@ -220,12 +220,11 @@ class ReadableStorage extends events.EventEmitter {
      */
     readFrom(partitionId, position, size) {
         const partition = this.getPartition(partitionId);
-        const data = partition.readFrom(position, size);
-        const document = this.serializer.deserialize(data);
         if (this.preReadHook) {
-            this.preReadHook(document, partition.metadata);
+            this.preReadHook(position, partition.metadata);
         }
-        return document;
+        const data = partition.readFrom(position, size);
+        return this.serializer.deserialize(data);
     }
 
     /**
