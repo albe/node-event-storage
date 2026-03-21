@@ -296,6 +296,26 @@ describe('Storage', function() {
             expect(i).to.be(0);
         });
 
+        it('reads all items in reverse when range length is a multiple of batch size', function() {
+            // 12 items: sequence 12, 1 (step 11) → old code yielded 2..12 then exited,
+            // missing item 1.  Regression test for the >= readUntil boundary fix.
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 12; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            let i = 12;
+            let documents = storage.readRange(i, 1);
+            for (let doc of documents) {
+                expect(doc).to.eql({ foo: i-- });
+            }
+            expect(i).to.be(0);
+        });
+
         it('can read a sub range', function() {
             storage = createStorage();
             storage.open();

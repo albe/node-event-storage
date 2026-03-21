@@ -255,7 +255,7 @@ class ReadableStorage extends events.EventEmitter {
         if (readFrom > readUntil) {
             const batchSize = 10;
             let batchUntil = readFrom;
-            while (batchUntil > readUntil) {
+            while (batchUntil >= readUntil) {
                 const batchFrom = Math.max(readUntil, batchUntil - batchSize);
                 yield* reverse(this.iterateRange(batchFrom, batchUntil, index));
                 batchUntil = batchFrom - 1;
