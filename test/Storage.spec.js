@@ -1020,4 +1020,123 @@ describe('Storage', function() {
             storage.getPartition('');
         });
     });
+
+    describe('preCommit', function() {
+
+        it('calls the hook before writing with the document and partition metadata', function() {
+            storage = createStorage({ metadata: { allowedRoles: ['admin'] } });
+            storage.open();
+
+            let hookDocument, hookMetadata;
+            storage.preCommit((document, partitionMetadata) => {
+                hookDocument = document;
+                hookMetadata = partitionMetadata;
+            });
+
+            storage.write({ foo: 'bar' });
+
+            expect(hookDocument).to.eql({ foo: 'bar' });
+            expect(hookMetadata.allowedRoles).to.eql(['admin']);
+        });
+
+        it('aborts the write when the hook throws', function() {
+            storage = createStorage();
+            storage.open();
+
+            storage.preCommit(() => {
+                throw new Error('not allowed');
+            });
+
+            expect(() => storage.write({ foo: 'bar' })).to.throwError(/not allowed/);
+            expect(storage.length).to.be(0);
+        });
+
+        it('allows writes when the hook does not throw', function() {
+            storage = createStorage({ metadata: { allowedRoles: ['admin'] } });
+            storage.open();
+
+            const globalContext = { authorizedRoles: ['admin', 'user'] };
+            storage.preCommit((document, partitionMetadata) => {
+                if (!partitionMetadata.allowedRoles.some(role => globalContext.authorizedRoles.includes(role))) {
+                    throw new Error('Not allowed');
+                }
+            });
+
+            expect(storage.write({ foo: 'bar' })).to.be(1);
+        });
+
+        it('uses per-partition metadata when config.metadata is a function', function() {
+            storage = createStorage({
+                partitioner: (doc) => doc.type,
+                metadata: (partitionName) => ({ allowedRoles: partitionName === 'admin' ? ['admin'] : ['user'] })
+            });
+            storage.open();
+
+            const calls = [];
+            storage.preCommit((document, partitionMetadata) => {
+                calls.push({ document, metadata: partitionMetadata });
+            });
+
+            storage.write({ foo: 1, type: 'admin' });
+            storage.write({ foo: 2, type: 'user' });
+
+            expect(calls.length).to.be(2);
+            expect(calls[0].metadata.allowedRoles).to.eql(['admin']);
+            expect(calls[1].metadata.allowedRoles).to.eql(['user']);
+        });
+
+    });
+
+    describe('preRead', function() {
+
+        it('calls the hook before reading with the position and partition metadata', function() {
+            storage = createStorage({ metadata: { allowedRoles: ['admin'] } });
+            storage.open();
+            storage.write({ foo: 'bar' });
+
+            let hookPosition, hookMetadata;
+            storage.preRead((position, partitionMetadata) => {
+                hookPosition = position;
+                hookMetadata = partitionMetadata;
+            });
+
+            const result = storage.read(1);
+
+            expect(result).to.eql({ foo: 'bar' });
+            expect(typeof hookPosition).to.be('number');
+            expect(hookMetadata.allowedRoles).to.eql(['admin']);
+        });
+
+        it('aborts the read when the hook throws', function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+
+            storage.preRead(() => {
+                throw new Error('read not allowed');
+            });
+
+            expect(() => storage.read(1)).to.throwError(/read not allowed/);
+        });
+
+        it('calls the hook for each document in a range read', function() {
+            storage = createStorage({ metadata: { allowedRoles: ['user'] } });
+            storage.open();
+
+            for (let i = 1; i <= 3; i++) {
+                storage.write({ foo: i });
+            }
+
+            const hookCalls = [];
+            storage.preRead((position, partitionMetadata) => {
+                hookCalls.push({ position, metadata: partitionMetadata });
+            });
+
+            const docs = Array.from(storage.readRange(1, 3));
+            expect(docs.length).to.be(3);
+            expect(hookCalls.length).to.be(3);
+            expect(hookCalls[0].metadata.allowedRoles).to.eql(['user']);
+        });
+
+    });
 });

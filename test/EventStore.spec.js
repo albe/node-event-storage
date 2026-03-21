@@ -963,4 +963,328 @@ describe('EventStore', function() {
 
     });
 
+
+    describe('preCommit', function() {
+
+        it('calls the hook before writing with the event and partition metadata', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push({ event, metadata }));
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['admin']);
+            expect(calls[0].event.payload.type).to.be('FooCreated');
+        });
+
+        it('aborts the write when the hook throws', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.preCommit((event, metadata) => {
+                if (!metadata.allowedRoles.includes('user')) {
+                    throw new Error('Not authorized');
+                }
+            });
+            expect(() => eventstore.commit('foo', [{ type: 'FooCreated' }])).to.throwError(/Not authorized/);
+            expect(eventstore.length).to.be(0);
+        });
+
+        it('supports per-stream metadata via a function', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: (streamName) => ({ streamName })
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push(metadata));
+            eventstore.commit('foo', [{ type: 'A' }]);
+            eventstore.commit('bar', [{ type: 'B' }]);
+            expect(calls[0].streamName).to.be('foo');
+            expect(calls[1].streamName).to.be('bar');
+        });
+
+        it('uses an empty metadata object for streams not in the streamMetadata map', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'known-stream': { allowedRoles: ['admin'] } }
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push(metadata));
+            // 'unknown-stream' is not in the object — should receive {} (no allowedRoles)
+            eventstore.commit('unknown-stream', [{ type: 'A' }]);
+            expect(calls[0].allowedRoles).to.be(undefined);
+        });
+
+        it('throws when the storage is opened in read-only mode', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.close();
+
+            const readOnly = new EventStore({
+                storageDirectory,
+                storageConfig: { readOnly: true }
+            });
+            readOnly.on('ready', () => {
+                expect(() => readOnly.preCommit(() => {})).to.throwError();
+                readOnly.close();
+                eventstore = null;
+                done();
+            });
+        });
+
+        it('supports eventstore.on("preCommit", handler) style', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            const calls = [];
+            eventstore.on('preCommit', (event, metadata) => calls.push({ event, metadata }));
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['admin']);
+        });
+
+        it('supports multiple handlers registered via on()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            const order = [];
+            eventstore.on('preCommit', () => order.push('first'));
+            eventstore.on('preCommit', () => order.push('second'));
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(order).to.eql(['first', 'second']);
+        });
+
+        it('supports removal of a handler via off()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('preCommit', handler);
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(callCount).to.be(1);
+            eventstore.off('preCommit', handler);
+            eventstore.commit('foo', [{ type: 'FooUpdated' }]);
+            expect(callCount).to.be(1);
+        });
+
+        it('supports once() for a one-time handler', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            let callCount = 0;
+            eventstore.once('preCommit', () => callCount++);
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.commit('foo', [{ type: 'FooUpdated' }]);
+            expect(callCount).to.be(1);
+        });
+
+        it('throws when registering preCommit via on() on a read-only store', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.close();
+
+            const readOnly = new EventStore({
+                storageDirectory,
+                storageConfig: { readOnly: true }
+            });
+            readOnly.on('ready', () => {
+                expect(() => readOnly.on('preCommit', () => {})).to.throwError();
+                readOnly.close();
+                eventstore = null;
+                done();
+            });
+        });
+
+    });
+
+    describe('preRead', function() {
+
+        it('calls the hook before reading with the position and partition metadata', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const calls = [];
+            eventstore.preRead((position, metadata) => calls.push({ position, metadata }));
+
+            const stream = eventstore.getEventStream('foo');
+            const events = Array.from(stream);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['user']);
+            expect(typeof calls[0].position).to.be('number');
+        });
+
+        it('aborts the read when the hook throws', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.preRead((position, metadata) => {
+                if (!metadata.allowedRoles.includes('user')) {
+                    throw new Error('Not authorized to read');
+                }
+            });
+
+            // EventStream.next() catches iterator errors, so iteration stops with no events
+            const stream = eventstore.getEventStream('foo');
+            const result = Array.from(stream);
+            expect(result).to.have.length(0);
+        });
+
+        it('works on a read-only store', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.close();
+
+            const readOnly = new EventStore({
+                storageDirectory,
+                storageConfig: { readOnly: true }
+            });
+            readOnly.on('ready', () => {
+                const calls = [];
+                expect(() => readOnly.preRead((pos, meta) => calls.push(meta))).to.not.throwError();
+                const stream = readOnly.getEventStream('foo');
+                Array.from(stream);
+                expect(calls).to.have.length(1);
+                readOnly.close();
+                eventstore = null;
+                done();
+            });
+        });
+
+        it('supports eventstore.on("preRead", handler) style', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const calls = [];
+            eventstore.on('preRead', (position, metadata) => calls.push({ position, metadata }));
+
+            const stream = eventstore.getEventStream('foo');
+            Array.from(stream);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['user']);
+        });
+
+        it('supports multiple read handlers via on()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const order = [];
+            eventstore.on('preRead', () => order.push('first'));
+            eventstore.on('preRead', () => order.push('second'));
+
+            Array.from(eventstore.getEventStream('foo'));
+            expect(order).to.eql(['first', 'second']);
+        });
+
+        it('supports once() for a one-time preRead handler', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }, { type: 'FooUpdated' }]);
+            let callCount = 0;
+            eventstore.once('preRead', () => callCount++);
+            Array.from(eventstore.getEventStream('foo'));
+            expect(callCount).to.be(1);
+        });
+
+        it('supports removal of a read handler via off()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }, { type: 'FooUpdated' }]);
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('preRead', handler);
+            Array.from(eventstore.getEventStream('foo'));
+            expect(callCount).to.be(2);
+            eventstore.off('preRead', handler);
+            Array.from(eventstore.getEventStream('foo').reset());
+            expect(callCount).to.be(2);
+        });
+
+        it('supports removal of a read handler via removeListener()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }, { type: 'FooUpdated' }]);
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('preRead', handler);
+            Array.from(eventstore.getEventStream('foo'));
+            expect(callCount).to.be(2);
+            eventstore.removeListener('preRead', handler);
+            Array.from(eventstore.getEventStream('foo').reset());
+            expect(callCount).to.be(2);
+        });
+
+        it('delegates non-hook once() to EventEmitter', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            eventstore.once('ready', () => {
+                callCount++;
+                expect(callCount).to.be(1);
+                done();
+            });
+        });
+
+        it('delegates non-hook off() to EventEmitter', function() {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('ready', handler);
+            eventstore.off('ready', handler);
+            // No assertion needed — just must not throw
+        });
+
+        it('delegates addListener() to on()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const calls = [];
+            eventstore.addListener('preRead', (position, metadata) => calls.push(metadata));
+            Array.from(eventstore.getEventStream('foo'));
+            expect(calls).to.have.length(1);
+            expect(calls[0].allowedRoles).to.eql(['user']);
+        });
+
+        it('delegates removeListener() to off() for non-hook events', function() {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('ready', handler);
+            eventstore.removeListener('ready', handler);
+            // No assertion needed — just must not throw
+        });
+
+    });
+
 });

@@ -600,3 +600,101 @@ specify an own unique random secret for this in production.
 
 Alternatively you should always explicitly specify your matchers when opening an existing index, since that will
 check the specified matcher matches the one in the index file.
+
+### Partition Metadata and Access Control Hooks
+
+Each stream (partition) can carry an arbitrary metadata object that is written once into the partition's file header
+at creation time and cannot be changed afterwards. This makes it a stable anchor for access control policies that
+need to be defined when a stream is first created.
+
+Two handlers can be registered on the `EventStore` (or directly on the `Storage` instance) to intercept reads and
+writes, using the standard Node.js `EventEmitter` API (`on`, `once`, `off`) or the convenience wrapper methods:
+
+- **`on('preCommit', handler)`** — handler called with `(event, partitionMetadata)` *before* the event is written. Throw from the handler to abort the write.
+- **`on('preRead', handler)`** — handler called with `(position, partitionMetadata)` *before* the event is read from disk. Throw from the handler to abort the read.
+
+Multiple handlers can be registered for the same event; they all run on every operation in registration order.
+Individual handlers can be removed with `off('preCommit', handler)` / `off('preRead', handler)`, and `once()` is
+available for one-time handlers.
+
+> **Performance note:** Both handlers are invoked synchronously on *every* read and write operation. Keep the handler
+> logic as cheap and fast as possible — avoid I/O, async operations, or any non-trivial computation inside a handler,
+> as the overhead will be paid on every event accessed.
+
+#### Using the `EventStore` API
+
+At the `EventStore` level the unit of work is a *stream*. Use `config.streamMetadata` to attach metadata per stream.
+It accepts either:
+- A **function** `(streamName) => object` — called once per stream at creation time, so each stream can have its own
+  metadata (shown in the example below).
+- A **plain object** `{ streamName: metadataObject, ... }` — each key is a stream name whose value becomes that
+  stream's metadata; streams not present in the object receive an empty metadata object `{}`.
+
+Register handlers using `eventstore.on('preCommit', ...)` / `eventstore.on('preRead', ...)`,
+or via the convenience methods `eventstore.preCommit(handler)` / `eventstore.preRead(handler)`.
+
+```javascript
+const EventStore = require('event-storage');
+
+// Application-owned context — not part of the library
+const globalContext = { authorizedRoles: ['user'] };
+
+const eventstore = new EventStore('my-event-store', {
+    storageDirectory: './data',
+    // Called once per stream at creation time; the result is persisted in the file header
+    streamMetadata: (streamName) => ({
+        allowedRoles: streamName === 'admin-stream' ? ['admin'] : ['user']
+    })
+});
+
+eventstore.on('ready', () => {
+    // Reject writes to streams whose allowedRoles don't overlap with the caller's roles
+    eventstore.on('preCommit', (event, streamMetadata) => {
+        if (!streamMetadata.allowedRoles.some(role => globalContext.authorizedRoles.includes(role))) {
+            throw new Error(
+                'Not authorized to write to this stream with roles ' +
+                JSON.stringify(globalContext.authorizedRoles)
+            );
+        }
+    });
+
+    // Reject reads from streams whose allowedRoles don't overlap with the caller's roles
+    eventstore.on('preRead', (position, streamMetadata) => {
+        if (!streamMetadata.allowedRoles.some(role => globalContext.authorizedRoles.includes(role))) {
+            throw new Error(
+                'Not authorized to read from this stream with roles ' +
+                JSON.stringify(globalContext.authorizedRoles)
+            );
+        }
+    });
+
+    // This write succeeds — 'user' is in allowedRoles for 'user-stream'
+    eventstore.commit('user-stream', [{ type: 'UserCreated', id: 1 }], 0);
+
+    // This write throws — 'admin' is NOT in globalContext.authorizedRoles
+    eventstore.commit('admin-stream', [{ type: 'AdminAction' }], 0);
+});
+```
+
+#### Using the `Storage` API directly
+
+If you work with `Storage` directly (bypassing `EventStore`), use `config.metadata` — a function
+`(partitionName) => object` called whenever a new partition is created — and register handlers using
+`storage.on('preCommit', ...)` / `storage.on('preRead', ...)` or the equivalent convenience methods:
+
+```javascript
+const Storage = require('event-storage').Storage;
+
+const storage = new Storage('events', {
+    partitioner: (doc) => doc.stream,
+    metadata: (partitionName) => ({
+        allowedRoles: partitionName === 'admin' ? ['admin'] : ['user']
+    })
+});
+
+storage.on('preCommit', (document, partitionMetadata) => { /* ... */ });
+storage.on('preRead', (position, partitionMetadata) => { /* ... */ });
+```
+
+The `globalContext` object is entirely application-owned. The library only calls the handler with the position (or
+event for `preCommit`) and the stored metadata — everything else is up to the application.

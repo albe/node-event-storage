@@ -28,6 +28,10 @@ class EventStore extends events.EventEmitter {
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
+     * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
+     *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
+     *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
+     *   `config.storageConfig.metadata` is not also set.
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
@@ -44,6 +48,17 @@ class EventStore extends events.EventEmitter {
             readOnly: config.readOnly || false
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
+
+        // Translate the high-level streamMetadata option into the storage-level metadata function,
+        // but only when the caller has not already provided a lower-level storageConfig.metadata.
+        if (config.streamMetadata !== undefined && storageConfig.metadata === undefined) {
+            if (typeof config.streamMetadata === 'function') {
+                storageConfig.metadata = config.streamMetadata;
+            } else {
+                storageConfig.metadata = (streamName) => config.streamMetadata[streamName] || {};
+            }
+        }
+
         this.initialize(storeName, storageConfig);
     }
 
@@ -143,6 +158,103 @@ class EventStore extends events.EventEmitter {
      */
     close() {
         this.storage.close();
+    }
+
+    /**
+     * Override EventEmitter.on() to delegate 'preCommit' and 'preRead' event registrations
+     * to the underlying storage, so that `eventstore.on('preCommit', handler)` works naturally.
+     * All other events are handled by the default EventEmitter.
+     *
+     * @param {string} event
+     * @param {function} listener
+     * @returns {this}
+     */
+    on(event, listener) {
+        if (event === 'preCommit' || event === 'preRead') {
+            if (event === 'preCommit') {
+                assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not register a preCommit handler on it.');
+            }
+            this.storage.on(event, listener);
+            return this;
+        }
+        return super.on(event, listener);
+    }
+
+    /**
+     * @inheritDoc
+     */
+    addListener(event, listener) {
+        return this.on(event, listener);
+    }
+
+    /**
+     * Override EventEmitter.once() to delegate 'preCommit' and 'preRead' to the underlying storage.
+     *
+     * @param {string} event
+     * @param {function} listener
+     * @returns {this}
+     */
+    once(event, listener) {
+        if (event === 'preCommit' || event === 'preRead') {
+            if (event === 'preCommit') {
+                assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not register a preCommit handler on it.');
+            }
+            this.storage.once(event, listener);
+            return this;
+        }
+        return super.once(event, listener);
+    }
+
+    /**
+     * Override EventEmitter.off() / removeListener() to delegate 'preCommit' and 'preRead'
+     * to the underlying storage.
+     *
+     * @param {string} event
+     * @param {function} listener
+     * @returns {this}
+     */
+    off(event, listener) {
+        if (event === 'preCommit' || event === 'preRead') {
+            this.storage.off(event, listener);
+            return this;
+        }
+        return super.off(event, listener);
+    }
+
+    /**
+     * @inheritDoc
+     */
+    removeListener(event, listener) {
+        return this.off(event, listener);
+    }
+
+    /**
+     * Convenience method to register a handler called before an event is committed to storage.
+     * Equivalent to `eventstore.on('preCommit', hook)`.
+     * The handler receives `(event, partitionMetadata)` and may throw to abort the write.
+     * Multiple handlers can be registered; all run on every write in registration order.
+     * The handler is invoked on every write, so its logic should be cheap, fast, and synchronous.
+     *
+     * @api
+     * @param {function(object, object): void} hook A function receiving (event, partitionMetadata).
+     * @throws {Error} If the storage was opened in read-only mode.
+     */
+    preCommit(hook) {
+        this.on('preCommit', hook);
+    }
+
+    /**
+     * Convenience method to register a handler called before an event is read from storage.
+     * Equivalent to `eventstore.on('preRead', hook)`.
+     * The handler receives `(position, partitionMetadata)` and may throw to abort the read.
+     * Multiple handlers can be registered; all run on every read in registration order.
+     * The handler is invoked on every read, so its logic should be cheap, fast, and synchronous.
+     *
+     * @api
+     * @param {function(number, object): void} hook A function receiving (position, partitionMetadata).
+     */
+    preRead(hook) {
+        this.on('preRead', hook);
     }
 
     /**
