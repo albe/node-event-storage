@@ -24,9 +24,16 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
         if (!this.fd) {
             return;
         }
-        const prevLength = this.data.length;
+        const prevLength = this._length;
         const newLength = this.readFileLength();
-        this.data.length = newLength;
+        if (newLength < prevLength) {
+            // Clear ring buffer slots for the removed entries to avoid stale reads
+            const oldCacheStart = Math.max(0, prevLength - this.cacheSize);
+            for (let i = Math.max(oldCacheStart, newLength); i < prevLength; i++) {
+                this.cache[i % this.cacheSize] = null;
+            }
+        }
+        this._length = newLength;
         if (newLength > prevLength) {
             this.emit('append', prevLength, newLength);
         }
