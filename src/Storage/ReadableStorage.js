@@ -235,15 +235,15 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Read a range of documents from the given position range, in the provided index or across all partitions.
-     * When no index is given, iterates all partitions directly and returns documents ordered by their
-     * sequenceNumber, allowing reconstruction of insertion order without a global index.
+     * Read a range of documents from the given position range, in the full index or in the provided index.
      * Returns a generator in order to reduce memory usage and be able to read lots of documents with little latency.
      *
      * @api
      * @param {number} from The 1-based document number (inclusive) to start reading from.
      * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
-     * @param {ReadableIndex} [index] The index to use for finding the documents in the range. If not given, iterates all partitions ordered by sequenceNumber.
+     * @param {ReadableIndex|false} [index] The index to use for finding the documents in the range.
+     *   Pass `false` to skip the global index and iterate all partitions directly in sequenceNumber order
+     *   (useful when the global index is unavailable or corrupted).
      * @returns {Generator<object>} A generator that will read each document in the range one by one.
      */
     *readRange(from, until = -1, index = null) {
@@ -271,28 +271,28 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Iterate all documents in this storage in range from to until.
-     * If an index is provided, uses it to look up document positions; otherwise iterates all partitions
-     * directly and merges them in sequenceNumber order.
+     * Iterate all documents in this storage in range from to until inside the index.
+     * If index is false, iterates all partitions directly in sequenceNumber order.
      * @private
      * @param {number} from
      * @param {number} until
-     * @param {ReadableIndex|null} index
+     * @param {ReadableIndex|false|null} index
      * @returns {Generator<object>}
      */
     *iterateRange(from, until, index) {
-        if (index !== null) {
-            const entries = index.range(from, until);
-            for (let entry of entries) {
-                const document = this.readFrom(entry.partition, entry.position, entry.size);
-                yield document;
-            }
+        if (index === false) {
+            // Explicitly disabled index: iterate all partitions and merge by sequenceNumber.
+            // Document header sequenceNumber is 0-based; from/until are 1-based index positions.
+            yield* this.iteratePartitionsBySequenceNumber(from - 1, until - 1);
             return;
         }
 
-        // No index: iterate all partitions and merge documents by sequenceNumber.
-        // Document header sequenceNumber is 0-based; from/until are 1-based index positions.
-        yield* this.iteratePartitionsBySequenceNumber(from - 1, until - 1);
+        const idx = index || this.index;
+        const entries = idx.range(from, until);
+        for (let entry of entries) {
+            const document = this.readFrom(entry.partition, entry.position, entry.size);
+            yield document;
+        }
     }
 
     /**
