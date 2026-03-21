@@ -64,7 +64,6 @@ class WritableStorage extends ReadableStorage {
             this.unlock();
         }
         this.partitioner = config.partitioner;
-        this.preCommitHook = null;
     }
 
     /**
@@ -180,14 +179,16 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Register a hook that is called before a document is written to storage.
-     * The hook receives the document and the partition metadata and may throw to abort the write.
+     * Register a handler that is called before a document is written to storage.
+     * The handler receives the document and the partition metadata and may throw to abort the write.
+     * Multiple handlers can be registered; all run on every write in registration order.
+     * Equivalent to `storage.on('preCommit', hook)`.
      *
      * @api
      * @param {function(object, object): void} hook A function receiving (document, partitionMetadata).
      */
     preCommit(hook) {
-        this.preCommitHook = hook;
+        this.on('preCommit', hook);
     }
 
     /**
@@ -230,9 +231,7 @@ class WritableStorage extends ReadableStorage {
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
-        if (this.preCommitHook) {
-            this.preCommitHook(document, partition.metadata);
-        }
+        this.emit('preCommit', document, partition.metadata);
         const position = partition.write(data, this.length, callback);
 
         assert(position !== false, 'Error writing document.');
