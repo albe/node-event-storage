@@ -231,7 +231,9 @@ class WritableStorage extends ReadableStorage {
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
-        this.emit('preCommit', document, partition.metadata);
+        if (this.listenerCount('preCommit') > 0) {
+            this.emit('preCommit', document, partition.metadata);
+        }
         const position = partition.write(data, this.length, callback);
 
         assert(position !== false, 'Error writing document.');
