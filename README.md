@@ -607,22 +607,31 @@ Each stream (partition) can carry an arbitrary metadata object that is written o
 at creation time and cannot be changed afterwards. This makes it a stable anchor for access control policies that
 need to be defined when a stream is first created.
 
-Two hooks can be registered on the `EventStore` (or directly on the `Storage` instance) to intercept reads and writes:
+Two handlers can be registered on the `EventStore` (or directly on the `Storage` instance) to intercept reads and
+writes, using the standard Node.js `EventEmitter` API (`on`, `once`, `off`) or the convenience wrapper methods:
 
-- **`preCommit(hook)`** — called with `(event, partitionMetadata)` *before* the event is written. Throw from the hook
-  to abort the write.
-- **`preRead(hook)`** — called with `(position, partitionMetadata)` *before* the event is read from disk. Throw from
-  the hook to abort the read.
+- **`on('preCommit', handler)`** — handler called with `(event, partitionMetadata)` *before* the event is written. Throw from the handler to abort the write.
+- **`on('preRead', handler)`** — handler called with `(position, partitionMetadata)` *before* the event is read from disk. Throw from the handler to abort the read.
 
-> **Performance note:** Both hooks are invoked synchronously on *every* read and write operation. Keep the hook
-> logic as cheap and fast as possible — avoid I/O, async operations, or any non-trivial computation inside a hook,
+Multiple handlers can be registered for the same event; they all run on every operation in registration order.
+Individual handlers can be removed with `off('preCommit', handler)` / `off('preRead', handler)`, and `once()` is
+available for one-time handlers.
+
+> **Performance note:** Both handlers are invoked synchronously on *every* read and write operation. Keep the handler
+> logic as cheap and fast as possible — avoid I/O, async operations, or any non-trivial computation inside a handler,
 > as the overhead will be paid on every event accessed.
 
 #### Using the `EventStore` API
 
-At the `EventStore` level the unit of work is a *stream*. Use `config.streamMetadata` to attach metadata per stream:
-the value can be a plain object (same metadata for every stream), or a function `(streamName) => object` to assign
-different metadata to each stream. Both `preCommit` and `preRead` are exposed directly on `EventStore`.
+At the `EventStore` level the unit of work is a *stream*. Use `config.streamMetadata` to attach metadata per stream.
+It accepts either:
+- A **function** `(streamName) => object` — called once per stream at creation time, so each stream can have its own
+  metadata (shown in the example below).
+- A **plain object** `{ streamName: metadataObject, ... }` — each key is a stream name whose value becomes that
+  stream's metadata; streams not present in the object receive an empty metadata object `{}`.
+
+Register handlers using `eventstore.on('preCommit', ...)` / `eventstore.on('preRead', ...)`,
+or via the convenience methods `eventstore.preCommit(handler)` / `eventstore.preRead(handler)`.
 
 ```javascript
 const EventStore = require('event-storage');
@@ -640,7 +649,7 @@ const eventstore = new EventStore('my-event-store', {
 
 eventstore.on('ready', () => {
     // Reject writes to streams whose allowedRoles don't overlap with the caller's roles
-    eventstore.preCommit((event, streamMetadata) => {
+    eventstore.on('preCommit', (event, streamMetadata) => {
         if (!streamMetadata.allowedRoles.some(role => globalContext.authorizedRoles.includes(role))) {
             throw new Error(
                 'Not authorized to write to this stream with roles ' +
@@ -650,7 +659,7 @@ eventstore.on('ready', () => {
     });
 
     // Reject reads from streams whose allowedRoles don't overlap with the caller's roles
-    eventstore.preRead((position, streamMetadata) => {
+    eventstore.on('preRead', (position, streamMetadata) => {
         if (!streamMetadata.allowedRoles.some(role => globalContext.authorizedRoles.includes(role))) {
             throw new Error(
                 'Not authorized to read from this stream with roles ' +
@@ -670,8 +679,8 @@ eventstore.on('ready', () => {
 #### Using the `Storage` API directly
 
 If you work with `Storage` directly (bypassing `EventStore`), use `config.metadata` — a function
-`(partitionName) => object` called whenever a new partition is created — and call `storage.preCommit` /
-`storage.preRead` on the storage instance:
+`(partitionName) => object` called whenever a new partition is created — and register handlers using
+`storage.on('preCommit', ...)` / `storage.on('preRead', ...)` or the equivalent convenience methods:
 
 ```javascript
 const Storage = require('event-storage').Storage;
@@ -683,9 +692,9 @@ const storage = new Storage('events', {
     })
 });
 
-storage.preCommit((document, partitionMetadata) => { /* ... */ });
-storage.preRead((position, partitionMetadata) => { /* ... */ });
+storage.on('preCommit', (document, partitionMetadata) => { /* ... */ });
+storage.on('preRead', (position, partitionMetadata) => { /* ... */ });
 ```
 
-The `globalContext` object is entirely application-owned. The library only calls the hook with the position (or
+The `globalContext` object is entirely application-owned. The library only calls the handler with the position (or
 event for `preCommit`) and the stored metadata — everything else is up to the application.
