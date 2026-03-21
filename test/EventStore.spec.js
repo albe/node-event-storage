@@ -1006,6 +1006,18 @@ describe('EventStore', function() {
             expect(calls[1].streamName).to.be('bar');
         });
 
+        it('uses an empty metadata object for streams not in the streamMetadata map', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'known-stream': { allowedRoles: ['admin'] } }
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push(metadata));
+            // 'unknown-stream' is not in the object — should receive {} (no allowedRoles)
+            eventstore.commit('unknown-stream', [{ type: 'A' }]);
+            expect(calls[0].allowedRoles).to.be(undefined);
+        });
+
         it('throws when the storage is opened in read-only mode', function(done) {
             eventstore = new EventStore({
                 storageDirectory,
@@ -1188,6 +1200,18 @@ describe('EventStore', function() {
             expect(order).to.eql(['first', 'second']);
         });
 
+        it('supports once() for a one-time preRead handler', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }, { type: 'FooUpdated' }]);
+            let callCount = 0;
+            eventstore.once('preRead', () => callCount++);
+            Array.from(eventstore.getEventStream('foo'));
+            expect(callCount).to.be(1);
+        });
+
         it('supports removal of a read handler via off()', function() {
             eventstore = new EventStore({
                 storageDirectory,
@@ -1202,6 +1226,63 @@ describe('EventStore', function() {
             eventstore.off('preRead', handler);
             Array.from(eventstore.getEventStream('foo').reset());
             expect(callCount).to.be(2);
+        });
+
+        it('supports removal of a read handler via removeListener()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }, { type: 'FooUpdated' }]);
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('preRead', handler);
+            Array.from(eventstore.getEventStream('foo'));
+            expect(callCount).to.be(2);
+            eventstore.removeListener('preRead', handler);
+            Array.from(eventstore.getEventStream('foo').reset());
+            expect(callCount).to.be(2);
+        });
+
+        it('delegates non-hook once() to EventEmitter', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            eventstore.once('ready', () => {
+                callCount++;
+                expect(callCount).to.be(1);
+                done();
+            });
+        });
+
+        it('delegates non-hook off() to EventEmitter', function() {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('ready', handler);
+            eventstore.off('ready', handler);
+            // No assertion needed — just must not throw
+        });
+
+        it('delegates addListener() to on()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const calls = [];
+            eventstore.addListener('preRead', (position, metadata) => calls.push(metadata));
+            Array.from(eventstore.getEventStream('foo'));
+            expect(calls).to.have.length(1);
+            expect(calls[0].allowedRoles).to.eql(['user']);
+        });
+
+        it('delegates removeListener() to off() for non-hook events', function() {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('ready', handler);
+            eventstore.removeListener('ready', handler);
+            // No assertion needed — just must not throw
         });
 
     });
