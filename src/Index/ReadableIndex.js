@@ -1,8 +1,8 @@
-const fs = require('fs');
-const path = require('path');
-const events = require('events');
-const Entry = require('../IndexEntry');
-const { assert, wrapAndCheck, binarySearch } = require('../util');
+import fs from 'fs';
+import path from 'path';
+import events from 'events';
+import Entry, { assertValidEntryClass } from '../IndexEntry.js';
+import { assert, wrapAndCheck, binarySearch } from '../util.js';
 
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";
@@ -53,7 +53,7 @@ class ReadableIndex extends events.EventEmitter {
             EntryClass: Entry
         };
         options = Object.assign(defaults, options);
-        Entry.assertValidEntryClass(options.EntryClass);
+        assertValidEntryClass(options.EntryClass);
 
         this.name = name;
         this.initialize(options);
@@ -397,7 +397,5 @@ class ReadableIndex extends events.EventEmitter {
     }
 }
 
-module.exports = ReadableIndex;
-module.exports.Entry = Entry;
-module.exports.HEADER_MAGIC = HEADER_MAGIC;
-module.exports.CorruptedIndexError = CorruptedIndexError;
+export default ReadableIndex;
+export { Entry, HEADER_MAGIC, CorruptedIndexError };

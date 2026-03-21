@@ -1,7 +1,7 @@
-const expect = require('expect.js');
-const fs = require('fs-extra');
-const JoinEventStream = require('../src/JoinEventStream');
-const EventStore = require('../src/EventStore');
+import expect from 'expect.js';
+import fs from 'fs-extra';
+import JoinEventStream from '../src/JoinEventStream.js';
+import EventStore from '../src/EventStore.js';
 
 describe('JoinEventStream', function() {
 

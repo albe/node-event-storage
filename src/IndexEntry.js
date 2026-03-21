@@ -137,6 +137,5 @@ class Entry extends Array {
 
 }
 
-module.exports = Entry;
-module.exports.EntryInterface = EntryInterface;
-module.exports.assertValidEntryClass = assertValidEntryClass;
+export default Entry;
+export { EntryInterface, assertValidEntryClass };

@@ -1,5 +1,5 @@
-const ReadablePartition = require('./ReadablePartition');
-const WatchesFile = require('../WatchesFile');
+import ReadablePartition from './ReadablePartition.js';
+import WatchesFile from '../WatchesFile.js';
 
 /**
  * A read-only partition is a readable partition that keeps it's size in sync with the underlying file.
@@ -42,4 +42,4 @@ class ReadOnlyPartition extends WatchesFile(ReadablePartition) {
 
 }
 
-module.exports = ReadOnlyPartition;
+export default ReadOnlyPartition;

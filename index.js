@@ -1,6 +1,5 @@
-module.exports = require('./src/EventStore');
-module.exports.EventStore = module.exports;
-module.exports.EventStream = require('./src/EventStream');
-module.exports.Storage = require('./src/Storage');
-module.exports.Index = require('./src/Index');
-module.exports.Consumer = require('./src/Consumer');
+export { default as EventStore, ExpectedVersion, OptimisticConcurrencyError, LOCK_THROW, LOCK_RECLAIM } from './src/EventStore.js';
+export { default as EventStream } from './src/EventStream.js';
+export { default as Storage, ReadOnly as ReadOnlyStorage, StorageLockedError } from './src/Storage.js';
+export { default as Index, ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from './src/Index.js';
+export { default as Consumer } from './src/Consumer.js';

@@ -1,8 +1,11 @@
-const expect = require('expect.js');
-const fs = require('fs-extra');
-const Index = require('../src/Index');
+import expect from 'expect.js';
+import fs from 'fs-extra';
+import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
+import { assertValidEntryClass } from '../src/IndexEntry.js';
+import { fileURLToPath } from 'url';
 
-const dataDirectory = __dirname + '/data';
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const dataDirectory = __dirname + 'data';
 
 describe('Index', function() {
 
@@ -30,14 +33,14 @@ describe('Index', function() {
         }
         index = createIndex('test' + (counter++) + '.index', options);
         for (let i = 1; i <= num; i++) {
-            index.add(new Index.Entry(indexMapper && indexMapper(i) || i, i));
+            index.add(new IndexEntry(indexMapper && indexMapper(i) || i, i));
         }
         index.flush();
         return index;
     }
 
     function createReader(name, options) {
-        let reader = new Index.ReadOnly(name, Object.assign({ dataDirectory }, options));
+        let reader = new ReadOnlyIndex(name, Object.assign({ dataDirectory }, options));
         readers[readers.length] = reader;
         return reader;
     }
@@ -126,7 +129,7 @@ describe('Index', function() {
     describe('Entry', function() {
 
         it('stores data correctly', function() {
-            let entry = new Index.Entry(1, 2, 3, 4);
+            let entry = new IndexEntry(1, 2, 3, 4);
             expect(entry.number).to.be(1);
             expect(entry.position).to.be(2);
             expect(entry.size).to.be(3);
@@ -150,11 +153,11 @@ describe('Index', function() {
             CustomEs5Entry.size = 4;
             CustomEs5Entry.fromBuffer = function(buffer, offset) {};
             CustomEs5Entry.prototype.toBuffer = function(buffer, offset) {};
-            expect(() => Index.Entry.assertValidEntryClass({})).to.throwError(/Invalid index entry class/);
-            expect(() => Index.Entry.assertValidEntryClass(CustomEntryClassWithMissingFromBuffer)).to.throwError(/Invalid index entry class/);
-            expect(() => Index.Entry.assertValidEntryClass(CustomEntryClassWithMissingToBuffer)).to.throwError(/Invalid index entry class/);
-            expect(() => Index.Entry.assertValidEntryClass(CustomZeroSizeEntryClass)).to.throwError(/size must be positive/);
-            expect(() => Index.Entry.assertValidEntryClass(CustomEs5Entry)).to.not.throwError();
+            expect(() => assertValidEntryClass({})).to.throwError(/Invalid index entry class/);
+            expect(() => assertValidEntryClass(CustomEntryClassWithMissingFromBuffer)).to.throwError(/Invalid index entry class/);
+            expect(() => assertValidEntryClass(CustomEntryClassWithMissingToBuffer)).to.throwError(/Invalid index entry class/);
+            expect(() => assertValidEntryClass(CustomZeroSizeEntryClass)).to.throwError(/size must be positive/);
+            expect(() => assertValidEntryClass(CustomEs5Entry)).to.not.throwError();
         });
 
     });
@@ -176,7 +179,7 @@ describe('Index', function() {
             index = setupIndexWithEntries(5);
             index.close();
             index.open();
-            index.add(new Index.Entry(6, 6));
+            index.add(new IndexEntry(6, 6));
             let entries = index.all();
             expect(entries.length).to.be(6);
             for (let i = 1; i <= entries.length; i++) {
@@ -186,14 +189,14 @@ describe('Index', function() {
 
         it('calls callback eventually', function(done) {
             index = createIndex('.index', { flushDelay: 1 });
-            let position = index.add(new Index.Entry(1, 0), (number) => {
+            let position = index.add(new IndexEntry(1, 0), (number) => {
                 expect(number).to.be(position);
                 done();
             });
         });
 
         it('flushes automatically when writeBuffer full', function() {
-            index = setupIndexWithEntries(5, { writeBufferSize: 5 * Index.Entry.size });
+            index = setupIndexWithEntries(5, { writeBufferSize: 5 * IndexEntry.size });
             expect(index.flush()).to.be(false);
         });
 
@@ -204,7 +207,7 @@ describe('Index', function() {
 
         it('throws with invalid entry size', function() {
             index = createIndex();
-            class Entry extends Index.Entry {
+            class Entry extends IndexEntry {
                 static get size() {
                     return 20;
                 }
@@ -509,14 +512,14 @@ describe('Index', function() {
         it('can be created without explicit name', function(){
             expect(() => {
                 index = createIndex('.index');
-                let reader = new Index.ReadOnly({ dataDirectory });
+                let reader = new ReadOnlyIndex({ dataDirectory });
                 reader.close();
             }).to.not.throwError();
         });
 
         it('can be opened and closed multiple times', function(){
             index = createIndex('.index');
-            let reader = new Index.ReadOnly({ dataDirectory });
+            let reader = new ReadOnlyIndex({ dataDirectory });
             expect(reader.open()).to.be(false);
             reader.close();
             reader.close();
@@ -554,7 +557,7 @@ describe('Index', function() {
                 done();
             });
 
-            index.add(new Index.Entry(6, 6));
+            index.add(new IndexEntry(6, 6));
             index.flush();
             fs.fdatasync(index.fd);
         });

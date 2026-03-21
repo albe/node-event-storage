@@ -1,9 +1,11 @@
-const expect = require('expect.js');
-const fs = require('fs-extra');
-const Storage = require('../src/Storage');
-const Consumer = require('../src/Consumer');
+import expect from 'expect.js';
+import fs from 'fs-extra';
+import Storage from '../src/Storage.js';
+import Consumer from '../src/Consumer.js';
+import { fileURLToPath } from 'url';
 
-const dataDirectory = __dirname + '/data';
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const dataDirectory = __dirname + 'data';
 
 describe('Consumer', function() {
 

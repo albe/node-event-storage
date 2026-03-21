@@ -1,7 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const events = require('events');
-const { assert, alignTo } = require('../util');
+import fs from 'fs';
+import path from 'path';
+import events from 'events';
+import { assert, alignTo } from '../util.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
@@ -394,11 +394,5 @@ class ReadablePartition extends events.EventEmitter {
     }
 }
 
-module.exports = ReadablePartition;
-module.exports.CorruptFileError = CorruptFileError;
-module.exports.InvalidDataSizeError = InvalidDataSizeError;
-module.exports.HEADER_MAGIC = HEADER_MAGIC;
-module.exports.DOCUMENT_SEPARATOR = DOCUMENT_SEPARATOR;
-module.exports.DOCUMENT_ALIGNMENT = DOCUMENT_ALIGNMENT;
-module.exports.DOCUMENT_HEADER_SIZE = DOCUMENT_HEADER_SIZE;
-module.exports.DOCUMENT_FOOTER_SIZE = DOCUMENT_FOOTER_SIZE;
+export default ReadablePartition;
+export { CorruptFileError, InvalidDataSizeError, HEADER_MAGIC, DOCUMENT_SEPARATOR, DOCUMENT_ALIGNMENT, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE };

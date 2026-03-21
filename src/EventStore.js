@@ -1,11 +1,11 @@
-const EventStream = require('./EventStream');
-const JoinEventStream = require('./JoinEventStream');
-const fs = require('fs');
-const path = require('path');
-const events = require('events');
-const Storage = require('./Storage');
-const Consumer = require('./Consumer');
-const { assert } = require('./util');
+import EventStream from './EventStream.js';
+import JoinEventStream from './JoinEventStream.js';
+import fs from 'fs';
+import path from 'path';
+import events from 'events';
+import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
+import Consumer from './Consumer.js';
+import { assert } from './util.js';
 
 const ExpectedVersion = {
     Any: -1,
@@ -57,7 +57,7 @@ class EventStore extends events.EventEmitter {
 
         this.storeName = storeName;
         this.storage = (storageConfig.readOnly === true) ?
-                        new Storage.ReadOnly(storeName, storageConfig)
+                        new ReadOnlyStorage(storeName, storageConfig)
                         : new Storage(storeName, storageConfig);
         this.storage.open();
         this.streams = Object.create(null);
@@ -202,7 +202,7 @@ class EventStore extends events.EventEmitter {
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
-        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not commit to it.');
+        assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
         assert(typeof streamName === 'string' && streamName !== '', 'Must specify a stream name for commit.');
         assert(typeof events !== 'undefined' && events !== null, 'No events specified for commit.');
 
@@ -345,7 +345,7 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} If the stream could not be created.
      */
     createEventStream(streamName, matcher) {
-        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not create new stream on it.');
+        assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not create new stream on it.');
         assert(!(streamName in this.streams), 'Can not recreate stream!');
 
         const streamIndexName = 'stream-' + streamName;
@@ -369,7 +369,7 @@ class EventStore extends events.EventEmitter {
      * @returns void
      */
     deleteEventStream(streamName) {
-        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not delete a stream on it.');
+        assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not delete a stream on it.');
 
         if (!(streamName in this.streams)) {
             return;
@@ -393,7 +393,7 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} If the stream is already closed.
      */
     closeEventStream(streamName) {
-        assert(!(this.storage instanceof Storage.ReadOnly), 'The storage was opened in read-only mode. Can not close a stream on it.');
+        assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not close a stream on it.');
         assert(streamName in this.streams, `Stream "${streamName}" does not exist.`);
         assert(!this.streams[streamName].closed, `Stream "${streamName}" is already closed.`);
 
@@ -462,8 +462,5 @@ class EventStore extends events.EventEmitter {
     }
 }
 
-module.exports = EventStore;
-module.exports.ExpectedVersion = ExpectedVersion;
-module.exports.OptimisticConcurrencyError = OptimisticConcurrencyError;
-module.exports.LOCK_THROW = Storage.LOCK_THROW;
-module.exports.LOCK_RECLAIM = Storage.LOCK_RECLAIM;
+export default EventStore;
+export { ExpectedVersion, OptimisticConcurrencyError, LOCK_THROW, LOCK_RECLAIM };

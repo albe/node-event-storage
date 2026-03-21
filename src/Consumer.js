@@ -1,9 +1,8 @@
-const stream = require('stream');
-const fs = require('fs');
-const path = require('path');
-const { assert, ensureDirectory } = require('./util');
-
-const Storage = require('./Storage/ReadableStorage');
+import stream from 'stream';
+import fs from 'fs';
+import path from 'path';
+import { assert, ensureDirectory } from './util.js';
+import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
 
 /**
@@ -299,4 +298,4 @@ class Consumer extends stream.Readable {
     }
 }
 
-module.exports = Consumer;
+export default Consumer;

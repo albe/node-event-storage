@@ -1,4 +1,4 @@
-const Watcher = require('./Watcher');
+import Watcher from './Watcher.js';
 
 /**
  * A mixin that provides a file watcher for this.fileName which triggers a method `onChange` on the class, that needs to be implemented.
@@ -51,4 +51,4 @@ const WatchesFile = Base => class extends Base {
 
 };
 
-module.exports = WatchesFile;
+export default WatchesFile;

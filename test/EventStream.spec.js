@@ -1,5 +1,5 @@
-const expect = require('expect.js');
-const EventStream = require('../src/EventStream');
+import expect from 'expect.js';
+import EventStream from '../src/EventStream.js';
 
 describe('EventStream', function() {
 

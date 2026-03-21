@@ -1,6 +1,6 @@
-const crypto = require('crypto');
-const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
+import crypto from 'crypto';
+import fs from 'fs';
+import { mkdirpSync } from 'mkdirp';
 
 /**
  * Assert that actual and expected match or throw an Error with the given message appended by information about expected and actual value.
@@ -202,7 +202,7 @@ function ensureDirectory(dirName) {
 }
 
 
-module.exports = {
+export {
     assert,
     assertEqual,
     wrapAndCheck,

@@ -1,5 +1,5 @@
-const EventStream = require('./EventStream');
-const { wrapAndCheck } = require('./util');
+import EventStream from './EventStream.js';
+import { wrapAndCheck } from './util.js';
 
 /**
  * Calculate the actual version number from a possibly relative (negative) version number.
@@ -101,4 +101,4 @@ class JoinEventStream extends EventStream {
 
 }
 
-module.exports = JoinEventStream;
+export default JoinEventStream;

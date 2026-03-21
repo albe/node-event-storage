@@ -1,5 +1,5 @@
-const ReadableIndex = require('./ReadableIndex');
-const watchesFile = require('../WatchesFile');
+import ReadableIndex from './ReadableIndex.js';
+import watchesFile from '../WatchesFile.js';
 
 /**
  * A read-only index is a readable index instance that reacts on file changes and triggers events.
@@ -45,4 +45,4 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
 
 }
 
-module.exports = ReadOnlyIndex;
+export default ReadOnlyIndex;
