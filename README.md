@@ -113,7 +113,7 @@ top which is simply not needed. Write and read performance suffer.
 ## Usage
 
 ```javascript
-const EventStore = require('event-storage');
+import { EventStore } from 'event-storage';
 
 const eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
 eventstore.on('ready', () => {
@@ -157,6 +157,8 @@ you need to track the last `streamVersion` the producer was at when he generated
 with the commit.
 
 ```javascript
+import { EventStore, OptimisticConcurrencyError, ExpectedVersion } from 'event-storage';
+
 const model = new MyConsistencyModel();
 const stream = eventstore.getEventStream('my-stream');
 stream.forEach((event, metadata) => {
@@ -173,15 +175,15 @@ try {
         //...
     });
 } catch (e) {
-    if (e instanceof EventStore.OptimisticConcurrencyError) {
+    if (e instanceof OptimisticConcurrencyError) {
         //...
         // Reattempt command / resolve conflict
     }
 }
 ```
 
-Where `expectedVersion` is either `EventStore.ExpectedVersion.Any` (no optimistic concurrency check, the default),
-`EventStore.ExpectedVersion.EmptyStream` or any version number > 0 that the stream is expected to be at.
+Where `expectedVersion` is either `ExpectedVersion.Any` (no optimistic concurrency check, the default),
+`ExpectedVersion.EmptyStream` or any version number > 0 that the stream is expected to be at.
 It will throw an OptimisticConcurrencyError if the given stream version does not match the expected.
 In that case you should either signal that back to the upstream source, or replay state and reattempt application
 of the command.
@@ -397,7 +399,7 @@ in a different process than the writer. This way, you can have different process
 different use cases and serve their state out to other systems, e.g. through an HTTP interface or whatever deems useful.
 
 ```javascript
-const EventStore = require('event-storage');
+import { EventStore } from 'event-storage';
 
 const eventstore = new EventStore('my-event-store', { storageDirectory: './data', readOnly: true });
 eventstore.on('ready', () => {
@@ -441,7 +443,8 @@ a partial invalid write. To recover from such a state, the storage will detect t
 lock is reclaimed. This can be done by instantiating the store with the following option:
 
 ```javascript
-const eventstore = new EventStore('my-event-store', { storageConfig: { lock: EventStore.LOCK_RECLAIM } });
+import { EventStore, LOCK_RECLAIM } from 'event-storage';
+const eventstore = new EventStore('my-event-store', { storageConfig: { lock: LOCK_RECLAIM } });
 ```
 
 Note that this option will effectively bypass the lock that prevents multiple instances from being created, so you should
@@ -535,7 +538,8 @@ human readable.
 
 
 ```javascript
-const { encode, decode } = require('@msgpack/msgpack');
+import { EventStore } from 'event-storage';
+import { encode, decode } from '@msgpack/msgpack';
 const eventstore = new EventStore('my-event-store', {
 	storageDirectory: './data',
 	storageConfig: {
@@ -559,7 +563,8 @@ To apply compression on the storage level, the `serializer` option of the Storag
 For example to use LZ4:
 
 ```javascript
-const lz4 = require('lz4');
+import { EventStore } from 'event-storage';
+import lz4 from 'lz4';
 const eventstore = new EventStore('my-event-store', {
 	storageDirectory: './data',
 	storageConfig: {
