@@ -220,7 +220,9 @@ class ReadableStorage extends events.EventEmitter {
      */
     readFrom(partitionId, position, size) {
         const partition = this.getPartition(partitionId);
-        this.emit('preRead', position, partition.metadata);
+        if (this.listenerCount('preRead') > 0) {
+            this.emit('preRead', position, partition.metadata);
+        }
         const data = partition.readFrom(position, size);
         return this.serializer.deserialize(data);
     }
