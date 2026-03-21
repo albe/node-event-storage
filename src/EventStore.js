@@ -82,7 +82,14 @@ class EventStore extends events.EventEmitter {
         let position = this.storage.length;
         let lastEvent;
         let truncateIndex = false;
-        while (position > 0 && (lastEvent = this.storage.read(position)) === false) {
+        while (position > 0) {
+            try {
+                lastEvent = this.storage.read(position);
+            } catch (e) {
+                // A preRead hook may throw (e.g. access control). Stop repair check.
+                return;
+            }
+            if (lastEvent !== false) break;
             truncateIndex = true;
             position--;
         }
