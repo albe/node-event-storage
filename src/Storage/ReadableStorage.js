@@ -235,21 +235,25 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Read a range of documents from the given position range, in the full index or in the provided index.
+     * Read a range of documents from the given position range, in the provided index or across all partitions.
+     * When no index is given, iterates all partitions directly and returns documents ordered by their
+     * sequenceNumber, allowing reconstruction of insertion order without a global index.
      * Returns a generator in order to reduce memory usage and be able to read lots of documents with little latency.
      *
      * @api
      * @param {number} from The 1-based document number (inclusive) to start reading from.
      * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
-     * @param {ReadableIndex} [index] The index to use for finding the documents in the range.
+     * @param {ReadableIndex} [index] The index to use for finding the documents in the range. If not given, iterates all partitions ordered by sequenceNumber.
      * @returns {Generator<object>} A generator that will read each document in the range one by one.
      */
     *readRange(from, until = -1, index = null) {
-        index = index || this.index;
-        index.open();
+        const lengthSource = index || this.index;
+        if (!lengthSource.isOpen()) {
+            lengthSource.open();
+        }
 
-        const readFrom = wrapAndCheck(from, index.length);
-        const readUntil = wrapAndCheck(until, index.length);
+        const readFrom = wrapAndCheck(from, lengthSource.length);
+        const readUntil = wrapAndCheck(until, lengthSource.length);
         assert(readFrom > 0 && readUntil > 0, `Range scan error for range ${from} - ${until}.`);
 
         if (readFrom > readUntil) {
@@ -267,18 +271,75 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Iterate all documents in this storage in range from to until inside the index.
+     * Iterate all documents in this storage in range from to until.
+     * If an index is provided, uses it to look up document positions; otherwise iterates all partitions
+     * directly and merges them in sequenceNumber order.
      * @private
      * @param {number} from
      * @param {number} until
-     * @param {ReadableIndex} index
+     * @param {ReadableIndex|null} index
      * @returns {Generator<object>}
      */
     *iterateRange(from, until, index) {
-        const entries = index.range(from, until);
-        for (let entry of entries) {
-            const document = this.readFrom(entry.partition, entry.position, entry.size);
-            yield document;
+        if (index !== null) {
+            const entries = index.range(from, until);
+            for (let entry of entries) {
+                const document = this.readFrom(entry.partition, entry.position, entry.size);
+                yield document;
+            }
+            return;
+        }
+
+        // No index: iterate all partitions and merge documents by sequenceNumber.
+        // Document header sequenceNumber is 0-based; from/until are 1-based index positions.
+        yield* this.iteratePartitionsBySequenceNumber(from - 1, until - 1);
+    }
+
+    /**
+     * Iterate documents across all partitions in sequenceNumber order using a k-way merge.
+     * SequenceNumbers stored in document headers are 0-based.
+     * @private
+     * @param {number} fromSeq The 0-based sequenceNumber to start from (inclusive).
+     * @param {number} untilSeq The 0-based sequenceNumber to read until (inclusive).
+     * @returns {Generator<object>}
+     */
+    *iteratePartitionsBySequenceNumber(fromSeq, untilSeq) {
+        const iterators = [];
+
+        for (const partition of Object.values(this.partitions)) {
+            if (!partition.isOpen()) {
+                partition.open();
+            }
+            const gen = partition.readAllWithHeaders();
+
+            // Advance to the first document with sequenceNumber >= fromSeq
+            let result = gen.next();
+            while (!result.done && result.value.sequenceNumber < fromSeq) {
+                result = gen.next();
+            }
+
+            if (!result.done && result.value.sequenceNumber <= untilSeq) {
+                iterators.push({ gen, current: result.value });
+            }
+        }
+
+        // K-way merge: at each step, yield the document with the smallest sequenceNumber
+        while (iterators.length > 0) {
+            let minIdx = 0;
+            for (let i = 1; i < iterators.length; i++) {
+                if (iterators[i].current.sequenceNumber < iterators[minIdx].current.sequenceNumber) {
+                    minIdx = i;
+                }
+            }
+
+            yield this.serializer.deserialize(iterators[minIdx].current.data);
+
+            const next = iterators[minIdx].gen.next();
+            if (!next.done && next.value.sequenceNumber <= untilSeq) {
+                iterators[minIdx].current = next.value;
+            } else {
+                iterators.splice(minIdx, 1);
+            }
         }
     }
 

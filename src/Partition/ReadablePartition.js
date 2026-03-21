@@ -382,6 +382,26 @@ class ReadablePartition extends events.EventEmitter {
 
     /**
      * @api
+     * @param {number} [after] The document position to start reading from.
+     * @returns {Generator<{data: string, sequenceNumber: number}>} A generator that returns document data and the sequenceNumber from the document header.
+     */
+    *readAllWithHeaders(after = 0) {
+        let position = after < 0 ? this.size + after + 1 : after;
+        while (position < this.size) {
+            const reader = this.prepareReadBuffer(position);
+            if (reader.length < DOCUMENT_HEADER_SIZE) {
+                break;
+            }
+            const { dataSize, sequenceNumber } = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+            const data = this.readFrom(position, dataSize);
+            if (data === false) break;
+            yield { data, sequenceNumber };
+            position += this.documentWriteSize(dataSize);
+        }
+    }
+
+    /**
+     * @api
      * @param {number} [before] The document position to start reading backward from.
      * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
      */
