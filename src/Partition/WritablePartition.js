@@ -321,11 +321,11 @@ class WritablePartition extends ReadablePartition {
         after = Math.max(0, after);
         this.flush();
 
-        let position = after, data;
+        // Always save the truncated part for manual recovery, even if it contains corrupted data
+        this.branchOff('truncated-' + Date.now(), after);
+
         try {
             this.readFrom(after);
-            // copy all truncated documents to some delete log
-            this.branchOff('truncated-' + Date.now(), after);
         } catch (e) {
             if (!(e instanceof ReadablePartition.CorruptFileError)) {
                 throw new Error('Can only truncate on valid document boundaries.');
