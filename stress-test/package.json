@@ -1,0 +1,9 @@
+{
+  "name": "event-storage-stress-test",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Stress tests for node-event-storage, checking crash-safety and data consistency",
+  "scripts": {
+    "stress-test": "bash run.sh"
+  }
+}

@@ -8,3 +8,5 @@ node_modules
 /.flowconfig
 /coverage
 /.nyc_output
+/stress-test/stress-data
+/stress-test/writer-stats.json
