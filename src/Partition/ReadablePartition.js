@@ -141,14 +141,7 @@ class ReadablePartition extends events.EventEmitter {
         }
         const reader = this.prepareReadBufferBackwards(this.size);
         const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
-        if (separator !== DOCUMENT_SEPARATOR) {
-            // Torn write: find and read the torn document's header to get its sequence number.
-            const position = this.findDocumentPositionBefore(this.size);
-            const tornReader = this.prepareReadBuffer(position);
-            const { sequenceNumber } = this.readDocumentHeader(tornReader.buffer, tornReader.cursor, position);
-            return -(sequenceNumber + 1);
-        }
-        // No torn write: find the last complete document and return its sequence number.
+        const torn = separator !== DOCUMENT_SEPARATOR;
         const position = this.findDocumentPositionBefore(this.size);
         /* istanbul ignore if */
         if (position === false || position < 0) {
@@ -156,7 +149,7 @@ class ReadablePartition extends events.EventEmitter {
         }
         const lastReader = this.prepareReadBuffer(position);
         const { sequenceNumber } = this.readDocumentHeader(lastReader.buffer, lastReader.cursor, position);
-        return sequenceNumber + 1;
+        return torn ? -(sequenceNumber + 1) : sequenceNumber + 1;
     }
 
     /**
