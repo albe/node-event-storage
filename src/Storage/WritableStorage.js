@@ -81,13 +81,32 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Check all partitions torn writes and truncate the storage to the position before the first torn write.
-     * This might delete correctly written events in partitions, if their sequence number is higher than the
-     * torn write in another partition.
-     * Also detects when the primary index is lagging behind the actual partition data and automatically
-     * repairs it by invoking reindex().
+     * Remove the last (incomplete / torn) document from a partition by truncating
+     * the file at the start position of that document.
+     *
+     * @private
+     * @param {WritablePartition} partition The partition that contains the torn document.
      */
-    checkTornWrites() {
+    removeTornDocumentFromPartition(partition) {
+        const tornPosition = partition.findDocumentPositionBefore(partition.size);
+        if (tornPosition !== false && tornPosition >= 0) {
+            partition.truncate(tornPosition);
+        }
+    }
+
+    /**
+     * Open all partitions and scan each one for torn writes.
+     * Returns the lowest sequence number at which a torn write was detected and the highest
+     * complete sequence number seen across all partitions.
+     *
+     * A torn write is signalled by `partition.checkTornWrite()` returning a negative value
+     * encoded as -(tornSeqnum + 1). A clean partition returns (lastCompleteSeqnum + 1).
+     * An empty partition returns 0.
+     *
+     * @private
+     * @returns {{ lastValidSequenceNumber: number, maxPartitionSequenceNumber: number }}
+     */
+    scanPartitionsForTornWrites() {
         let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
         let maxPartitionSequenceNumber = -1;
         this.forEachPartition(partition => {
@@ -104,29 +123,110 @@ class WritableStorage extends ReadableStorage {
                 }
                 // Physically remove the torn document from this partition so that subsequent
                 // partition reads (e.g. in reindex()) don't encounter the corrupt data.
-                const tornPosition = partition.findDocumentPositionBefore(partition.size);
-                if (tornPosition !== false && tornPosition >= 0) {
-                    partition.truncate(tornPosition);
-                }
+                this.removeTornDocumentFromPartition(partition);
             } else if (result > 0) {
                 // No torn write: result encodes (lastCompleteSeqnum + 1), so seqnum = result - 1.
                 maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, result - 1);
             }
             // result === 0: empty partition, no action needed.
         });
+        return { lastValidSequenceNumber, maxPartitionSequenceNumber };
+    }
+
+    /**
+     * Trigger a reindex from the current primary index length when the actual partition data
+     * contains more documents than the index records.
+     *
+     * A partition sequence number of N means the document was written when the index had N entries,
+     * so the index should contain at least N+1 entries to be consistent.
+     *
+     * @private
+     * @param {number} maxPartitionSequenceNumber The highest complete document sequence number
+     *   observed across all partitions.
+     */
+    repairLaggingIndexIfNeeded(maxPartitionSequenceNumber) {
+        if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
+            this.reindex(this.index.length);
+        }
+    }
+
+    /**
+     * Check all partitions torn writes and truncate the storage to the position before the first torn write.
+     * This might delete correctly written events in partitions, if their sequence number is higher than the
+     * torn write in another partition.
+     * Also detects when the primary index is lagging behind the actual partition data and automatically
+     * repairs it by invoking reindex().
+     */
+    checkTornWrites() {
+        let { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.scanPartitionsForTornWrites();
+
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
             this.truncate(lastValidSequenceNumber);
             // After truncation, account for documents beyond the truncation point being removed.
             // truncate(N) keeps index entries 1..N, so the last kept partition seqnum is N-1.
             maxPartitionSequenceNumber = Math.min(maxPartitionSequenceNumber, lastValidSequenceNumber - 1);
         }
-        // A partition seqnum of N means the document was written when the index had N entries,
-        // so the index should contain at least N+1 entries to be consistent.
-        // Automatically repair a lagging index by reindexing from the current index length.
-        if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
-            this.reindex(this.index.length);
-        }
+
+        this.repairLaggingIndexIfNeeded(maxPartitionSequenceNumber);
         this.forEachPartition(partition => partition.close());
+    }
+
+    /**
+     * Truncate the primary index and all writable secondary indexes to `fromSequenceNumber`,
+     * discarding any entries beyond that point.
+     *
+     * @private
+     * @param {number} fromSequenceNumber The number of index entries to keep intact.
+     */
+    truncateIndexesToSequenceNumber(fromSequenceNumber) {
+        this.index.truncate(fromSequenceNumber);
+
+        this.forEachSecondaryIndex(index => {
+            /* istanbul ignore if */
+            if (!(index instanceof WritableIndex)) {
+                return;
+            }
+            // find(0) returns 0, so truncate(0) will remove all entries when fromSequenceNumber===0
+            index.truncate(fromSequenceNumber === 0 ? 0 : index.find(fromSequenceNumber));
+        });
+    }
+
+    /**
+     * Ensure every partition known to this storage is open for reading.
+     * Partitions that are already open are left untouched.
+     *
+     * @private
+     */
+    ensurePartitionsOpen() {
+        this.forEachPartition(partition => {
+            if (!partition.isOpen()) {
+                partition.open();
+            }
+        });
+    }
+
+    /**
+     * Add a document to every writable secondary index whose matcher accepts it.
+     *
+     * @private
+     * @param {object} document The document to potentially index.
+     * @param {WritableIndex.Entry} entry The index entry pointing to the document.
+     */
+    addDocumentToMatchingSecondaryIndexes(document, entry) {
+        this.forEachSecondaryIndex((secIndex, name) => {
+            /* istanbul ignore if */
+            if (!(secIndex instanceof WritableIndex)) {
+                return;
+            }
+            /* istanbul ignore if */
+            if (!secIndex.isOpen()) {
+                secIndex.open();
+            }
+            const { matcher } = this.secondaryIndexes[name];
+            if (matches(document, matcher)) {
+                secIndex.add(entry);
+            }
+        });
     }
 
     /**
@@ -142,45 +242,15 @@ class WritableStorage extends ReadableStorage {
      *   Defaults to 0, which rebuilds all indexes from scratch.
      */
     reindex(fromSequenceNumber = 0) {
-        this.index.truncate(fromSequenceNumber);
-
-        // Truncate all loaded secondary indexes to match the new primary length.
-        this.forEachSecondaryIndex(index => {
-            /* istanbul ignore if */
-            if (!(index instanceof WritableIndex)) {
-                return;
-            }
-            // find(0) returns 0, so truncate(0) will remove all entries when fromSequenceNumber===0
-            index.truncate(fromSequenceNumber === 0 ? 0 : index.find(fromSequenceNumber));
-        });
-
-        // Ensure all partitions are open so iteratePartitionsBySequenceNumber can read them.
-        this.forEachPartition(partition => {
-            if (!partition.isOpen()) {
-                partition.open();
-            }
-        });
+        this.truncateIndexesToSequenceNumber(fromSequenceNumber);
+        this.ensurePartitionsOpen();
 
         // Scan partitions in sequence-number order and rebuild index entries.
         for (const { document, partitionId, position, size } of
             this.iteratePartitionsBySequenceNumber(fromSequenceNumber, Number.MAX_SAFE_INTEGER)) {
             const newEntry = new WritableIndex.Entry(this.index.length + 1, position, size, partitionId);
             this.index.add(newEntry);
-
-            this.forEachSecondaryIndex((secIndex, name) => {
-                /* istanbul ignore if */
-                if (!(secIndex instanceof WritableIndex)) {
-                    return;
-                }
-                /* istanbul ignore if */
-                if (!secIndex.isOpen()) {
-                    secIndex.open();
-                }
-                const { matcher } = this.secondaryIndexes[name];
-                if (matches(document, matcher)) {
-                    secIndex.add(newEntry);
-                }
-            });
+            this.addDocumentToMatchingSecondaryIndexes(document, newEntry);
         }
 
         this.flush();
