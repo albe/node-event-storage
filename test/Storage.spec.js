@@ -419,6 +419,89 @@ describe('Storage', function() {
             expect(index.isOpen()).to.be(true);
         });
 
+        it('iterates partitions in sequenceNumber order when index is false', function() {
+            storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
+            storage.open();
+
+            for (let i = 1; i <= 9; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            const documents = Array.from(storage.readRange(1, -1, false));
+            expect(documents.length).to.be(9);
+            for (let i = 0; i < 9; i++) {
+                expect(documents[i]).to.eql({ foo: i + 1 });
+            }
+        });
+
+        it('iterates partitions in reverse sequenceNumber order when index is false', function() {
+            storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
+            storage.open();
+
+            for (let i = 1; i <= 9; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            const documents = Array.from(storage.readRange(9, 1, false));
+            expect(documents.length).to.be(9);
+            for (let i = 0; i < 9; i++) {
+                expect(documents[i]).to.eql({ foo: 9 - i });
+            }
+        });
+
+        it('iterates partitions in sequenceNumber order for a sub-range when index is false', function() {
+            storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
+            storage.open();
+
+            for (let i = 1; i <= 9; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            const documents = Array.from(storage.readRange(3, 7, false));
+            expect(documents.length).to.be(5);
+            for (let i = 0; i < 5; i++) {
+                expect(documents[i]).to.eql({ foo: i + 3 });
+            }
+        });
+
+        it('iteratePartitionsBySequenceNumber yields document, sequenceNumber, partitionName and position', function() {
+            storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
+            storage.open();
+
+            for (let i = 1; i <= 6; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            const entries = Array.from(storage.iteratePartitionsBySequenceNumber(0, 5));
+            expect(entries.length).to.be(6);
+            for (let i = 0; i < 6; i++) {
+                expect(entries[i].document).to.eql({ foo: i + 1 });
+                expect(typeof entries[i].sequenceNumber).to.be('number');
+                expect(typeof entries[i].partitionName).to.be('string');
+                expect(typeof entries[i].position).to.be('number');
+                expect(entries[i].sequenceNumber).to.be(i);
+            }
+            // Verify documents from the same partition have increasing positions
+            const byPartition = {};
+            for (const entry of entries) {
+                if (!byPartition[entry.partitionName]) byPartition[entry.partitionName] = [];
+                byPartition[entry.partitionName].push(entry.position);
+            }
+            for (const positions of Object.values(byPartition)) {
+                for (let i = 1; i < positions.length; i++) {
+                    expect(positions[i]).to.be.greaterThan(positions[i - 1]);
+                }
+            }
+        });
+
     });
 
     describe('ensureIndex', function() {
