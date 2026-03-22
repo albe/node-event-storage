@@ -494,6 +494,54 @@ Since version 0.7 the storage also stores a monotonic clock stamp and an externa
 This way, a consistent global order can also be reconsituted without a global index. In a later version, the global index might
 therefore be removed and reindexing a storage be possible, which allows to rebuild a consistent state after a destructive crash.
 
+### Reindexing
+
+The `storage` exposes a `reindex(fromSequenceNumber = 0)` method that rebuilds the primary index and all loaded secondary
+indexes from a given sequence number by scanning the partition data directly. The method is useful whenever index files have
+become inconsistent with the actual partition data, for example:
+
+- After a manual recovery procedure that altered or removed partition files.
+- After changing the matcher of a secondary index so that it needs to be rebuilt against the existing data.
+- When a full index rebuild from scratch is required after data migration.
+
+```javascript
+const Storage = require('event-storage').Storage;
+
+const storage = new Storage('events', { partitioner: (doc) => doc.stream });
+storage.open();
+
+// Rebuild all indexes from scratch
+storage.reindex(0);
+
+// Rebuild only entries beyond position 1000 (keep the first 1000 index entries intact)
+storage.reindex(1000);
+```
+
+#### Automatic crash recovery
+
+When a process crashes after partition data has been flushed to disk but before the index write buffer is flushed, the
+primary index lags behind the actual data. Instantiating the storage with `lock: Storage.LOCK_RECLAIM` (or
+`lock: EventStore.LOCK_RECLAIM` at the `EventStore` level) causes the storage to detect this situation on startup and
+call `reindex()` automatically to self-heal. The `'ready'` event is emitted only *after* any such repair has completed,
+so the storage is guaranteed to be fully consistent by the time the handler runs:
+
+```javascript
+const Storage = require('event-storage').Storage;
+
+const storage = new Storage('events', {
+    partitioner: (doc) => doc.stream,
+    lock: Storage.LOCK_RECLAIM
+});
+storage.on('ready', () => {
+    // Index is fully repaired and consistent here — safe to start reading and writing
+});
+storage.open();
+```
+
+> **Note:** `reindex()` performs a full (or partial) partition scan and can be slow on large data sets. When recovering
+> from a known-good checkpoint, prefer `reindex(knownGoodPosition)` over `reindex(0)` to limit the amount of data
+> that needs to be rescanned.
+
 ### Event Streams
 
 There are two slightly different concepts of Event Streams:
