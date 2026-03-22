@@ -124,60 +124,39 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * @returns {number} -1 if the partition is ok and the sequence number of the broken document if a torn write was detected.
+     * Check if the last document in this partition is a torn write, and return the sequence
+     * number of the relevant document, encoded by sign:
+     *  - Returns a positive value `(lastCompleteSeqnum + 1)` when no torn write was found and the
+     *    partition is non-empty; the last complete document's sequence number is `result - 1`.
+     *  - Returns a negative value `-(tornSeqnum + 1)` when a torn write was detected; the torn
+     *    document's sequence number is `-(result) - 1`, and the last *complete* document's
+     *    sequence number (if any) is `-(result) - 2`.
+     *  - Returns `0` when the partition is empty (no documents at all).
+     *
+     * @returns {number}
      */
     checkTornWrite() {
-        const reader = this.prepareReadBufferBackwards(this.size);
-        const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
-        if (separator !== DOCUMENT_SEPARATOR) {
-            const position = this.findDocumentPositionBefore(this.size);
-            const reader = this.prepareReadBuffer(position);
-            const { sequenceNumber } = this.readDocumentHeader(reader.buffer, reader.cursor, position);
-            return sequenceNumber;
-        }
-        return -1;
-    }
-
-    /**
-     * Get the sequence number of the last complete document in this partition.
-     * If the last document is a torn write, returns the sequence number of the document before it.
-     *
-     * @returns {number} The sequence number of the last complete document, or -1 if the partition is empty.
-     */
-    getLastSequenceNumber() {
         if (this.size === 0) {
-            return -1;
+            return 0;
         }
         const reader = this.prepareReadBufferBackwards(this.size);
-        if (!reader.buffer) {
-            return -1;
-        }
         const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
-        let position;
         if (separator !== DOCUMENT_SEPARATOR) {
-            // Last document is torn; find the complete document just before it
-            const tornPosition = this.findDocumentPositionBefore(this.size);
-            if (tornPosition === false || tornPosition === 0) {
-                return -1;
-            }
-            position = this.findDocumentPositionBefore(tornPosition);
-        } else {
-            // Last document is complete; find its start position
-            position = this.findDocumentPositionBefore(this.size);
+            // Torn write: find and read the torn document's header to get its sequence number.
+            const position = this.findDocumentPositionBefore(this.size);
+            const tornReader = this.prepareReadBuffer(position);
+            const { sequenceNumber } = this.readDocumentHeader(tornReader.buffer, tornReader.cursor, position);
+            return -(sequenceNumber + 1);
         }
+        // No torn write: find the last complete document and return its sequence number.
+        const position = this.findDocumentPositionBefore(this.size);
+        /* istanbul ignore if */
         if (position === false || position < 0) {
-            return -1;
+            return 0;
         }
-        const docReader = this.prepareReadBuffer(position);
-        if (!docReader.buffer) {
-            return -1;
-        }
-        try {
-            const { sequenceNumber } = this.readDocumentHeader(docReader.buffer, docReader.cursor, position);
-            return sequenceNumber;
-        } catch (e) {
-            return -1;
-        }
+        const lastReader = this.prepareReadBuffer(position);
+        const { sequenceNumber } = this.readDocumentHeader(lastReader.buffer, lastReader.cursor, position);
+        return sequenceNumber + 1;
     }
 
     /**

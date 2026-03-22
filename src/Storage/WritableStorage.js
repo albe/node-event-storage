@@ -90,14 +90,21 @@ class WritableStorage extends ReadableStorage {
         let maxPartitionSequenceNumber = -1;
         this.forEachPartition(partition => {
             partition.open();
-            const tornSequenceNumber = partition.checkTornWrite();
-            if (tornSequenceNumber >= 0) {
-                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSequenceNumber);
+            const result = partition.checkTornWrite();
+            if (result < 0) {
+                // Torn write: result encodes -(tornSeqnum + 1), so torn seqnum = -result - 1.
+                const tornSeqnum = -result - 1;
+                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSeqnum);
+                // Any complete documents before the torn one contribute to the lagging check.
+                // Their last seqnum is tornSeqnum - 1 (if > 0; otherwise no complete docs).
+                if (tornSeqnum > 0) {
+                    maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, tornSeqnum - 1);
+                }
+            } else if (result > 0) {
+                // No torn write: result encodes (lastCompleteSeqnum + 1), so seqnum = result - 1.
+                maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, result - 1);
             }
-            const lastSeqNum = partition.getLastSequenceNumber();
-            if (lastSeqNum >= 0) {
-                maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, lastSeqNum);
-            }
+            // result === 0: empty partition, no action needed.
         });
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
             this.truncate(lastValidSequenceNumber);

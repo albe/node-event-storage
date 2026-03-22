@@ -418,26 +418,28 @@ describe('Partition', function() {
 
     });
 
-    describe('getLastSequenceNumber', function() {
+    describe('checkTornWrite', function() {
 
-        it('returns -1 for an empty partition', function() {
+        it('returns 0 for an empty partition', function() {
             partition.open();
-            expect(partition.getLastSequenceNumber()).to.be(-1);
+            expect(partition.checkTornWrite()).to.be(0);
         });
 
-        it('returns the sequence number of a single complete document', function() {
+        it('returns positive (lastSeqnum + 1) for a single complete document', function() {
             partition.open();
             fillPartition(1);
-            expect(partition.getLastSequenceNumber()).to.be(1);
+            // fillPartition(1) writes seqnum=1; no torn write → result = 1 + 1 = 2
+            expect(partition.checkTornWrite()).to.be(2);
         });
 
-        it('returns the sequence number of the last complete document', function() {
+        it('returns positive (lastSeqnum + 1) for multiple complete documents', function() {
             partition.open();
             fillPartition(5);
-            expect(partition.getLastSequenceNumber()).to.be(5);
+            // fillPartition(5) writes seqnum=5 for last doc; no torn write → result = 5 + 1 = 6
+            expect(partition.checkTornWrite()).to.be(6);
         });
 
-        it('returns -1 when the only document is torn', function() {
+        it('returns negative when the only document is torn', function() {
             partition.open();
             fillPartition(1);
             partition.close();
@@ -449,10 +451,11 @@ describe('Partition', function() {
             fs.closeSync(fd);
 
             partition.open();
-            expect(partition.getLastSequenceNumber()).to.be(-1);
+            // Torn write on seqnum=1 → result = -(1 + 1) = -2
+            expect(partition.checkTornWrite()).to.be(-2);
         });
 
-        it('returns the sequence number of the last complete document before a torn write', function() {
+        it('returns negative (encodes torn seqnum) when last of many documents is torn', function() {
             partition.open();
             fillPartition(5);
             partition.close();
@@ -464,8 +467,10 @@ describe('Partition', function() {
             fs.closeSync(fd);
 
             partition.open();
-            // fillPartition(5) passes i as sequence number, so doc5 has seqnum=5 and doc4 has seqnum=4
-            expect(partition.getLastSequenceNumber()).to.be(4);
+            // fillPartition(5) passes i as sequence number, so last doc has seqnum=5.
+            // Torn write on seqnum=5 → result = -(5 + 1) = -6
+            // Decoded: tornSeqnum = 5, lastCompleteSeqnum = 4
+            expect(partition.checkTornWrite()).to.be(-6);
         });
 
     });
