@@ -487,10 +487,9 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Open an existing secondary index and repair any inconsistency with the current primary
-     * index length. Repairs both the case where the secondary is ahead of the primary (by
-     * truncating stale entries) and the case where the secondary is behind (by scanning primary
-     * index entries and adding any missing matches).
+     * Open an existing secondary index and repair any stale entries beyond the current primary
+     * index length. Stale entries can be present when checkTornWrites() truncated the primary
+     * index before this secondary index was loaded into memory.
      */
     openIndex(name, matcher) {
         const index = super.openIndex(name, matcher);
@@ -498,24 +497,6 @@ class WritableStorage extends ReadableStorage {
         if (lastEntry !== false && lastEntry.number > this.index.length) {
             // Secondary index is ahead of primary: truncate stale entries.
             index.truncate(index.find(this.index.length));
-        } else {
-            // Secondary index may be behind primary: rebuild any missing entries.
-            const fromNumber = (lastEntry !== false ? lastEntry.number : 0) + 1;
-            if (fromNumber <= this.index.length) {
-                const { matcher: secMatcher } = this.secondaryIndexes[name];
-                if (secMatcher) {
-                    const entries = this.index.range(fromNumber, this.index.length);
-                    if (entries !== false) {
-                        for (const primaryEntry of entries) {
-                            const document = this.readFrom(primaryEntry.partition, primaryEntry.position, primaryEntry.size);
-                            if (matches(document, secMatcher)) {
-                                index.add(primaryEntry);
-                            }
-                        }
-                        index.flush();
-                    }
-                }
-            }
         }
         return index;
     }

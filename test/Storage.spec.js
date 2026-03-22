@@ -1099,40 +1099,6 @@ describe('Storage', function() {
 
     });
 
-    describe('openIndex (secondary index repair)', function() {
-
-        it('repairs secondary index that is behind primary by adding missing entries', function() {
-            storage = createStorage();
-            storage.open();
-
-            storage.ensureIndex('evens', doc => doc.foo % 2 === 0);
-            for (let i = 1; i <= 6; i++) {
-                storage.write({ foo: i });
-            }
-            storage.flush();
-            storage.close();
-
-            // Simulate secondary index lagging: open it directly and truncate
-            storage = createStorage();
-            storage.open();
-            const secIndex = storage.openIndex('evens');
-            // secIndex has 3 entries (foo=2, foo=4, foo=6); truncate to 1
-            secIndex.truncate(1);
-            secIndex.flush();
-            storage.close();
-
-            // Reopen: openIndex() should detect the secondary is behind and rebuild
-            storage = createStorage();
-            storage.open();
-            const repairedIndex = storage.openIndex('evens');
-            expect(repairedIndex.length).to.be(3); // foo=2, foo=4, foo=6
-            expect(storage.read(1, repairedIndex)).to.eql({ foo: 2 });
-            expect(storage.read(2, repairedIndex)).to.eql({ foo: 4 });
-            expect(storage.read(3, repairedIndex)).to.eql({ foo: 6 });
-        });
-
-    });
-
     describe('matches', function() {
 
         const matches = Storage.matches;
