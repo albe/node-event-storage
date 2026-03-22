@@ -124,18 +124,32 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * @returns {number} -1 if the partition is ok and the sequence number of the broken document if a torn write was detected.
+     * Check if the last document in this partition is a torn write, and return the sequence
+     * number of the relevant document, encoded by sign:
+     *  - Returns a positive value `(lastCompleteSeqnum + 1)` when no torn write was found and the
+     *    partition is non-empty; the last complete document's sequence number is `result - 1`.
+     *  - Returns a negative value `-(tornSeqnum + 1)` when a torn write was detected; the torn
+     *    document's sequence number is `-(result) - 1`, and the last *complete* document's
+     *    sequence number (if any) is `-(result) - 2`.
+     *  - Returns `0` when the partition is empty (no documents at all).
+     *
+     * @returns {number}
      */
     checkTornWrite() {
+        if (this.size === 0) {
+            return 0;
+        }
         const reader = this.prepareReadBufferBackwards(this.size);
         const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
-        if (separator !== DOCUMENT_SEPARATOR) {
-            const position = this.findDocumentPositionBefore(this.size);
-            const reader = this.prepareReadBuffer(position);
-            const { sequenceNumber } = this.readDocumentHeader(reader.buffer, reader.cursor, position);
-            return sequenceNumber;
+        const torn = separator !== DOCUMENT_SEPARATOR;
+        const position = this.findDocumentPositionBefore(this.size);
+        /* istanbul ignore if */
+        if (position === false || position < 0) {
+            return 0;
         }
-        return -1;
+        const lastReader = this.prepareReadBuffer(position);
+        const { sequenceNumber } = this.readDocumentHeader(lastReader.buffer, lastReader.cursor, position);
+        return torn ? -(sequenceNumber + 1) : sequenceNumber + 1;
     }
 
     /**

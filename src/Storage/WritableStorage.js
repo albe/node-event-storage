@@ -82,18 +82,40 @@ class WritableStorage extends ReadableStorage {
      * Check all partitions torn writes and truncate the storage to the position before the first torn write.
      * This might delete correctly written events in partitions, if their sequence number is higher than the
      * torn write in another partition.
+     * Also detects when the primary index is lagging behind the actual partition data and emits a
+     * 'primary-index-lagging' event in that case.
      */
     checkTornWrites() {
         let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
+        let maxPartitionSequenceNumber = -1;
         this.forEachPartition(partition => {
             partition.open();
-            const tornSequenceNumber = partition.checkTornWrite();
-            if (tornSequenceNumber >= 0) {
-                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSequenceNumber);
+            const result = partition.checkTornWrite();
+            if (result < 0) {
+                // Torn write: result encodes -(tornSeqnum + 1), so torn seqnum = -result - 1.
+                const tornSeqnum = -result - 1;
+                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSeqnum);
+                // Any complete documents before the torn one contribute to the lagging check.
+                // Their last seqnum is tornSeqnum - 1 (if > 0; otherwise no complete docs).
+                if (tornSeqnum > 0) {
+                    maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, tornSeqnum - 1);
+                }
+            } else if (result > 0) {
+                // No torn write: result encodes (lastCompleteSeqnum + 1), so seqnum = result - 1.
+                maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, result - 1);
             }
+            // result === 0: empty partition, no action needed.
         });
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
             this.truncate(lastValidSequenceNumber);
+            // After truncation, account for documents beyond the truncation point being removed.
+            // truncate(N) keeps index entries 1..N, so the last kept partition seqnum is N-1.
+            maxPartitionSequenceNumber = Math.min(maxPartitionSequenceNumber, lastValidSequenceNumber - 1);
+        }
+        // A partition seqnum of N means the document was written when the index had N entries,
+        // so the index should contain at least N+1 entries to be consistent.
+        if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
+            this.emit('primary-index-lagging', maxPartitionSequenceNumber + 1, this.index.length);
         }
         this.forEachPartition(partition => partition.close());
     }
