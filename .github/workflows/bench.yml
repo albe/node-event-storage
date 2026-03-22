@@ -9,10 +9,15 @@ on:
   pull_request:
     types: [closed]
 
+permissions: {}
+
 jobs:
   bench:
     if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
 
     strategy:
       matrix:

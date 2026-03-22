@@ -8,6 +8,8 @@ on:
         required: false
         default: '5'
 
+permissions: {}
+
 jobs:
   stress-test:
     runs-on: ubuntu-latest
