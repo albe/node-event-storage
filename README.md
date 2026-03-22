@@ -10,8 +10,6 @@
 
 An optimized embedded event store for modern node.js, written in ES6.
 
-> **Disclaimer:** This is currently under heavy development and not production ready. See [issues/29](https://github.com/albe/node-event-storage/issues/29) for more information.
-
 📖 **[Full documentation on readthedocs.io](https://node-event-storage.readthedocs.io/en/latest/)**
 
 ---
@@ -66,6 +64,7 @@ eventstore.on('ready', () => {
 | **Durable consumers** | At-least-once (and exactly-once with `setState`) event delivery with automatic position tracking. |
 | **Consistency guards** | Build aggregates that enforce business invariants with built-in snapshotting. |
 | **Read-only mode** | Open the store from a second process to build projections without touching the writer. |
+| **Crash safety** | Torn writes detected and truncated on startup; automatic index repair via `LOCK_RECLAIM`; bounded, predictable data loss validated by a dedicated stress test. |
 | **Custom serialization** | Plug in msgpack, protobuf, or any other codec. |
 | **Compression** | Apply LZ4, zstd, or any other compression via the `serializer` option. |
 | **Access control hooks** | `preCommit` / `preRead` hooks with per-stream metadata for authorization. |
@@ -79,7 +78,7 @@ The full documentation is hosted at **<https://node-event-storage.readthedocs.io
 - [Getting Started](https://node-event-storage.readthedocs.io/en/latest/getting-started/) — installation, constructor options, basic usage.
 - [Event Streams](https://node-event-storage.readthedocs.io/en/latest/streams/) — writing, reading, optimistic concurrency, fluent API, joining streams, categories, and event metadata.
 - [Consumers](https://node-event-storage.readthedocs.io/en/latest/consumers/) — at-least-once and exactly-once delivery, consumer state, consistency guards, and read-only mode.
-- [Advanced Topics](https://node-event-storage.readthedocs.io/en/latest/advanced/) — ACID properties, storage configuration, partitioning, custom serialization, compression, security, and access control hooks.
+- [Advanced Topics](https://node-event-storage.readthedocs.io/en/latest/advanced/) — ACID properties, reliability and crash-safety guarantees, storage configuration, partitioning, custom serialization, compression, security, and access control hooks.
 
 ---
 

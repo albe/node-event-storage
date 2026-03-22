@@ -115,6 +115,80 @@ eventstore.on('ready', () => {
 
 > **Performance note:** `reindex()` performs a full (or partial) partition scan. For large stores prefer `reindex(knownGoodPosition)` over `reindex(0)`.
 
+## Reliability and Crash-Safety Guarantees
+
+node-event-storage is designed to survive hard process crashes (e.g. `SIGKILL`, power failure) and recover with a bounded, predictable amount of data loss.
+
+### What is guaranteed
+
+| Guarantee | Details |
+|-----------|---------|
+| **No silent corruption** | Torn writes (partial page writes caused by a crash) are detected on startup and automatically truncated. The store will never surface a partially-written event. |
+| **Atomic commits** | A multi-event commit is all-or-nothing. If the process crashes mid-commit, the incomplete commit is rolled back on the next open. |
+| **Consistent reads after recovery** | Once `'ready'` fires after a `LOCK_RECLAIM` open, all indexes are fully consistent with the data files. |
+| **Bounded data loss** | Events that were in the in-memory write buffer at the time of the crash are lost. The maximum loss is deterministic and can be calculated from the buffer settings (see below). |
+
+### Quantifying the data-loss window
+
+Three factors bound how many events can be lost in a crash:
+
+1. **Partition write buffer** — each stream buffers up to `writeBufferSize` bytes or `maxWriteBufferDocuments` events before flushing. With a 16 KB buffer and ~100-byte events, that is at most ~160 events per stream.
+2. **Primary-index write buffer** — the index uses a separate 4 096-byte buffer (16 bytes per entry = 256 entries). Events whose partition data is on disk but whose index entry is not yet flushed are invisible after recovery until `reindex()` is called.
+3. **In-flight commit** — at most one commit's worth of events (bounded by `maxBatchSize`) may be torn.
+
+With the default settings and a single stream the worst-case data loss is roughly:
+
+```
+max_loss ≈ (writeBufferSize / avg_event_size) + (4096 / 16) + max_batch_size
+         ≈ 160 + 256 + batch_size   (for 100-byte events and a 16 KB write buffer)
+```
+
+### The stress test
+
+The repository ships a crash-safety stress test in `stress-test/` that validates these guarantees empirically:
+
+1. **Writer** (`stress-test/writer.js`) — commits events to multiple streams in a tight loop with a small write buffer, persisting a snapshot of the commit counts after every successful flush.
+2. **Orchestrator** (`stress-test/run.sh`) — starts the writer, lets it run for a configurable number of seconds, then kills it with `SIGKILL` to simulate a hard crash.
+3. **Recovery** (`stress-test/recovery.js`) — reopens the store with `LOCK_RECLAIM`, verifies all streams are readable and writable, calculates the actual data loss, and asserts it is within the theoretical upper bound.
+
+Run it locally with:
+
+```bash
+cd stress-test
+npm install
+WRITE_DURATION=10 bash run.sh
+```
+
+The test exits with code `0` if data loss is within bounds and code `1` otherwise, making it suitable for CI. The GitHub Actions workflow (`.github/workflows/stress-test.yml`) runs it on every push.
+
+### Enabling automatic crash recovery
+
+To have the store self-repair on the next open, use `LOCK_RECLAIM`:
+
+```javascript
+const EventStore = require('event-storage');
+
+const eventstore = new EventStore('my-event-store', {
+    storageDirectory: './data',
+    storageConfig: { lock: EventStore.LOCK_RECLAIM }
+});
+
+eventstore.on('ready', () => {
+    // Store is fully repaired and consistent — safe to read and write
+});
+```
+
+For strict durability (no data loss at the cost of write throughput), combine this with `syncOnFlush`:
+
+```javascript
+const eventstore = new EventStore('my-event-store', {
+    storageConfig: {
+        lock: EventStore.LOCK_RECLAIM,
+        syncOnFlush: true
+    }
+});
+```
+
 ## Partitioning
 
 By default each write stream maps to its own file (one partition per stream). This maximises locality and buffer efficiency.

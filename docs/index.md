@@ -9,9 +9,6 @@
 
 An optimized embedded event store for modern Node.js, written in ES6.
 
-> **Disclaimer:** This project is under active development and not yet production-ready.
-> See [issue #29](https://github.com/albe/node-event-storage/issues/29) for the current status.
-
 ---
 
 ## Why node-event-storage?
@@ -89,4 +86,4 @@ Traditional databases do a great deal of work that event stores simply do not ne
 | [Getting Started](getting-started.md) | Installation, constructor options, first commit & read |
 | [Event Streams](streams.md) | Writing, reading, revision ranges, fluent API, joining, categories, metadata |
 | [Consumers](consumers.md) | At-least-once & exactly-once delivery, state, consistency guards, read-only mode |
-| [Advanced Topics](advanced.md) | ACID details, storage config, partitioning, serialization, compression, security, access control |
+| [Advanced Topics](advanced.md) | ACID details, reliability & crash-safety guarantees, storage config, partitioning, serialization, compression, security, access control |
