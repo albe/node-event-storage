@@ -140,32 +140,28 @@ function afterAllWrites() {
     // -----------------------------------------------------------------------
     // 4. Verify that data loss is bounded
     //
-    // Data can be lost in two places:
+    // With index auto-repair (reindex() is invoked automatically during
+    // checkTornWrites() when the primary index is found to be lagging), events
+    // whose partition data reached disk but whose index entries did not are
+    // recovered automatically.  Data loss therefore comes only from:
     //
     //   a) Partition write buffer – controlled by maxWriteBufferDocuments and
     //      writeBufferSize.  With maxWriteBufferDocuments > 0 each partition
-    //      buffers at most that many documents before flushing.
+    //      buffers at most that many documents before flushing.  Documents
+    //      still in the buffer at crash time are never written to disk and
+    //      cannot be recovered.
     //
-    //   b) Primary-index write buffer – WritableIndex uses a separate buffer
-    //      (default 4096 bytes, entry size 16 bytes = 256 entries) that is
-    //      flushed lazily via a 100 ms timer.  Because the index flush is
-    //      independent of the partition flush, a crash can leave some events
-    //      whose partition data is on disk but whose index entries are not,
-    //      making them effectively invisible after recovery.
+    //   b) One torn (partially-written) document per partition at the moment
+    //      of the crash.  The torn document is truncated during recovery, so
+    //      at most one commit's worth of events may be lost this way.
     //
     // The hard upper bound on total data loss is therefore:
     //
-    //   indexBufferBound  (from index write-buffer capacity)
-    //   + partitionBufferBound  (from partition write-buffer docs, per stream)
+    //   partitionBufferBound  (from partition write-buffer docs, per stream)
     //   + maxBatchSize  (one in-flight commit whose last events may be torn)
     //
     // -----------------------------------------------------------------------
     const { writeBufferSize, maxWriteBufferDocuments, numStreams, maxBatchSize } = stats;
-
-    // Index uses its own 4096-byte write buffer with 16-byte entries by default
-    const INDEX_WRITE_BUFFER_SIZE = 4096;
-    const INDEX_ENTRY_SIZE        = 16;
-    const indexBufferBound        = Math.ceil(INDEX_WRITE_BUFFER_SIZE / INDEX_ENTRY_SIZE);
 
     // Each partition buffers at most maxWriteBufferDocuments docs; if not set,
     // fall back to a byte-based estimate (100 bytes is a conservative min size).
@@ -174,10 +170,9 @@ function afterAllWrites() {
         : Math.ceil(writeBufferSize / 100);
     const partitionBufferBound = perPartitionBound * numStreams;
 
-    const allowedLoss = indexBufferBound + partitionBufferBound + maxBatchSize;
+    const allowedLoss = partitionBufferBound + maxBatchSize;
 
     console.log(`\n[recovery] Data-loss bound check:`);
-    console.log(`  Index buffer upper bound    : ${indexBufferBound} events (${INDEX_WRITE_BUFFER_SIZE}B / ${INDEX_ENTRY_SIZE}B per entry)`);
     console.log(`  Partition buffer bound      : ${partitionBufferBound} events (${perPartitionBound} per stream × ${numStreams} streams)`);
     console.log(`  Torn-commit allowance       : ${maxBatchSize} events`);
     console.log(`  Total allowed loss          : ${allowedLoss} events`);
