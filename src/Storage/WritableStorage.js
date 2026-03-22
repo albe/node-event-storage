@@ -120,10 +120,6 @@ class WritableStorage extends ReadableStorage {
             // truncate(N) keeps index entries 1..N, so the last kept partition seqnum is N-1.
             maxPartitionSequenceNumber = Math.min(maxPartitionSequenceNumber, lastValidSequenceNumber - 1);
         }
-        // Ensure index is open so its length can be checked accurately.
-        if (!this.index.isOpen()) {
-            this.index.open();
-        }
         // A partition seqnum of N means the document was written when the index had N entries,
         // so the index should contain at least N+1 entries to be consistent.
         // Automatically repair a lagging index by reindexing from the current index length.
@@ -146,10 +142,6 @@ class WritableStorage extends ReadableStorage {
      *   Defaults to 0, which rebuilds all indexes from scratch.
      */
     reindex(fromSequenceNumber = 0) {
-        if (!this.index.isOpen()) {
-            this.index.open();
-        }
-
         this.index.truncate(fromSequenceNumber);
 
         // Truncate all loaded secondary indexes to match the new primary length.
@@ -157,9 +149,6 @@ class WritableStorage extends ReadableStorage {
             /* istanbul ignore if */
             if (!(index instanceof WritableIndex)) {
                 return;
-            }
-            if (!index.isOpen()) {
-                index.open();
             }
             // find(0) returns 0, so truncate(0) will remove all entries when fromSequenceNumber===0
             index.truncate(fromSequenceNumber === 0 ? 0 : index.find(fromSequenceNumber));

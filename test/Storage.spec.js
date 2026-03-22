@@ -730,6 +730,22 @@ describe('Storage', function() {
             expect(i).to.be(7);
         });
 
+        it('truncates using a negative document number relative to end', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            storage.truncate(-4); // keep all but last 4: positions 1..6
+
+            expect(storage.length).to.be(6);
+            expect(storage.read(6)).to.eql({ foo: 6 });
+        });
+
         it('truncates after the given document number on each partition', function() {
             storage = createStorage({
                 partitioner: (doc, number) => 'part-' + (parseInt((number - 1) / 4) % 4)
@@ -1050,6 +1066,31 @@ describe('Storage', function() {
 
             expect(storage.index.length).to.be(6);
             expect(secIndex.length).to.be(3); // foo=1, foo=3, foo=5
+        });
+
+        it('opens partitions that are not yet open when called directly after open()', function() {
+            // Session 1: write data and corrupt the index
+            storage = createStorage();
+            storage.open();
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+            storage.index.truncate(3);
+            storage.index.flush();
+            storage.close();
+
+            // Session 2: open without writing — partitions are lazily opened, so they are
+            // NOT open yet when reindex() is called directly after open()
+            storage = createStorage();
+            storage.open();
+
+            storage.reindex(3);
+
+            expect(storage.index.length).to.be(5);
+            for (let i = 1; i <= 5; i++) {
+                expect(storage.read(i)).to.eql({ foo: i });
+            }
         });
 
     });
