@@ -496,46 +496,45 @@ therefore be removed and reindexing a storage be possible, which allows to rebui
 
 ### Reindexing
 
-The `storage` exposes a `reindex(fromSequenceNumber = 0)` method that rebuilds the primary index and all loaded secondary
-indexes from a given sequence number by scanning the partition data directly. The method is useful whenever index files have
-become inconsistent with the actual partition data, for example:
+The underlying storage exposes a `reindex(fromSequenceNumber = 0)` method that rebuilds the primary index and all loaded
+secondary indexes from a given sequence number by scanning the partition data directly. The method is useful whenever index
+files have become inconsistent with the actual partition data, for example after a manual recovery procedure that altered
+or removed partition files, or after migrating/copying data to a new location.
 
-- After a manual recovery procedure that altered or removed partition files.
-- After changing the matcher of a secondary index so that it needs to be rebuilt against the existing data.
-- When a full index rebuild from scratch is required after data migration.
+Calling `reindex()` through the `EventStore` layer (via `eventstore.storage.reindex()`) is the recommended approach
+because `EventStore` owns the secondary stream indexes:
 
 ```javascript
-const Storage = require('event-storage').Storage;
+const EventStore = require('event-storage');
 
-const storage = new Storage('events', { partitioner: (doc) => doc.stream });
-storage.open();
+const eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
+eventstore.on('ready', () => {
+    // Rebuild all indexes from scratch after a manual data recovery
+    eventstore.storage.reindex(0);
 
-// Rebuild all indexes from scratch
-storage.reindex(0);
-
-// Rebuild only entries beyond position 1000 (keep the first 1000 index entries intact)
-storage.reindex(1000);
+    // Or rebuild only entries beyond a known-good checkpoint
+    eventstore.storage.reindex(1000);
+});
 ```
 
 #### Automatic crash recovery
 
 When a process crashes after partition data has been flushed to disk but before the index write buffer is flushed, the
-primary index lags behind the actual data. Instantiating the storage with `lock: Storage.LOCK_RECLAIM` (or
-`lock: EventStore.LOCK_RECLAIM` at the `EventStore` level) causes the storage to detect this situation on startup and
-call `reindex()` automatically to self-heal. The `'ready'` event is emitted only *after* any such repair has completed,
-so the storage is guaranteed to be fully consistent by the time the handler runs:
+primary index lags behind the actual data. Instantiating the store with `storageConfig: { lock: EventStore.LOCK_RECLAIM }`
+causes the storage to detect this situation on startup and call `reindex()` automatically to self-heal. The `'ready'`
+event is emitted only *after* any such repair has completed, so the store is guaranteed to be fully consistent by the
+time the handler runs:
 
 ```javascript
-const Storage = require('event-storage').Storage;
+const EventStore = require('event-storage');
 
-const storage = new Storage('events', {
-    partitioner: (doc) => doc.stream,
-    lock: Storage.LOCK_RECLAIM
+const eventstore = new EventStore('my-event-store', {
+    storageDirectory: './data',
+    storageConfig: { lock: EventStore.LOCK_RECLAIM }
 });
-storage.on('ready', () => {
-    // Index is fully repaired and consistent here — safe to start reading and writing
+eventstore.on('ready', () => {
+    // All indexes are fully repaired and consistent here — safe to start reading and writing
 });
-storage.open();
 ```
 
 > **Note:** `reindex()` performs a full (or partial) partition scan and can be slow on large data sets. When recovering
