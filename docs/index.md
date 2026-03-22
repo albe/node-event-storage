@@ -1,4 +1,4 @@
-![node-event-storage](../logo/color.png)
+![node-event-storage](logo.png)
 
 [![build](https://github.com/albe/node-event-storage/workflows/build/badge.svg?branch=main)](https://github.com/albe/node-event-storage/actions)
 [![npm version](https://badge.fury.io/js/event-storage.svg)](https://badge.fury.io/js/event-storage)
