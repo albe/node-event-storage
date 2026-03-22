@@ -314,12 +314,15 @@ class WritablePartition extends ReadablePartition {
      * @param {number} after The file position after which to truncate the partition.
      */
     truncate(after) {
-        if (after > this.size) {
+        if (after >= this.size) {
             return;
         }
         this.open();
         after = Math.max(0, after);
         this.flush();
+
+        // Always save the truncated part for manual recovery, even if it contains corrupted data
+        this.branchOff('truncated-' + Date.now(), after);
 
         try {
             this.readFrom(after);
@@ -328,10 +331,6 @@ class WritablePartition extends ReadablePartition {
                 throw new Error('Can only truncate on valid document boundaries.');
             }
         }
-
-        // copy all truncated documents to some delete log
-        const backupName = (new Date()).toISOString().substring(0,10);
-        this.branchOff(backupName, after);
 
         fs.truncateSync(this.fileName, this.headerSize + after);
         this.truncateReadBuffer(after);

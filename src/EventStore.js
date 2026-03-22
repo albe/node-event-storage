@@ -83,8 +83,41 @@ class EventStore extends events.EventEmitter {
                 this.storage.close();
                 throw err;
             }
+            this.checkUnfinishedCommits();
             this.emit('ready');
         });
+    }
+
+    /**
+     * Check if the last commit in the store was unfinished, which is the case if not all events of the commit have been written.
+     * Torn writes are handled at the storage level, so this method only deals with unfinished commits.
+     * @private
+     */
+    checkUnfinishedCommits() {
+        let position = this.storage.length;
+        let lastEvent;
+        let truncateIndex = false;
+        while (position > 0) {
+            try {
+                lastEvent = this.storage.read(position);
+            } catch (e) {
+                // A preRead hook may throw (e.g. access control). Stop repair check.
+                return;
+            }
+            if (lastEvent !== false) break;
+            truncateIndex = true;
+            position--;
+        }
+
+        if (lastEvent && lastEvent.metadata.commitSize && lastEvent.metadata.commitVersion !== lastEvent.metadata.commitSize - 1) {
+            this.emit('unfinished-commit', lastEvent);
+            // commitId = global sequence number at which the commit started
+            this.storage.truncate(lastEvent.metadata.commitId);
+        } else if (truncateIndex) {
+            // The index contained items that are not in the storage file; truncate everything
+            // after `position`, the last sequence number that was successfully read.
+            this.storage.truncate(position);
+        }
     }
 
     /**

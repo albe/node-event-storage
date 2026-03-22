@@ -61,6 +61,31 @@ describe('EventStore', function() {
         fs.readdir = originalReaddir;
     });
 
+    it('repairs unfinished commits', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        let events = [{foo: 'bar'}, {foo: 'baz'}, {foo: 'quux'}];
+        eventstore.on('ready', () => {
+            eventstore.commit('foo-bar', events, () => {
+                // Simulate an unfinished write after the second event (but indexes are still written)
+                const entry = eventstore.storage.index.get(3);
+                eventstore.storage.getPartition(entry.partition).truncate(entry.position);
+                eventstore.close();
+
+                eventstore = new EventStore({
+                    storageDirectory
+                });
+                eventstore.on('ready', () => {
+                    expect(eventstore.length).to.be(0);
+                    expect(eventstore.getStreamVersion('foo-bar')).to.be(0);
+                    done();
+                });
+            });
+        });
+    });
+
     it('repairs torn writes', function(done) {
         eventstore = new EventStore({
             storageDirectory
@@ -84,6 +109,131 @@ describe('EventStore', function() {
                     expect(eventstore2.getStreamVersion('foo-bar')).to.be(0);
                     eventstore2.close();
                     done();
+                });
+            });
+        });
+    });
+
+    it('repairs stale index entries when last readable event has a complete commit', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        eventstore.on('ready', () => {
+            // Commit two separate single-event commits to different streams
+            eventstore.commit('stream-a', [{ key: 1 }], () => {
+                eventstore.commit('stream-b', [{ key: 2 }], () => {
+                    // Truncate the partition at the second event's file position, making
+                    // the second index entry point beyond the end of the file, while the
+                    // first event (a complete single-event commit) remains fully intact.
+                    const entry = eventstore.storage.index.get(2);
+                    eventstore.storage.getPartition(entry.partition).truncate(entry.position);
+                    // Close flushes all indexes to disk so the index still has 2 entries
+                    eventstore.close();
+
+                    // Reopen: checkUnfinishedCommits detects the stale entry and truncates
+                    // the index to the last valid event (the else-if (truncateIndex) path)
+                    eventstore = new EventStore({
+                        storageDirectory
+                    });
+                    eventstore.on('ready', () => {
+                        // The first event (stream-a) must still be accessible
+                        expect(eventstore.length).to.be(1);
+                        expect(eventstore.getStreamVersion('stream-a')).to.be(1);
+                        const stream = eventstore.getEventStream('stream-a');
+                        expect(stream.events.length).to.be(1);
+                        expect(stream.events[0]).to.eql({ key: 1 });
+                        // The stale stream-b entry must have been removed
+                        expect(eventstore.getStreamVersion('stream-b')).to.be(0);
+                        done();
+                    });
+                });
+            });
+        });
+    });
+
+    it('does not lose previously committed data after repairing an unfinished commit', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        const committedEvents = [{foo: 'bar'}, {foo: 'baz'}];
+        const partialEvents = [{foo: 'quux'}, {foo: 'corge'}, {foo: 'grault'}];
+        eventstore.on('ready', () => {
+            // Commit first set of events (these should be preserved after repair)
+            eventstore.commit('stream-a', committedEvents, () => {
+                // Commit second set of events, then simulate an unfinished write
+                eventstore.commit('stream-b', partialEvents, () => {
+                    // Simulate an unfinished write: truncate partition after the second event,
+                    // leaving commitVersion=1 written but commitSize=3, so commit is unfinished
+                    const entry = eventstore.storage.index.get(eventstore.length - 1);
+                    eventstore.storage.getPartition(entry.partition).truncate(entry.position);
+                    // Close flushes all indexes to disk so the repair has accurate data
+                    eventstore.close();
+
+                    eventstore = new EventStore({
+                        storageDirectory
+                    });
+                    eventstore.on('ready', () => {
+                        // Previously committed stream-a events must still be accessible
+                        expect(eventstore.getStreamVersion('stream-a')).to.be(committedEvents.length);
+                        const stream = eventstore.getEventStream('stream-a');
+                        let i = 0;
+                        for (let event of stream) {
+                            expect(event).to.eql(committedEvents[i++]);
+                        }
+                        expect(i).to.be(committedEvents.length);
+                        // The unfinished stream-b commit must have been rolled back
+                        expect(eventstore.getStreamVersion('stream-b')).to.be(0);
+                        done();
+                    });
+                });
+            });
+        });
+    });
+
+    it('does not lose previously committed data after repairing a torn write', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        const committedEvents = [{foo: 'bar'}, {foo: 'baz'}];
+        const tornEvent = [{foo: 'quux'.repeat(500)}];
+        eventstore.on('ready', () => {
+            // Commit first set of events (these should be preserved after repair)
+            eventstore.commit('stream-a', committedEvents, () => {
+                // Commit a large event to stream-b, then simulate a torn write
+                eventstore.commit('stream-b', tornEvent, () => {
+                    // Flush all indexes to disk so they reflect committed state before the simulated crash
+                    eventstore.storage.flush();
+                    eventstore.storage.index.flush();
+
+                    // Simulate a torn write: truncate to 512 bytes, well short of the ~2KB document
+                    fs.truncateSync(eventstore.storage.getPartition('stream-b').fileName, 512);
+
+                    // The previous instance was not closed, so the lock still exists
+                    const eventstore2 = new EventStore({
+                        storageDirectory,
+                        storageConfig: {
+                            lock: EventStore.LOCK_RECLAIM
+                        }
+                    });
+                    eventstore2.on('ready', () => {
+                        // Previously committed stream-a events must still be accessible
+                        expect(eventstore2.getStreamVersion('stream-a')).to.be(committedEvents.length);
+                        const stream = eventstore2.getEventStream('stream-a');
+                        let i = 0;
+                        for (let event of stream) {
+                            expect(event).to.eql(committedEvents[i++]);
+                        }
+                        expect(i).to.be(committedEvents.length);
+                        // The torn stream-b write must have been removed from the primary storage
+                        expect(eventstore2.length).to.be(committedEvents.length);
+                        // The secondary stream index for stream-b must also be repaired
+                        expect(eventstore2.getStreamVersion('stream-b')).to.be(0);
+                        eventstore2.close();
+                        done();
+                    });
                 });
             });
         });
