@@ -38,6 +38,7 @@ class ReadableIndex extends events.EventEmitter {
      * @param {object} [options] An object with additional index options.
      * @param {typeof EntryInterface} [options.EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [options.dataDirectory] The directory to store the index file in. Default '.'.
+     * @param {number} [options.cacheSize] The number of most-recent index entries to keep in memory. Default 1024.
      * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
@@ -65,8 +66,10 @@ class ReadableIndex extends events.EventEmitter {
      * @param {object} options
      */
     initialize(options) {
-        /* @type Array<Entry> */
-        this.data = [];
+        this._length = 0;
+        this.cacheSize = options.cacheSize !== undefined ? Math.max(1, options.cacheSize >>> 0) : 1024; // jshint ignore:line
+        /* @type Array<Entry> Ring buffer holding at most cacheSize entries */
+        this.cache = new Array(this.cacheSize);
         this.fd = null;
         this.fileMode = 'r';
         this.EntryClass = options.EntryClass;
@@ -100,7 +103,7 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {number}
      */
     get length() {
-        return this.data.length;
+        return this._length;
     }
 
     /**
@@ -155,7 +158,7 @@ class ReadableIndex extends events.EventEmitter {
 
         const length = this.readFileLength();
         if (length > 0) {
-            this.data = new Array(length);
+            this._length = length;
             // Read last item to get the index started
             this.read(length);
         }
@@ -232,8 +235,9 @@ class ReadableIndex extends events.EventEmitter {
      * @api
      */
     close() {
-        this.data = [];
+        this._length = 0;
         this.readUntil = -1;
+        this.cache.fill(null);
         this.readBuffer.fill(0);
         if (this.fd) {
             fs.closeSync(this.fd);
@@ -250,20 +254,26 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {Entry} The index entry at the given position.
      */
     read(index) {
-        index = Number(index) - 1;
+        const i = Number(index) - 1; // 0-based
 
-        fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
-        if (index === this.readUntil + 1) {
+        fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + i * this.EntryClass.size);
+        if (i === this.readUntil + 1) {
             this.readUntil++;
         }
-        this.data[index] = this.EntryClass.fromBuffer(this.readBuffer);
-
-        return this.data[index];
+        const entry = this.EntryClass.fromBuffer(this.readBuffer);
+        // Store in ring buffer only if within the current cache window
+        if (i >= this._length - this.cacheSize) {
+            this.cache[i % this.cacheSize] = entry;
+        }
+        return entry;
     }
 
     /**
      * Read a range of entries from disk. This method will not do any range checks.
      * It will however optimize to prevent reading entries that have already been read sequentially from start.
+     *
+     * Entries within the ring buffer cache window are stored in the cache; entries outside the window
+     * (older than cacheSize) are read from disk for the return value but not cached.
      *
      * @private
      * @param {number} from The 1-based index position from where to read from (inclusive).
@@ -275,25 +285,61 @@ class ReadableIndex extends events.EventEmitter {
             return [this.read(from)];
         }
 
-        from--;
-        until--;
+        const f = from - 1; // 0-based
+        const u = until - 1; // 0-based
+        const cacheStart = Math.max(0, this._length - this.cacheSize);
 
-        const readFrom = Math.max(this.readUntil + 1, from);
-        const amount = (until - readFrom + 1);
+        // Build the result array up front
+        const result = new Array(u - f + 1);
 
-        const readBuffer = Buffer.allocUnsafe(amount * this.EntryClass.size);
-        let readSize = fs.readSync(this.fd, readBuffer, 0, readBuffer.byteLength, this.headerSize + readFrom * this.EntryClass.size);
-        let index = 0;
-        while (index < amount && readSize > 0) {
-            this.data[index + readFrom] = this.EntryClass.fromBuffer(readBuffer, index * this.EntryClass.size);
-            readSize -= this.EntryClass.size;
-            index++;
+        // Part 1: Out-of-window entries [f, min(cacheStart-1, u)] — read from disk, do not cache
+        const outEnd = Math.min(cacheStart - 1, u);
+        if (f < cacheStart && outEnd >= f) {
+            const count = outEnd - f + 1;
+            const outBuf = Buffer.allocUnsafe(count * this.EntryClass.size);
+            const bytesRead = fs.readSync(this.fd, outBuf, 0, outBuf.byteLength, this.headerSize + f * this.EntryClass.size);
+            const entries = Math.floor(bytesRead / this.EntryClass.size);
+            for (let idx = 0; idx < entries; idx++) {
+                result[idx] = this.EntryClass.fromBuffer(outBuf, idx * this.EntryClass.size);
+            }
         }
-        if (from <= this.readUntil + 1) {
-            this.readUntil = Math.max(this.readUntil, until);
+
+        // Part 2: In-window entries [max(cacheStart, f), u] — use cache + disk for uncached ones
+        // All indices accessed below satisfy i >= inStart >= cacheStart, so each slot i % cacheSize
+        // is exclusive to index i within the window and cannot hold a stale entry.
+        const inStart = Math.max(cacheStart, f);
+        if (inStart <= u) {
+            // Optimisation: skip entries already loaded sequentially into the cache
+            const readFrom = Math.max(this.readUntil + 1, inStart);
+
+            // Trim trailing entries already present in the cache.
+            // readUntil >= readFrom >= cacheStart throughout, so all slots checked are in-window.
+            let readUntil = u;
+            while (readUntil >= readFrom && readUntil >= cacheStart && this.cache[readUntil % this.cacheSize]) {
+                readUntil--;
+            }
+
+            if (readFrom <= readUntil) {
+                const count = readUntil - readFrom + 1;
+                const inBuf = Buffer.allocUnsafe(count * this.EntryClass.size);
+                const bytesRead = fs.readSync(this.fd, inBuf, 0, inBuf.byteLength, this.headerSize + readFrom * this.EntryClass.size);
+                const entries = Math.floor(bytesRead / this.EntryClass.size);
+                for (let idx = 0; idx < entries; idx++) {
+                    const i = readFrom + idx;
+                    this.cache[i % this.cacheSize] = this.EntryClass.fromBuffer(inBuf, idx * this.EntryClass.size);
+                }
+                if (inStart <= this.readUntil + 1) {
+                    this.readUntil = Math.max(this.readUntil, readUntil);
+                }
+            }
+
+            // Fill the result from the ring buffer for the in-window portion
+            for (let i = inStart; i <= u; i++) {
+                result[i - f] = this.cache[i % this.cacheSize];
+            }
         }
 
-        return this.data.slice(from, until + 1);
+        return result;
     }
 
     /**
@@ -318,13 +364,18 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {Entry|boolean} The entry at the given index position or false if out of bounds.
      */
     get(index) {
-        index = wrapAndCheck(index, this.length);
+        index = wrapAndCheck(index, this._length);
         if (index <= 0) {
             return false;
         }
 
-        if (this.data[index - 1]) {
-            return this.data[index - 1];
+        const i = index - 1; // 0-based
+        // The ring buffer window is [_length - cacheSize, _length - 1].
+        // Within this window every index maps to a unique slot (no two indices share a slot),
+        // so a non-null slot is guaranteed to belong to index i and cannot be stale.
+        if (i >= this._length - this.cacheSize) {
+            const cached = this.cache[i % this.cacheSize];
+            if (cached) return cached;
         }
 
         return this.read(index);
@@ -354,24 +405,44 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
     range(from, until = -1) {
-        from = wrapAndCheck(from, this.length);
-        until = wrapAndCheck(until, this.length);
+        from = wrapAndCheck(from, this._length);
+        until = wrapAndCheck(until, this._length);
 
         if (from <= 0 || until < from) {
             return false;
         }
 
-        const readFrom = Math.max(this.readUntil + 1, from);
-        let readUntil = until;
-        while (readUntil >= readFrom && this.data[readUntil - 1]) {
-            readUntil--;
+        const f = from - 1; // 0-based
+        const u = until - 1; // 0-based
+        const cacheStart = Math.max(0, this._length - this.cacheSize);
+
+        // Determine if any disk reads are required
+        const hasOutOfWindow = f < cacheStart;
+        const inStart = Math.max(cacheStart, f);
+        // Entries in [inStart, readUntil] are assumed cached (sequential read guarantee).
+        // All indices in [readFrom, u] satisfy >= inStart >= cacheStart — unique, non-stale slots.
+        const readFrom = Math.max(this.readUntil + 1, inStart);
+        let needsDiskRead = hasOutOfWindow;
+        if (!needsDiskRead && inStart <= u) {
+            // Scan backwards for uncached in-window tail entries (all >= cacheStart, no stale slots).
+            let scanUntil = u;
+            while (scanUntil >= readFrom && scanUntil >= cacheStart && this.cache[scanUntil % this.cacheSize]) {
+                scanUntil--;
+            }
+            needsDiskRead = readFrom <= scanUntil;
         }
 
-        if (readFrom <= readUntil) {
-            this.readRange(readFrom, readUntil);
+        if (needsDiskRead) {
+            return this.readRange(from, until);
         }
 
-        return this.data.slice(from - 1, until);
+        // All required entries are already in the ring buffer — build result directly.
+        // f >= cacheStart here (hasOutOfWindow is false), so all slots are in-window and valid.
+        const result = new Array(u - f + 1);
+        for (let i = f; i <= u; i++) {
+            result[i - f] = this.cache[i % this.cacheSize];
+        }
+        return result;
     }
 
     /**
