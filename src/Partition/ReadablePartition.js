@@ -139,6 +139,48 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Get the sequence number of the last complete document in this partition.
+     * If the last document is a torn write, returns the sequence number of the document before it.
+     *
+     * @returns {number} The sequence number of the last complete document, or -1 if the partition is empty.
+     */
+    getLastSequenceNumber() {
+        if (this.size === 0) {
+            return -1;
+        }
+        const reader = this.prepareReadBufferBackwards(this.size);
+        if (!reader.buffer) {
+            return -1;
+        }
+        const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
+        let position;
+        if (separator !== DOCUMENT_SEPARATOR) {
+            // Last document is torn; find the complete document just before it
+            const tornPosition = this.findDocumentPositionBefore(this.size);
+            if (tornPosition === false || tornPosition === 0) {
+                return -1;
+            }
+            position = this.findDocumentPositionBefore(tornPosition);
+        } else {
+            // Last document is complete; find its start position
+            position = this.findDocumentPositionBefore(this.size);
+        }
+        if (position === false || position < 0) {
+            return -1;
+        }
+        const docReader = this.prepareReadBuffer(position);
+        if (!docReader.buffer) {
+            return -1;
+        }
+        try {
+            const { sequenceNumber } = this.readDocumentHeader(docReader.buffer, docReader.cursor, position);
+            return sequenceNumber;
+        } catch (e) {
+            return -1;
+        }
+    }
+
+    /**
      * Read the partition metadata from the file.
      *
      * @private

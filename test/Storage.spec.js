@@ -1,5 +1,6 @@
 const expect = require('expect.js');
 const fs = require('fs-extra');
+const path = require('path');
 const Storage = require('../src/Storage');
 const zlib = require('zlib');
 //const lz4 = require('lz4');
@@ -726,6 +727,123 @@ describe('Storage', function() {
             const repairedIndex = storage.openIndex('foobar');
             expect(repairedIndex.length).to.be(expectedSecondaryCount); // only entries 2,4,6 are still valid
         });
+    });
+
+    describe('checkTornWrites', function() {
+
+        it('emits primary-index-lagging when the primary index is behind partition data', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+
+            // Simulate: partition was flushed but index was only partially flushed (3 of 5 entries)
+            storage.index.truncate(3);
+            storage.index.flush();
+
+            let laggingArgs = null;
+            storage.on('primary-index-lagging', (expected, actual) => {
+                laggingArgs = [expected, actual];
+            });
+
+            storage.checkTornWrites();
+
+            // WritableStorage writes each doc with seqnum = index.length before the write (0-indexed).
+            // Doc5 was written when index.length=4, so seqnum=4. Thus index should have 5 entries (seqnum+1).
+            expect(laggingArgs).to.eql([5, 3]);
+        });
+
+        it('does not emit primary-index-lagging when the index is up to date', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+
+            let laggingDetected = false;
+            storage.on('primary-index-lagging', () => {
+                laggingDetected = true;
+            });
+
+            storage.checkTornWrites();
+
+            expect(laggingDetected).to.be(false);
+        });
+
+        it('does not emit primary-index-lagging when torn write is present and index is up to date', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+            storage.close();
+
+            // Simulate torn write: truncate partition file to remove last document's footer (8 bytes)
+            const partitionName = path.join(dataDirectory, 'storage');
+            const fd = fs.openSync(partitionName, 'r+');
+            const stat = fs.fstatSync(fd);
+            fs.ftruncateSync(fd, stat.size - 8);
+            fs.closeSync(fd);
+
+            storage = createStorage();
+            storage.open();
+
+            let laggingDetected = false;
+            storage.on('primary-index-lagging', () => {
+                laggingDetected = true;
+            });
+
+            storage.checkTornWrites();
+
+            expect(laggingDetected).to.be(false);
+        });
+
+        it('emits primary-index-lagging when both torn write and index lag are present', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+            storage.close();
+
+            // Simulate torn write on last doc AND a lagging index (only 3 of 5 entries flushed)
+            const partitionName = path.join(dataDirectory, 'storage');
+            const fd = fs.openSync(partitionName, 'r+');
+            const stat = fs.fstatSync(fd);
+            fs.ftruncateSync(fd, stat.size - 8); // remove DOCUMENT_FOOTER_SIZE (8) bytes
+            fs.closeSync(fd);
+
+            // Re-open and truncate index to 3 to simulate index lag
+            storage = createStorage();
+            storage.open();
+            storage.index.truncate(3);
+            storage.index.flush();
+            storage.close();
+
+            storage = createStorage();
+            storage.open();
+
+            let laggingArgs = null;
+            storage.on('primary-index-lagging', (expected, actual) => {
+                laggingArgs = [expected, actual];
+            });
+
+            storage.checkTornWrites();
+
+            // After torn write removal: doc5 (seqnum=4) is removed. Last complete doc4 has seqnum=3
+            // (0-indexed: doc4 was written when index.length=3). Index needs 4 entries; it only has 3.
+            expect(laggingArgs).to.eql([4, 3]);
+        });
+
     });
 
     describe('matches', function() {
