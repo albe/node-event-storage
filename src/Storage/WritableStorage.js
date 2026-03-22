@@ -187,6 +187,7 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * Attempt to lock this storage by means of a lock directory.
      * @returns {boolean} True if the lock was created or false if the lock is already in place.
      * @throws {StorageLockedError} If this storage is already locked by another process.
      * @throws {Error} If the lock could not be created.
