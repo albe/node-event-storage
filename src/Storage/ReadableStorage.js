@@ -308,45 +308,45 @@ class ReadableStorage extends events.EventEmitter {
      * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number}>}
      */
     *iteratePartitionsBySequenceNumber(fromSeq, untilSeq) {
-        const iterators = [];
+        const partitions = [];
 
         for (const partition of Object.values(this.partitions)) {
             if (!partition.isOpen()) {
                 partition.open();
             }
             const headerOut = {};
-            const gen = partition.readAll(0, headerOut);
+            const reader = partition.readAll(0, headerOut);
 
             // Advance to the first document with sequenceNumber >= fromSeq
-            let result = gen.next();
+            let result = reader.next();
             while (!result.done && headerOut.sequenceNumber < fromSeq) {
-                result = gen.next();
+                result = reader.next();
             }
 
             if (!result.done && headerOut.sequenceNumber <= untilSeq) {
-                iterators.push({ gen, headerOut, data: result.value, sequenceNumber: headerOut.sequenceNumber, position: headerOut.position, partitionName: partition.name });
+                partitions.push({ reader, headerOut, data: result.value, sequenceNumber: headerOut.sequenceNumber, position: headerOut.position, partitionName: partition.name });
             }
         }
 
         // K-way merge: at each step, yield the document with the smallest sequenceNumber
-        while (iterators.length > 0) {
+        while (partitions.length > 0) {
             let minIdx = 0;
-            for (let i = 1; i < iterators.length; i++) {
-                if (iterators[i].sequenceNumber < iterators[minIdx].sequenceNumber) {
+            for (let i = 1; i < partitions.length; i++) {
+                if (partitions[i].sequenceNumber < partitions[minIdx].sequenceNumber) {
                     minIdx = i;
                 }
             }
 
-            const { data, sequenceNumber, partitionName, position } = iterators[minIdx];
+            const { data, sequenceNumber, partitionName, position } = partitions[minIdx];
             yield { document: this.serializer.deserialize(data), sequenceNumber, partitionName, position };
 
-            const next = iterators[minIdx].gen.next();
-            if (!next.done && iterators[minIdx].headerOut.sequenceNumber <= untilSeq) {
-                iterators[minIdx].data = next.value;
-                iterators[minIdx].sequenceNumber = iterators[minIdx].headerOut.sequenceNumber;
-                iterators[minIdx].position = iterators[minIdx].headerOut.position;
+            const next = partitions[minIdx].reader.next();
+            if (!next.done && partitions[minIdx].headerOut.sequenceNumber <= untilSeq) {
+                partitions[minIdx].data = next.value;
+                partitions[minIdx].sequenceNumber = partitions[minIdx].headerOut.sequenceNumber;
+                partitions[minIdx].position = partitions[minIdx].headerOut.position;
             } else {
-                iterators.splice(minIdx, 1);
+                partitions.splice(minIdx, 1);
             }
         }
     }
