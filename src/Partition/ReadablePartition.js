@@ -377,14 +377,17 @@ class ReadablePartition extends events.EventEmitter {
      * @api
      * @param {number} [after] The document position to start reading from.
      * @param {object|null} [headerOut] Optional object to populate with document header fields
-     *   (`dataSize`, `sequenceNumber`, `time64`) on each yield. Pass an existing object to avoid
-     *   extra allocation. The object is mutated in place before each yield.
+     *   (`dataSize`, `sequenceNumber`, `time64`, `position`) on each yield. Pass an existing object
+     *   to avoid extra allocation. The object is mutated in place before each yield.
      * @returns {Generator<string>} A generator that returns all documents in this partition.
      */
     *readAll(after = 0, headerOut = null) {
         let position = after < 0 ? this.size + after + 1 : after;
         let data;
         while ((data = this.readFrom(position, 0, headerOut)) !== false) {
+            if (headerOut !== null) {
+                headerOut.position = position;
+            }
             yield data;
             position += this.documentWriteSize(headerOut !== null ? headerOut.dataSize : Buffer.byteLength(data, 'utf8'));
         }
