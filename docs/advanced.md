@@ -130,17 +130,18 @@ node-event-storage is designed to survive hard process crashes (e.g. `SIGKILL`, 
 
 ### Quantifying the data-loss window
 
-Three factors bound how many events can be lost in a crash:
+Two factors bound how many events can be lost in a crash:
 
 1. **Partition write buffer** — each stream buffers up to `writeBufferSize` bytes or `maxWriteBufferDocuments` events before flushing. With a 16 KB buffer and ~100-byte events, that is at most ~160 events per stream.
-2. **Primary-index write buffer** — the index uses a separate 4 096-byte buffer (16 bytes per entry = 256 entries). Events whose partition data is on disk but whose index entry is not yet flushed are invisible after recovery until `reindex()` is called.
-3. **In-flight commit** — at most one commit's worth of events (bounded by `maxBatchSize`) may be torn.
+2. **In-flight commit** — at most one commit's worth of events (bounded by `maxBatchSize`) may be torn.
+
+Index entries that were buffered but not yet flushed at the time of the crash are **not** lost: `LOCK_RECLAIM` automatically reindexes from the data files on the next open, making all on-disk events visible again.
 
 With the default settings and a single stream the worst-case data loss is roughly:
 
 ```
-max_loss ≈ (writeBufferSize / avg_event_size) + (4096 / 16) + max_batch_size
-         ≈ 160 + 256 + batch_size   (for 100-byte events and a 16 KB write buffer)
+max_loss ≈ (writeBufferSize / avg_event_size) + max_batch_size
+         ≈ 160 + batch_size   (for 100-byte events and a 16 KB write buffer)
 ```
 
 ### The stress test
@@ -284,11 +285,14 @@ const eventstore = new EventStore('my-event-store', {
 });
 ```
 
-Alternatively, always pass the matcher explicitly when opening a stream — the store will verify the supplied matcher matches the one stored in the index:
+Alternatively, always pass the matcher explicitly when creating a stream — the store will verify the supplied matcher matches the one stored in the index:
 
 ```javascript
 // Explicitly re-supply the matcher — the store verifies it matches
-const stream = eventstore.getEventStream('my-projection-stream');
+const stream = eventstore.createEventStream(
+    'my-projection-stream',
+    (event) => ['FooHappened', 'BarHappened'].includes(event.type)
+);
 ```
 
 ## Access Control Hooks
