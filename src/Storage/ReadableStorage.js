@@ -310,16 +310,17 @@ class ReadableStorage extends events.EventEmitter {
             if (!partition.isOpen()) {
                 partition.open();
             }
-            const gen = partition.readAllWithHeaders();
+            const headerOut = {};
+            const gen = partition.readAll(0, headerOut);
 
             // Advance to the first document with sequenceNumber >= fromSeq
             let result = gen.next();
-            while (!result.done && result.value.sequenceNumber < fromSeq) {
+            while (!result.done && headerOut.sequenceNumber < fromSeq) {
                 result = gen.next();
             }
 
-            if (!result.done && result.value.sequenceNumber <= untilSeq) {
-                iterators.push({ gen, current: result.value });
+            if (!result.done && headerOut.sequenceNumber <= untilSeq) {
+                iterators.push({ gen, headerOut, data: result.value, sequenceNumber: headerOut.sequenceNumber });
             }
         }
 
@@ -327,16 +328,17 @@ class ReadableStorage extends events.EventEmitter {
         while (iterators.length > 0) {
             let minIdx = 0;
             for (let i = 1; i < iterators.length; i++) {
-                if (iterators[i].current.sequenceNumber < iterators[minIdx].current.sequenceNumber) {
+                if (iterators[i].sequenceNumber < iterators[minIdx].sequenceNumber) {
                     minIdx = i;
                 }
             }
 
-            yield this.serializer.deserialize(iterators[minIdx].current.data);
+            yield this.serializer.deserialize(iterators[minIdx].data);
 
             const next = iterators[minIdx].gen.next();
-            if (!next.done && next.value.sequenceNumber <= untilSeq) {
-                iterators[minIdx].current = next.value;
+            if (!next.done && iterators[minIdx].headerOut.sequenceNumber <= untilSeq) {
+                iterators[minIdx].data = next.value;
+                iterators[minIdx].sequenceNumber = iterators[minIdx].headerOut.sequenceNumber;
             } else {
                 iterators.splice(minIdx, 1);
             }
