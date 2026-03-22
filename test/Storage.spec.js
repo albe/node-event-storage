@@ -730,6 +730,22 @@ describe('Storage', function() {
             expect(i).to.be(7);
         });
 
+        it('truncates using a negative document number relative to end', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 10; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            storage.truncate(-4); // keep all but last 4: positions 1..6
+
+            expect(storage.length).to.be(6);
+            expect(storage.read(6)).to.eql({ foo: 6 });
+        });
+
         it('truncates after the given document number on each partition', function() {
             storage = createStorage({
                 partitioner: (doc, number) => 'part-' + (parseInt((number - 1) / 4) % 4)
@@ -834,7 +850,7 @@ describe('Storage', function() {
 
     describe('checkTornWrites', function() {
 
-        it('emits primary-index-lagging when the primary index is behind partition data', function() {
+        it('auto-repairs primary index when it is lagging behind partition data', function() {
             storage = createStorage();
             storage.open();
 
@@ -847,19 +863,16 @@ describe('Storage', function() {
             storage.index.truncate(3);
             storage.index.flush();
 
-            let laggingArgs = null;
-            storage.on('primary-index-lagging', (expected, actual) => {
-                laggingArgs = [expected, actual];
-            });
-
             storage.checkTornWrites();
 
-            // WritableStorage writes each doc with seqnum = index.length before the write (0-indexed).
-            // Doc5 was written when index.length=4, so seqnum=4. Thus index should have 5 entries (seqnum+1).
-            expect(laggingArgs).to.eql([5, 3]);
+            // After auto-repair, all 5 documents should be accessible via primary index.
+            expect(storage.index.length).to.be(5);
+            for (let i = 1; i <= 5; i++) {
+                expect(storage.read(i)).to.eql({ foo: i });
+            }
         });
 
-        it('does not emit primary-index-lagging when the index is up to date', function() {
+        it('does not reindex when the index is up to date', function() {
             storage = createStorage();
             storage.open();
 
@@ -868,17 +881,14 @@ describe('Storage', function() {
             }
             storage.flush();
 
-            let laggingDetected = false;
-            storage.on('primary-index-lagging', () => {
-                laggingDetected = true;
-            });
+            const lengthBefore = storage.index.length;
 
             storage.checkTornWrites();
 
-            expect(laggingDetected).to.be(false);
+            expect(storage.index.length).to.be(lengthBefore);
         });
 
-        it('does not emit primary-index-lagging when torn write is present and index is up to date', function() {
+        it('does not reindex when torn write is present and index is up to date', function() {
             storage = createStorage();
             storage.open();
 
@@ -898,17 +908,13 @@ describe('Storage', function() {
             storage = createStorage();
             storage.open();
 
-            let laggingDetected = false;
-            storage.on('primary-index-lagging', () => {
-                laggingDetected = true;
-            });
-
             storage.checkTornWrites();
 
-            expect(laggingDetected).to.be(false);
+            // Doc5 was torn and removed; index should now have exactly 4 entries.
+            expect(storage.index.length).to.be(4);
         });
 
-        it('emits primary-index-lagging when both torn write and index lag are present', function() {
+        it('auto-repairs primary index when both torn write and index lag are present', function() {
             storage = createStorage();
             storage.open();
 
@@ -935,16 +941,201 @@ describe('Storage', function() {
             storage = createStorage();
             storage.open();
 
-            let laggingArgs = null;
-            storage.on('primary-index-lagging', (expected, actual) => {
-                laggingArgs = [expected, actual];
-            });
-
             storage.checkTornWrites();
 
-            // After torn write removal: doc5 (seqnum=4) is removed. Last complete doc4 has seqnum=3
-            // (0-indexed: doc4 was written when index.length=3). Index needs 4 entries; it only has 3.
-            expect(laggingArgs).to.eql([4, 3]);
+            // After torn write removal: doc5 is gone. Auto-repair rebuilds the missing entry
+            // for doc4, leaving the index with 4 entries for docs 1-4.
+            expect(storage.index.length).to.be(4);
+            for (let i = 1; i <= 4; i++) {
+                expect(storage.read(i)).to.eql({ foo: i });
+            }
+        });
+
+    });
+
+    describe('reindex', function() {
+
+        it('rebuilds primary index from scratch when called with 0', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+
+            // Simulate index corruption: truncate to empty
+            storage.index.truncate(0);
+            storage.index.flush();
+
+            storage.reindex(0);
+
+            expect(storage.index.length).to.be(5);
+            for (let i = 1; i <= 5; i++) {
+                expect(storage.read(i)).to.eql({ foo: i });
+            }
+        });
+
+        it('rebuilds primary index from a given position', function() {
+            storage = createStorage();
+            storage.open();
+
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+
+            // Simulate partial index loss: truncate to 3 entries
+            storage.index.truncate(3);
+            storage.index.flush();
+
+            storage.reindex(3);
+
+            expect(storage.index.length).to.be(5);
+            for (let i = 1; i <= 5; i++) {
+                expect(storage.read(i)).to.eql({ foo: i });
+            }
+        });
+
+        it('rebuilds primary index across multiple partitions', function() {
+            storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
+            storage.open();
+
+            for (let i = 1; i <= 9; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+
+            storage.index.truncate(4);
+            storage.index.flush();
+
+            storage.reindex(4);
+
+            expect(storage.index.length).to.be(9);
+            for (let i = 1; i <= 9; i++) {
+                expect(storage.read(i)).to.eql({ foo: i });
+            }
+        });
+
+        it('rebuilds loaded secondary indexes from given position', function() {
+            storage = createStorage();
+            storage.open();
+
+            storage.ensureIndex('evens', doc => doc.foo % 2 === 0);
+            for (let i = 1; i <= 6; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+
+            // Truncate both primary and secondary indexes to 3 entries
+            storage.index.truncate(3);
+            storage.index.flush();
+            const secIndex = storage.secondaryIndexes['evens'].index;
+            secIndex.truncate(1); // keep only entry for foo=2
+            secIndex.flush();
+
+            storage.reindex(3);
+
+            // Primary should have all 6 entries
+            expect(storage.index.length).to.be(6);
+            // Secondary should have entries for foo=2, foo=4, foo=6 (3 total)
+            expect(secIndex.length).to.be(3);
+            // Verify documents accessible via secondary index
+            expect(storage.read(1, secIndex)).to.eql({ foo: 2 });
+            expect(storage.read(2, secIndex)).to.eql({ foo: 4 });
+            expect(storage.read(3, secIndex)).to.eql({ foo: 6 });
+        });
+
+        it('rebuilds all secondary indexes from scratch when called with 0', function() {
+            storage = createStorage();
+            storage.open();
+
+            storage.ensureIndex('odds', doc => doc.foo % 2 !== 0);
+            for (let i = 1; i <= 6; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+
+            const secIndex = storage.secondaryIndexes['odds'].index;
+            secIndex.truncate(0);
+            secIndex.flush();
+            storage.index.truncate(0);
+            storage.index.flush();
+
+            storage.reindex(0);
+
+            expect(storage.index.length).to.be(6);
+            expect(secIndex.length).to.be(3); // foo=1, foo=3, foo=5
+        });
+
+        it('opens partitions that are not yet open when called directly after open()', function() {
+            // Session 1: write data and corrupt the index
+            storage = createStorage();
+            storage.open();
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            storage.flush();
+            storage.index.truncate(3);
+            storage.index.flush();
+            storage.close();
+
+            // Session 2: open without writing — partitions are lazily opened, so they are
+            // NOT open yet when reindex() is called directly after open()
+            storage = createStorage();
+            storage.open();
+
+            storage.reindex(3);
+
+            expect(storage.index.length).to.be(5);
+            for (let i = 1; i <= 5; i++) {
+                expect(storage.read(i)).to.eql({ foo: i });
+            }
+        });
+
+    });
+
+    describe('open (ready event)', function() {
+
+        it('emits ready event after opening', function(done) {
+            storage = createStorage();
+            storage.on('ready', done);
+            storage.open();
+        });
+
+        it('emits ready event after auto-repairing a lagging primary index', function(done) {
+            // Simulate a crashed writer: write data, partially flush index, but leave the lock
+            // file in place (do NOT call close(), which would remove the lock).
+            const crashedStorage = new Storage({ dataDirectory });
+            crashedStorage.open();
+            for (let i = 1; i <= 5; i++) {
+                crashedStorage.write({ foo: i });
+            }
+            crashedStorage.flush();
+            crashedStorage.index.truncate(3);
+            crashedStorage.index.flush();
+            // Close just the file handles to avoid fd conflicts, but leave the lock file in place
+            // so LOCK_RECLAIM knows it needs to run checkTornWrites().
+            crashedStorage.index.close();
+            crashedStorage.forEachPartition(partition => partition.close());
+            // (crashedStorage.locked remains true; lock file on disk is NOT removed)
+
+            // Reopen with LOCK_RECLAIM — detects the orphaned lock, runs checkTornWrites()
+            // (which calls reindex()), and then open() emits 'ready'.
+            const repairedStorage = new Storage({ dataDirectory, lock: Storage.LOCK_RECLAIM });
+            refs.push(repairedStorage);
+            let readyFired = false;
+            repairedStorage.on('ready', () => {
+                readyFired = true;
+                // Index should be fully repaired by the time 'ready' fires
+                expect(repairedStorage.index.length).to.be(5);
+                done();
+            });
+            repairedStorage.open();
+            // Note: 'ready' is emitted synchronously inside open(), so readyFired is already true
+            expect(readyFired).to.be(true);
+            // Prevent afterEach from trying to remove the now-gone lock file
+            crashedStorage.locked = false;
         });
 
     });

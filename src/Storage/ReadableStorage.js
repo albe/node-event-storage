@@ -317,11 +317,12 @@ class ReadableStorage extends events.EventEmitter {
      * Iterate documents across all partitions in sequenceNumber order using a k-way merge.
      * SequenceNumbers stored in document headers are 0-based.
      * Each yielded entry includes the deserialized document, its sequenceNumber, the partition name,
-     * and the byte position within the partition — allowing callers to rebuild index entries.
+     * the byte position within the partition, the data size, and the partition id —
+     * allowing callers to rebuild index entries.
      * @api
      * @param {number} fromSeq The 0-based sequenceNumber to start from (inclusive).
      * @param {number} untilSeq The 0-based sequenceNumber to read until (inclusive).
-     * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number}>}
+     * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partitionId: number}>}
      */
     *iteratePartitionsBySequenceNumber(fromSeq, untilSeq) {
         const partitions = [];
@@ -340,7 +341,7 @@ class ReadableStorage extends events.EventEmitter {
             }
 
             if (!result.done && headerOut.sequenceNumber <= untilSeq) {
-                partitions.push({ reader, headerOut, data: result.value, sequenceNumber: headerOut.sequenceNumber, position: headerOut.position, partitionName: partition.name });
+                partitions.push({ reader, headerOut, data: result.value, sequenceNumber: headerOut.sequenceNumber, position: headerOut.position, size: headerOut.dataSize, partitionId: partition.id, partitionName: partition.name });
             }
         }
 
@@ -353,14 +354,15 @@ class ReadableStorage extends events.EventEmitter {
                 }
             }
 
-            const { data, sequenceNumber, partitionName, position } = partitions[minIdx];
-            yield { document: this.serializer.deserialize(data), sequenceNumber, partitionName, position };
+            const { data, sequenceNumber, partitionName, position, size, partitionId } = partitions[minIdx];
+            yield { document: this.serializer.deserialize(data), sequenceNumber, partitionName, position, size, partitionId };
 
             const next = partitions[minIdx].reader.next();
             if (!next.done && partitions[minIdx].headerOut.sequenceNumber <= untilSeq) {
                 partitions[minIdx].data = next.value;
                 partitions[minIdx].sequenceNumber = partitions[minIdx].headerOut.sequenceNumber;
                 partitions[minIdx].position = partitions[minIdx].headerOut.position;
+                partitions[minIdx].size = partitions[minIdx].headerOut.dataSize;
             } else {
                 partitions.splice(minIdx, 1);
             }

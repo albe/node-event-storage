@@ -75,15 +75,17 @@ class WritableStorage extends ReadableStorage {
         if (!this.lock()) {
             return true;
         }
-        return super.open();
+        const result = super.open();
+        this.emit('ready');
+        return result;
     }
 
     /**
      * Check all partitions torn writes and truncate the storage to the position before the first torn write.
      * This might delete correctly written events in partitions, if their sequence number is higher than the
      * torn write in another partition.
-     * Also detects when the primary index is lagging behind the actual partition data and emits a
-     * 'primary-index-lagging' event in that case.
+     * Also detects when the primary index is lagging behind the actual partition data and automatically
+     * repairs it by invoking reindex().
      */
     checkTornWrites() {
         let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
@@ -100,6 +102,12 @@ class WritableStorage extends ReadableStorage {
                 if (tornSeqnum > 0) {
                     maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, tornSeqnum - 1);
                 }
+                // Physically remove the torn document from this partition so that subsequent
+                // partition reads (e.g. in reindex()) don't encounter the corrupt data.
+                const tornPosition = partition.findDocumentPositionBefore(partition.size);
+                if (tornPosition !== false && tornPosition >= 0) {
+                    partition.truncate(tornPosition);
+                }
             } else if (result > 0) {
                 // No torn write: result encodes (lastCompleteSeqnum + 1), so seqnum = result - 1.
                 maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, result - 1);
@@ -114,10 +122,68 @@ class WritableStorage extends ReadableStorage {
         }
         // A partition seqnum of N means the document was written when the index had N entries,
         // so the index should contain at least N+1 entries to be consistent.
+        // Automatically repair a lagging index by reindexing from the current index length.
         if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
-            this.emit('primary-index-lagging', maxPartitionSequenceNumber + 1, this.index.length);
+            this.reindex(this.index.length);
         }
         this.forEachPartition(partition => partition.close());
+    }
+
+    /**
+     * Rebuild the primary index and all loaded secondary indexes starting from the given sequence
+     * number by scanning the partition data directly.
+     * This is the building block for both auto-repair (invoked automatically when the primary
+     * index is found to be lagging in checkTornWrites()) and for user-driven re-indexing after
+     * index corruption.
+     *
+     * @api
+     * @param {number} [fromSequenceNumber=0] The number of primary index entries to keep intact.
+     *   All index entries beyond this position will be removed and rebuilt from partition data.
+     *   Defaults to 0, which rebuilds all indexes from scratch.
+     */
+    reindex(fromSequenceNumber = 0) {
+        this.index.truncate(fromSequenceNumber);
+
+        // Truncate all loaded secondary indexes to match the new primary length.
+        this.forEachSecondaryIndex(index => {
+            /* istanbul ignore if */
+            if (!(index instanceof WritableIndex)) {
+                return;
+            }
+            // find(0) returns 0, so truncate(0) will remove all entries when fromSequenceNumber===0
+            index.truncate(fromSequenceNumber === 0 ? 0 : index.find(fromSequenceNumber));
+        });
+
+        // Ensure all partitions are open so iteratePartitionsBySequenceNumber can read them.
+        this.forEachPartition(partition => {
+            if (!partition.isOpen()) {
+                partition.open();
+            }
+        });
+
+        // Scan partitions in sequence-number order and rebuild index entries.
+        for (const { document, partitionId, position, size } of
+            this.iteratePartitionsBySequenceNumber(fromSequenceNumber, Number.MAX_SAFE_INTEGER)) {
+            const newEntry = new WritableIndex.Entry(this.index.length + 1, position, size, partitionId);
+            this.index.add(newEntry);
+
+            this.forEachSecondaryIndex((secIndex, name) => {
+                /* istanbul ignore if */
+                if (!(secIndex instanceof WritableIndex)) {
+                    return;
+                }
+                /* istanbul ignore if */
+                if (!secIndex.isOpen()) {
+                    secIndex.open();
+                }
+                const { matcher } = this.secondaryIndexes[name];
+                if (matches(document, matcher)) {
+                    secIndex.add(newEntry);
+                }
+            });
+        }
+
+        this.flush();
     }
 
     /**
@@ -419,6 +485,7 @@ class WritableStorage extends ReadableStorage {
         const index = super.openIndex(name, matcher);
         const lastEntry = index.lastEntry;
         if (lastEntry !== false && lastEntry.number > this.index.length) {
+            // Secondary index is ahead of primary: truncate stale entries.
             index.truncate(index.find(this.index.length));
         }
         return index;
