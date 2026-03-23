@@ -162,6 +162,28 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * Helper method to iterate over all writable secondary indexes.
+     * Wraps `forEachSecondaryIndex` and skips any index that is not a WritableIndex instance
+     * (which cannot happen in practice since `createIndex` always returns a WritableIndex,
+     * but guards against unexpected base-class usage).
+     * Optionally accepts a `matchDocument` to restrict iteration to indexes whose matcher
+     * accepts that document — forwarded directly to `forEachSecondaryIndex`.
+     *
+     * @protected
+     * @param {function(WritableIndex, string)} iterationHandler
+     * @param {object} [matchDocument] If supplied, only indexes the document matches will be visited.
+     */
+    forEachWritableSecondaryIndex(iterationHandler, matchDocument) {
+        this.forEachSecondaryIndex((index, name) => {
+            /* istanbul ignore if */
+            if (!(index instanceof WritableIndex)) {
+                return;
+            }
+            iterationHandler(index, name);
+        }, matchDocument);
+    }
+
+    /**
      * Truncate the primary index and all writable secondary indexes to `fromSequenceNumber`,
      * discarding any entries beyond that point.
      *
@@ -171,11 +193,7 @@ class WritableStorage extends ReadableStorage {
     truncateIndexesToSequenceNumber(fromSequenceNumber) {
         this.index.truncate(fromSequenceNumber);
 
-        this.forEachSecondaryIndex(index => {
-            /* istanbul ignore if */
-            if (!(index instanceof WritableIndex)) {
-                return;
-            }
+        this.forEachWritableSecondaryIndex(index => {
             // find(0) returns 0, so truncate(0) will remove all entries when fromSequenceNumber===0
             index.truncate(fromSequenceNumber === 0 ? 0 : index.find(fromSequenceNumber));
         });
@@ -189,20 +207,13 @@ class WritableStorage extends ReadableStorage {
      * @param {WritableIndex.Entry} entry The index entry pointing to the document.
      */
     addDocumentToMatchingSecondaryIndexes(document, entry) {
-        this.forEachSecondaryIndex((secIndex, name) => {
-            /* istanbul ignore if */
-            if (!(secIndex instanceof WritableIndex)) {
-                return;
-            }
+        this.forEachWritableSecondaryIndex(secIndex => {
             /* istanbul ignore if */
             if (!secIndex.isOpen()) {
                 secIndex.open();
             }
-            const { matcher } = this.secondaryIndexes[name];
-            if (matches(document, matcher)) {
-                secIndex.add(entry);
-            }
-        });
+            secIndex.add(entry);
+        }, document);
     }
 
     /**
@@ -504,11 +515,7 @@ class WritableStorage extends ReadableStorage {
         this.truncatePartitions(after);
 
         this.index.truncate(after);
-        this.forEachSecondaryIndex(index => {
-            /* istanbul ignore if */
-            if (!(index instanceof WritableIndex)) {
-                return;
-            }
+        this.forEachWritableSecondaryIndex(index => {
             let closeIndex = false;
             if (!index.isOpen()) {
                 index.open();
