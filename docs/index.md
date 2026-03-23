@@ -87,3 +87,4 @@ Traditional databases do a great deal of work that event stores simply do not ne
 | [Event Streams](streams.md) | Writing, reading, revision ranges, fluent API, joining, categories, metadata |
 | [Consumers](consumers.md) | At-least-once & exactly-once delivery, state, consistency guards, read-only mode |
 | [Advanced Topics](advanced.md) | ACID details, reliability & crash-safety guarantees, storage config, partitioning, serialization, compression, security, access control |
+| [Implementation Architecture](architecture.md) | Source directory layout, component dependency diagram, and key technical decisions |
