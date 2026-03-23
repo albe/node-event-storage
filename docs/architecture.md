@@ -6,29 +6,29 @@ This page describes the technical implementation and architecture of the `node-e
 
 ## Source Directory Layout
 
-| File / Directory | Lines | Role |
-|------------------|------:|------|
-| `EventStore.js` | ~614 | Public API facade — manages streams, commits, consumers, and concurrency |
-| `EventStream.js` | ~275 | Iterable / Node.js Readable wrapper around a positional index |
-| `JoinEventStream.js` | ~104 | Merges several `EventStream` instances into one globally-ordered stream |
-| `Consumer.js` | ~302 | Durable event consumer with at-least-once / exactly-once delivery semantics |
-| `Watcher.js` | ~149 | Reference-counting singleton that watches a directory for file-system changes |
-| `WatchesFile.js` | ~55 | Mixin that wires a file to a `Watcher` instance and re-reads it on change |
-| `Clock.js` | ~42 | Monotonic microsecond clock for per-event timestamps |
-| `IndexEntry.js` | ~142 | Binary layout of one index record (partition, position, size, sequence number) |
-| `util.js` | ~216 | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
-| `Storage.js` | 4 | Facade — re-exports `WritableStorage` (default) and `ReadOnlyStorage` |
-| `Partition.js` | 5 | Facade — re-exports `WritablePartition` (default) and `ReadOnlyPartition` |
-| `Index.js` | 5 | Facade — re-exports `WritableIndex` (default) and `ReadOnlyIndex` |
-| `Storage/WritableStorage.js` | ~534 | Append-only storage with write buffering and a global primary index |
-| `Storage/ReadableStorage.js` | ~482 | Base class for read access: sequential scan, dirty reads, HMAC verification |
-| `Storage/ReadOnlyStorage.js` | ~116 | Read-only storage that reacts to new files written by a sibling writer process |
-| `Partition/WritablePartition.js` | ~362 | Append-only single-file partition with a write buffer and torn-write detection |
-| `Partition/ReadablePartition.js` | ~430 | Buffered reading, document header/footer parsing, and metadata deserialization |
-| `Partition/ReadOnlyPartition.js` | ~44 | Read-only partition that uses `WatchesFile` to detect appended data |
-| `Index/WritableIndex.js` | ~239 | Builds and persists a binary position-list index; detects index/data divergence |
-| `Index/ReadableIndex.js` | ~402 | Positional range lookups with binary search; loads and verifies stored matchers |
-| `Index/ReadOnlyIndex.js` | ~48 | Read-only index variant that polls for appended entries via `WatchesFile` |
+| File / Directory | Role |
+|------------------|------|
+| `EventStore.js` | Public API facade — manages streams, commits, consumers, and concurrency |
+| `EventStream.js` | Iterable / Node.js Readable wrapper around a positional index |
+| `JoinEventStream.js` | Merges several `EventStream` instances into one globally-ordered stream |
+| `Consumer.js` | Durable event consumer with at-least-once / exactly-once delivery semantics |
+| `Watcher.js` | Reference-counting singleton that watches a directory for file-system changes |
+| `WatchesFile.js` | Mixin that wires a file to a `Watcher` instance and re-reads it on change |
+| `Clock.js` | Monotonic microsecond clock for per-event timestamps |
+| `IndexEntry.js` | Binary layout of one index record (partition, position, size, sequence number) |
+| `util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
+| `Storage.js` | Facade — re-exports `WritableStorage` (default) and `ReadOnlyStorage` |
+| `Partition.js` | Facade — re-exports `WritablePartition` (default) and `ReadOnlyPartition` |
+| `Index.js` | Facade — re-exports `WritableIndex` (default) and `ReadOnlyIndex` |
+| `Storage/WritableStorage.js` | Append-only storage with write buffering and a global primary index |
+| `Storage/ReadableStorage.js` | Base class for read access: sequential scan, dirty reads, HMAC verification |
+| `Storage/ReadOnlyStorage.js` | Read-only storage that reacts to new files written by a sibling writer process |
+| `Partition/WritablePartition.js` | Append-only single-file partition with a write buffer and torn-write detection |
+| `Partition/ReadablePartition.js` | Buffered reading, document header/footer parsing, and metadata deserialization |
+| `Partition/ReadOnlyPartition.js` | Read-only partition that uses `WatchesFile` to detect appended data |
+| `Index/WritableIndex.js` | Builds and persists a binary position-list index; detects index/data divergence |
+| `Index/ReadableIndex.js` | Positional range lookups with binary search; loads and verifies stored matchers |
+| `Index/ReadOnlyIndex.js` | Read-only index variant that polls for appended entries via `WatchesFile` |
 
 ---
 
@@ -220,8 +220,8 @@ Every event is stamped with a `Clock` value that increments in microseconds and 
 
 ### Crash Recovery via Torn-Write Detection
 
-When a process is killed mid-commit, the last write to a partition file may be incomplete. On the next open, `ReadablePartition` checks whether the `commitId` in the final document matches the expected `commitSize`. If not, the incomplete commit is truncated. Combined with `LOCK_RECLAIM`, `WritableStorage` also detects when the primary index lags behind the data file and automatically calls `reindex()` before emitting `'ready'`. This gives bounded, predictable recovery with no manual intervention required.
+When a process is killed mid-commit, the last write to a partition file may be incomplete. On the next open, `ReadablePartition` detects the torn write by checking whether the `commitId` in the final document matches the expected `commitSize`. When a torn write is detected, `WritableStorage` delegates the actual file truncation to `WritablePartition`, which truncates the file to the position before the incomplete commit began. Combined with `LOCK_RECLAIM`, `WritableStorage` also detects when the primary index lags behind the data file and automatically calls `reindex()` before emitting `'ready'`. This gives bounded, predictable recovery with no manual intervention required.
 
 ### Three-Tier Variant Design (Writable / Readable / ReadOnly)
 
-Each layer (Storage, Partition, Index) ships three variants that share a common base class. This keeps the write-path code separate from the read-path code, allows read-only replicas to run in separate processes without pulling in the write-buffer machinery, and makes it straightforward to compose the right combination for a given deployment (single writer + multiple read-only projections, read-only Electron renderer process accessing a file written by the main process, etc.).
+Each layer (Storage, Partition, Index) has three variants: `Readable*` is the shared base class that implements all common read logic, `Writable*` extends it to add write-path code (write buffer, lock, indexing), and `ReadOnly*` extends it to add live-update detection via `WatchesFile`. This keeps the write-path code separate from the read-path code, allows read-only replicas to run in separate processes without pulling in the write-buffer machinery, and makes it straightforward to compose the right combination for a given deployment (single writer + multiple read-only projections, read-only Electron renderer process accessing a file written by the main process, etc.).
