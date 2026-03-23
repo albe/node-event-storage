@@ -81,20 +81,6 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Remove the last (incomplete / torn) document from a partition by truncating
-     * the file at the start position of that document.
-     *
-     * @private
-     * @param {WritablePartition} partition The partition that contains the torn document.
-     */
-    removeTornDocumentFromPartition(partition) {
-        const tornPosition = partition.findDocumentPositionBefore(partition.size);
-        if (tornPosition !== false && tornPosition >= 0) {
-            partition.truncate(tornPosition);
-        }
-    }
-
-    /**
      * Open all partitions and scan each one for torn writes.
      * Returns the lowest sequence number at which a torn write was detected and the highest
      * complete sequence number seen across all partitions.
@@ -116,14 +102,18 @@ class WritableStorage extends ReadableStorage {
                 // Torn write: result encodes -(tornSeqnum + 1), so torn seqnum = -result - 1.
                 const tornSeqnum = -result - 1;
                 lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSeqnum);
-                // Any complete documents before the torn one contribute to the lagging check.
-                // Their last seqnum is tornSeqnum - 1 (if > 0; otherwise no complete docs).
-                if (tornSeqnum > 0) {
-                    maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, tornSeqnum - 1);
+                // Complete documents before the torn one contribute to the lagging check.
+                // Their last seqnum is tornSeqnum - 1 (Math.max with -1 is a no-op when tornSeqnum=0).
+                maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, tornSeqnum - 1);
+                // Physically remove the torn document from this partition. This is necessary when
+                // the primary index is lagging: checkTornWrites' storage-level truncate locates
+                // the torn position via index entries, but a lagging index has no entry for the
+                // torn document, so the truncate is a no-op for this partition. Without this step,
+                // a subsequent reindex() scan would encounter the corrupt data and throw.
+                const tornPosition = partition.findDocumentPositionBefore(partition.size);
+                if (tornPosition !== false && tornPosition >= 0) {
+                    partition.truncate(tornPosition);
                 }
-                // Physically remove the torn document from this partition so that subsequent
-                // partition reads (e.g. in reindex()) don't encounter the corrupt data.
-                this.removeTornDocumentFromPartition(partition);
             } else if (result > 0) {
                 // No torn write: result encodes (lastCompleteSeqnum + 1), so seqnum = result - 1.
                 maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, result - 1);
@@ -192,20 +182,6 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Ensure every partition known to this storage is open for reading.
-     * Partitions that are already open are left untouched.
-     *
-     * @private
-     */
-    ensurePartitionsOpen() {
-        this.forEachPartition(partition => {
-            if (!partition.isOpen()) {
-                partition.open();
-            }
-        });
-    }
-
-    /**
      * Add a document to every writable secondary index whose matcher accepts it.
      *
      * @private
@@ -243,7 +219,7 @@ class WritableStorage extends ReadableStorage {
      */
     reindex(fromSequenceNumber = 0) {
         this.truncateIndexesToSequenceNumber(fromSequenceNumber);
-        this.ensurePartitionsOpen();
+        this.forEachPartition(partition => partition.open());
 
         // Scan partitions in sequence-number order and rebuild index entries.
         for (const { document, partitionId, position, size } of
