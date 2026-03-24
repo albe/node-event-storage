@@ -193,23 +193,22 @@ class WritableIndex extends ReadableIndex {
             throw new Error('Consistency error. Tried to add an index that should come before existing last entry.');
         }
 
-        if (this.readUntil === this._length - 1) {
+        if (this.readUntil === this._cache.length - 1) {
             this.readUntil++;
         }
-        this.cache[this._length % this.cacheSize] = entry;
-        this._length++;
+        this._cache.add(entry);
 
         if (this.writeBufferCursor === 0) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
         }
 
         this.writeBufferCursor += entry.toBuffer(this.writeBuffer, this.writeBufferCursor);
-        this.onFlush(callback, this._length);
+        this.onFlush(callback, this._cache.length);
         if (this.writeBufferCursor >= this.writeBuffer.byteLength) {
             this.flush();
         }
 
-        return this._length;
+        return this._cache.length;
     }
 
     /**
@@ -233,12 +232,7 @@ class WritableIndex extends ReadableIndex {
         }
         fs.truncateSync(this.fileName, truncatePosition);
 
-        // Clear ring buffer slots for the removed entries to avoid stale reads
-        const oldCacheStart = Math.max(0, this._length - this.cacheSize);
-        for (let i = Math.max(oldCacheStart, after); i < this._length; i++) {
-            this.cache[i % this.cacheSize] = null;
-        }
-        this._length = after;
+        this._cache.truncate(after);
         this.readUntil = Math.min(this.readUntil, after);
     }
 }
