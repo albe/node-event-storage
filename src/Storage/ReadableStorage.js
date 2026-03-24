@@ -334,10 +334,18 @@ class ReadableStorage extends events.EventEmitter {
             const headerOut = {};
             const reader = partition.readAll(0, headerOut);
 
-            // Advance to the first document with sequenceNumber >= fromSeq
-            let result = reader.next();
-            while (!result.done && headerOut.sequenceNumber < fromSeq) {
+            // Advance to the first document with sequenceNumber >= fromSeq.
+            // Stop gracefully if a torn write is encountered while scanning.
+            let result;
+            try {
                 result = reader.next();
+                while (!result.done && headerOut.sequenceNumber < fromSeq) {
+                    result = reader.next();
+                }
+            } catch (e) {
+                if (!(e instanceof Partition.CorruptFileError)) throw e;
+                result = { done: true };
+                continue;
             }
 
             if (!result.done && headerOut.sequenceNumber <= untilSeq) {
@@ -357,7 +365,14 @@ class ReadableStorage extends events.EventEmitter {
             const { data, sequenceNumber, partitionName, position, size, partitionId } = partitions[minIdx];
             yield { document: this.serializer.deserialize(data), sequenceNumber, partitionName, position, size, partitionId };
 
-            const next = partitions[minIdx].reader.next();
+            let next;
+            try {
+                next = partitions[minIdx].reader.next();
+            } catch (e) {
+                if (!(e instanceof Partition.CorruptFileError)) throw e;
+                partitions.splice(minIdx, 1);
+                continue;
+            }
             if (!next.done && partitions[minIdx].headerOut.sequenceNumber <= untilSeq) {
                 partitions[minIdx].data = next.value;
                 partitions[minIdx].sequenceNumber = partitions[minIdx].headerOut.sequenceNumber;
