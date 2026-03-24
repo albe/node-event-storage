@@ -90,7 +90,6 @@ class WritableStorage extends ReadableStorage {
     checkTornWrites() {
         let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
         let maxPartitionSequenceNumber = -1;
-        const tornPartitions = new Map();
         this.forEachPartition(partition => {
             partition.open();
             const result = partition.checkTornWrite();
@@ -103,11 +102,6 @@ class WritableStorage extends ReadableStorage {
                 if (tornSeqnum > 0) {
                     maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, tornSeqnum - 1);
                 }
-                // Record where this partition must be truncated to remove the torn document.
-                const tornPosition = partition.findDocumentPositionBefore(partition.size);
-                if (tornPosition !== false && tornPosition >= 0) {
-                    tornPartitions.set(partition.id, tornPosition);
-                }
             } else if (result > 0) {
                 // No torn write: result encodes (lastCompleteSeqnum + 1), so seqnum = result - 1.
                 maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, result - 1);
@@ -115,7 +109,7 @@ class WritableStorage extends ReadableStorage {
             // result === 0: empty partition, no action needed.
         });
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
-            this.truncate(lastValidSequenceNumber, tornPartitions);
+            this.truncate(lastValidSequenceNumber);
             // After truncation, account for documents beyond the truncation point being removed.
             // truncate(N) keeps index entries 1..N, so the last kept partition seqnum is N-1.
             maxPartitionSequenceNumber = Math.min(maxPartitionSequenceNumber, lastValidSequenceNumber - 1);
@@ -417,33 +411,44 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * Truncate all partitions after the given (global) sequence number.
-     * Also truncates any partitions at the positions given in tornPartitions, so that torn
-     * (partially-written) documents are removed from their respective partition files.
+     *
+     * For the common case the index is used to locate the truncation point in each affected
+     * partition. As a fallback, any open partition that still ends with a torn write after
+     * the index-based truncation is also truncated at the torn position. This handles the
+     * rare case where the torn write's index entry was never flushed to disk (e.g. a crash
+     * during a large unbuffered write before the next explicit flush).
      *
      * @private
      * @param {number} after The document sequence number to truncate after.
-     * @param {Map<number,number>} [tornPartitions] A map from partition id to truncation position
-     *   for partitions that contain torn (partially-written) documents.
      */
-    truncatePartitions(after, tornPartitions = new Map()) {
+    truncatePartitions(after) {
         if (after === 0) {
             this.forEachPartition(partition => partition.truncate(0));
             return;
         }
 
-        // Collect all truncation points: start with torn-partition positions, then add
-        // index-based positions for any other partition that has data beyond `after`.
-        const truncationPoints = new Map(tornPartitions);
+        // Collect truncation points using index entries for the first document beyond `after`.
+        const truncationPoints = new Map();
 
         const entries = this.index.range(after + 1);  // We need the first entry that is cut off
         if (entries !== false && entries.length > 0) {
             this.forEachDistinctPartitionOf(entries, entry => {
-                const existing = truncationPoints.get(entry.partition);
-                if (existing === undefined || entry.position < existing) {
-                    truncationPoints.set(entry.partition, entry.position);
-                }
+                truncationPoints.set(entry.partition, entry.position);
             });
         }
+
+        // Fallback: for any open partition not already in the truncation list, check whether it
+        // ends with a torn write. If so, record its torn position so the corrupt bytes are removed.
+        this.forEachPartition(partition => {
+            if (!partition.isOpen() || truncationPoints.has(partition.id)) return;
+            const result = partition.checkTornWrite();
+            if (result < 0) {
+                const tornPosition = partition.findDocumentPositionBefore(partition.size);
+                if (tornPosition !== false && tornPosition >= 0) {
+                    truncationPoints.set(partition.id, tornPosition);
+                }
+            }
+        });
 
         for (const [partitionId, position] of truncationPoints) {
             this.getPartition(partitionId).truncate(position);
@@ -454,11 +459,8 @@ class WritableStorage extends ReadableStorage {
      * Truncate the storage after the given sequence number.
      *
      * @param {number} after The document sequence number to truncate after.
-     * @param {Map<number,number>} [tornPartitions] A map from partition id to truncation position
-     *   for partitions that contain torn (partially-written) documents. Passed through to
-     *   truncatePartitions() so all partition truncation happens in one place.
      */
-    truncate(after, tornPartitions = new Map()) {
+    truncate(after) {
         /*
          To truncate the store following steps need to be done:
 
@@ -473,7 +475,7 @@ class WritableStorage extends ReadableStorage {
             after += this.index.length;
         }
 
-        this.truncatePartitions(after, tornPartitions);
+        this.truncatePartitions(after);
 
         this.index.truncate(after);
         this.forEachSecondaryIndex(index => {
