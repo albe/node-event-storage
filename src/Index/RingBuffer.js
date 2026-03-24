@@ -118,6 +118,26 @@ class RingBuffer {
     }
 
     /**
+     * Return a copy of the cached items for the 0-based range [from, until] (inclusive).
+     * Both `from` and `until` must be within the current window (>= windowStart).
+     *
+     * When the range is contiguous in the internal buffer a single native slice is
+     * returned.  When it wraps the two halves are concatenated.
+     *
+     * @param {number} from   0-based start position (inclusive).
+     * @param {number} until  0-based end position (inclusive).
+     * @returns {Array<*>}
+     */
+    slice(from, until) {
+        const slotFrom = from % this._capacity;
+        const slotUntil = until % this._capacity;
+        if (slotFrom <= slotUntil) {
+            return this._buffer.slice(slotFrom, slotUntil + 1);
+        }
+        return this._buffer.slice(slotFrom).concat(this._buffer.slice(0, slotUntil + 1));
+    }
+
+    /**
      * Clear all cached slots and reset `length` to 0.
      */
     reset() {

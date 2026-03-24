@@ -169,4 +169,34 @@ describe('RingBuffer', function() {
 
     });
 
+    describe('slice', function() {
+
+        it('returns a contiguous sub-range from the buffer', function() {
+            const rb = new RingBuffer(4);
+            rb.add('a'); rb.add('b'); rb.add('c');
+            expect(rb.slice(0, 2)).to.eql(['a', 'b', 'c']);
+        });
+
+        it('returns a sub-range that does not wrap', function() {
+            const rb = new RingBuffer(8);
+            ['a', 'b', 'c', 'd', 'e'].forEach(v => rb.add(v));
+            expect(rb.slice(1, 3)).to.eql(['b', 'c', 'd']);
+        });
+
+        it('handles a range that wraps around the internal buffer', function() {
+            const rb = new RingBuffer(4);
+            // After 6 adds: window=[2,5], slots: [4%4=0]=>'e', [5%4=1]=>'f', [2%4=2]=>'c', [3%4=3]=>'d'
+            ['a', 'b', 'c', 'd', 'e', 'f'].forEach(v => rb.add(v));
+            // Ask for [2, 5] (0-based, both inclusive) = 'c','d','e','f'
+            expect(rb.slice(2, 5)).to.eql(['c', 'd', 'e', 'f']);
+        });
+
+        it('returns a single-element slice', function() {
+            const rb = new RingBuffer(4);
+            rb.add('x'); rb.add('y'); rb.add('z');
+            expect(rb.slice(1, 1)).to.eql(['y']);
+        });
+
+    });
+
 });
