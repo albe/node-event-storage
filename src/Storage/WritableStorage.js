@@ -90,7 +90,6 @@ class WritableStorage extends ReadableStorage {
     checkTornWrites() {
         let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
         let maxPartitionSequenceNumber = -1;
-        const tornPartitions = new Map();
         this.forEachPartition(partition => {
             partition.open();
             const result = partition.checkTornWrite();
@@ -102,12 +101,6 @@ class WritableStorage extends ReadableStorage {
                 // Their last seqnum is tornSeqnum - 1 (if > 0; otherwise no complete docs).
                 if (tornSeqnum > 0) {
                     maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, tornSeqnum - 1);
-                }
-                // Record the file position of the torn document so that a synthetic index entry
-                // can be added below (enabling truncate() to locate the torn bytes via the index).
-                const tornPosition = partition.findDocumentPositionBefore(partition.size);
-                if (tornPosition !== false && tornPosition >= 0) {
-                    tornPartitions.set(partition.id, { tornSeqnum, tornPosition });
                 }
             } else if (result > 0) {
                 // No torn write: result encodes (lastCompleteSeqnum + 1), so seqnum = result - 1.
@@ -121,15 +114,6 @@ class WritableStorage extends ReadableStorage {
         // (CorruptFileError), so it fills in only the missing complete-document entries.
         if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
             this.reindex(this.index.length);
-        }
-
-        // For each torn document whose index entry was never persisted (e.g. the write buffer had
-        // not yet been flushed to disk when the process crashed), add a synthetic entry so that
-        // truncate() can find the torn byte position through the index alone.
-        for (const [partitionId, { tornSeqnum, tornPosition }] of tornPartitions) {
-            if (tornSeqnum >= this.index.length) {
-                this.index.add(new WritableIndex.Entry(tornSeqnum + 1, tornPosition, 0, partitionId));
-            }
         }
 
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
@@ -426,8 +410,12 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * Truncate all partitions after the given (global) sequence number.
-     * The index must be fully in sync with all partition data (including any torn documents)
-     * before this method is called, so that index.range(after+1) covers every truncation point.
+     *
+     * The index is used to locate the truncation point in each affected partition (common case).
+     * As a fallback, any open partition not covered by the index is checked directly via
+     * checkTornWrite() — this handles the rare case where a torn write's index entry was never
+     * flushed to disk. Because checkTornWrites() reindexes before calling truncate(), this
+     * fallback only fires for genuinely unflushed entries, not for a stale index.
      *
      * @private
      * @param {number} after The document sequence number to truncate after.
@@ -438,14 +426,32 @@ class WritableStorage extends ReadableStorage {
             return;
         }
 
+        const truncationPoints = new Map();
+
         const entries = this.index.range(after + 1);  // We need the first entry that is cut off
-        if (entries === false || entries.length === 0) {
-            return;
+        if (entries !== false && entries.length > 0) {
+            this.forEachDistinctPartitionOf(entries, entry => {
+                truncationPoints.set(entry.partition, entry.position);
+            });
         }
 
-        this.forEachDistinctPartitionOf(entries, entry => {
-            this.getPartition(entry.partition).truncate(entry.position);
+        // Fallback: for any open partition not already in the truncation list, check whether it
+        // ends with a torn write. If so, record its torn position so the corrupt bytes are removed.
+        // This covers the edge case where the torn write's index entry was never flushed to disk.
+        this.forEachPartition(partition => {
+            if (!partition.isOpen() || truncationPoints.has(partition.id)) return;
+            const result = partition.checkTornWrite();
+            if (result < 0) {
+                const tornPosition = partition.findDocumentPositionBefore(partition.size);
+                if (tornPosition !== false && tornPosition >= 0) {
+                    truncationPoints.set(partition.id, tornPosition);
+                }
+            }
         });
+
+        for (const [partitionId, position] of truncationPoints) {
+            this.getPartition(partitionId).truncate(position);
+        }
     }
 
     /**
