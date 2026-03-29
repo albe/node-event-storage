@@ -23,8 +23,8 @@ describe('util', function() {
             fs.writeFileSync(path.join(testDir, 'unrelated.txt'), '');
 
             const found = [];
-            scanForFiles(testDir, /(stream-.*)\.index$/, (match) => {
-                found.push(match[1]);
+            scanForFiles(testDir, /(stream-.*)\.index$/, (name) => {
+                found.push(name);
             }, (err) => {
                 expect(err).to.be(null);
                 expect(found.sort()).to.eql(['stream-bar', 'stream-foo']);
@@ -36,11 +36,24 @@ describe('util', function() {
             fs.writeFileSync(path.join(testDir, 'unrelated.txt'), '');
 
             const found = [];
-            scanForFiles(testDir, /(stream-.*)\.index$/, (match) => {
-                found.push(match[1]);
+            scanForFiles(testDir, /(stream-.*)\.index$/, (name) => {
+                found.push(name);
             }, (err) => {
                 expect(err).to.be(null);
                 expect(found).to.eql([]);
+                done();
+            });
+        });
+
+        it('falls back to the full match when there is no capturing group', function(done) {
+            fs.writeFileSync(path.join(testDir, 'stream-foo.index'), '');
+
+            const found = [];
+            scanForFiles(testDir, /stream-.*\.index$/, (name) => {
+                found.push(name);
+            }, (err) => {
+                expect(err).to.be(null);
+                expect(found).to.eql(['stream-foo.index']);
                 done();
             });
         });

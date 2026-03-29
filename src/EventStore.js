@@ -132,9 +132,7 @@ class EventStore extends events.EventEmitter {
             callback = () => {};
         }
         // Find existing streams by scanning dir for filenames starting with 'stream-'
-        scanForFiles(this.streamsDirectory, /(stream-.*)\.index$/, (match) => {
-            this.registerStream(match[1]);
-        }, (err) => {
+        scanForFiles(this.streamsDirectory, /(stream-.*)\.index$/, this.registerStream.bind(this), (err) => {
             if (err) {
                 return callback(err);
             }
@@ -587,9 +585,7 @@ class EventStore extends events.EventEmitter {
         }
         const regex = new RegExp(`^${this.storage.storageFile}\\.([^.]*\\..*)$`);
         const consumers = [];
-        scanForFiles(consumersPath, regex, (match) => {
-            consumers.push(match[1]);
-        }, /* istanbul ignore next */ (err) => {
+        scanForFiles(consumersPath, regex, consumers.push.bind(consumers), /* istanbul ignore next */ (err) => {
             if (err) {
                 return callback(err, []);
             }
