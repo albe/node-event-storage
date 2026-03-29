@@ -79,7 +79,7 @@ graph TD
     EventStore -->|"single ordered log"| Storage
     EventStore -->|"exposes"| EventStream
     EventStore -->|"exposes"| Consumer
-    Consumer -->|"iterates"| EventStream
+    EventStore -->|"writes to (default partition)"| Partition
     Consumer -->|"persists state"| Disk
 
     %% Storage coordinates Partition and Index
@@ -89,9 +89,8 @@ graph TD
     %% Partition has a secondary index (1:1 with a stream)
     Partition -->|"secondary index (1:1 with stream)"| Index
 
-    %% EventStream is the bridge: resolves positions via Index, reads data from Partition
+    %% EventStream iterates an index (independent of which partitions are visited)
     EventStream -->|"iterates"| Index
-    EventStream -->|"encompasses one partition (by default)"| Partition
 ```
 
 ---
