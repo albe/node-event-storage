@@ -132,12 +132,7 @@ class EventStore extends events.EventEmitter {
             callback = () => {};
         }
         // Find existing streams by scanning dir for filenames starting with 'stream-'
-        scanForFiles(this.streamsDirectory, /(stream-.*)\.index$/, this.registerStream.bind(this), (err) => {
-            if (err) {
-                return callback(err);
-            }
-            callback();
-        });
+        scanForFiles(this.streamsDirectory, /(stream-.*)\.index$/, this.registerStream.bind(this), callback);
         this.storage.on('index-created', this.registerStream.bind(this));
     }
 
