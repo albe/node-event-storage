@@ -20,6 +20,7 @@ class WritableIndex extends ReadableIndex {
      * @param {object} [options] An object with additional index options.
      * @param {EntryInterface} [options.EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [options.dataDirectory] The directory to store the index file in. Default '.'.
+     * @param {number} [options.cacheSize] The number of most-recent index entries to keep in memory. Default 1024.
      * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
@@ -192,22 +193,22 @@ class WritableIndex extends ReadableIndex {
             throw new Error('Consistency error. Tried to add an index that should come before existing last entry.');
         }
 
-        if (this.readUntil === this.data.length - 1) {
+        if (this.readUntil === this.cache.length - 1) {
             this.readUntil++;
         }
-        this.data[this.data.length] = entry;
+        this.cache.add(entry);
 
         if (this.writeBufferCursor === 0) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
         }
 
         this.writeBufferCursor += entry.toBuffer(this.writeBuffer, this.writeBufferCursor);
-        this.onFlush(callback, this.length);
+        this.onFlush(callback, this.cache.length);
         if (this.writeBufferCursor >= this.writeBuffer.byteLength) {
             this.flush();
         }
 
-        return this.length;
+        return this.cache.length;
     }
 
     /**
@@ -230,7 +231,8 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
-        this.data.splice(after);
+
+        this.cache.truncate(after);
         this.readUntil = Math.min(this.readUntil, after);
     }
 }

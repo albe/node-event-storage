@@ -504,6 +504,71 @@ describe('Index', function() {
 
     });
 
+    describe('cacheSize / ring buffer', function() {
+
+        it('limits in-memory entries to cacheSize (old entries still readable via disk)', function() {
+            const cacheSize = 5;
+            index = setupIndexWithEntries(20, { cacheSize });
+            index.close();
+            index.open();
+            // All entries must be readable even though only the last `cacheSize` are ever in memory.
+            for (let i = 1; i <= 20; i++) {
+                const entry = index.get(i);
+                expect(entry).not.to.be(false);
+                expect(entry.number).to.be(i);
+            }
+        });
+
+        it('can still read entries outside the cache window from disk', function() {
+            const cacheSize = 5;
+            index = setupIndexWithEntries(15, { cacheSize });
+            // Entry 1 is outside the cache window (window = [11, 15])
+            const entry = index.get(1);
+            expect(entry).not.to.be(false);
+            expect(entry.number).to.be(1);
+        });
+
+        it('can read a range that spans both cached and uncached entries', function() {
+            const cacheSize = 5;
+            index = setupIndexWithEntries(15, { cacheSize });
+            const entries = index.range(8, 13); // crosses the boundary
+            expect(entries.length).to.be(6);
+            for (let i = 0; i < entries.length; i++) {
+                expect(entries[i].number).to.be(8 + i);
+            }
+        });
+
+        it('truncation followed by re-adding entries returns the new values, not stale ones', function() {
+            const cacheSize = 10;
+            index = setupIndexWithEntries(15, { cacheSize });
+            index.truncate(7); // keep entries 1-7
+            // Add new entries at positions 8-10 with different numbers
+            for (let i = 8; i <= 10; i++) {
+                index.add(new Index.Entry(i + 100, i));
+            }
+            index.flush();
+            // New entries must return the just-added values, not the old truncated ones
+            for (let i = 8; i <= 10; i++) {
+                const entry = index.get(i);
+                expect(entry.number).to.be(i + 100);
+            }
+        });
+
+        it('remains fully functional after many adds that cycle the ring buffer', function() {
+            const cacheSize = 8;
+            index = setupIndexWithEntries(32, { cacheSize }); // 4 full cycles
+            index.close();
+            index.open();
+            // All entries readable via disk reads
+            const entries = index.all();
+            expect(entries.length).to.be(32);
+            for (let i = 0; i < entries.length; i++) {
+                expect(entries[i].number).to.be(i + 1);
+            }
+        });
+
+    });
+
     describe('ReadOnly', function(){
 
         it('can be created without explicit name', function(){

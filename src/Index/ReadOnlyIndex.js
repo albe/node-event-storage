@@ -24,9 +24,9 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
         if (!this.fd) {
             return;
         }
-        const prevLength = this.data.length;
+        const prevLength = this.cache.length;
         const newLength = this.readFileLength();
-        this.data.length = newLength;
+        this.cache.truncate(newLength);
         if (newLength > prevLength) {
             this.emit('append', prevLength, newLength);
         }

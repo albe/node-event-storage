@@ -3,6 +3,7 @@ const path = require('path');
 const events = require('events');
 const Entry = require('../IndexEntry');
 const { assert, wrapAndCheck, binarySearch } = require('../util');
+const RingBuffer = require('./RingBuffer');
 
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";
@@ -38,6 +39,7 @@ class ReadableIndex extends events.EventEmitter {
      * @param {object} [options] An object with additional index options.
      * @param {typeof EntryInterface} [options.EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [options.dataDirectory] The directory to store the index file in. Default '.'.
+     * @param {number} [options.cacheSize] The number of most-recent index entries to keep in memory. Default 1024.
      * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
@@ -65,8 +67,8 @@ class ReadableIndex extends events.EventEmitter {
      * @param {object} options
      */
     initialize(options) {
-        /* @type Array<Entry> */
-        this.data = [];
+        const cacheSize = options.cacheSize !== undefined ? options.cacheSize : 1024;
+        this.cache = new RingBuffer(cacheSize);
         this.fd = null;
         this.fileMode = 'r';
         this.EntryClass = options.EntryClass;
@@ -100,7 +102,7 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {number}
      */
     get length() {
-        return this.data.length;
+        return this.cache.length;
     }
 
     /**
@@ -155,7 +157,7 @@ class ReadableIndex extends events.EventEmitter {
 
         const length = this.readFileLength();
         if (length > 0) {
-            this.data = new Array(length);
+            this.cache.truncate(length);
             // Read last item to get the index started
             this.read(length);
         }
@@ -232,7 +234,7 @@ class ReadableIndex extends events.EventEmitter {
      * @api
      */
     close() {
-        this.data = [];
+        this.cache.reset();
         this.readUntil = -1;
         this.readBuffer.fill(0);
         if (this.fd) {
@@ -250,20 +252,23 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {Entry} The index entry at the given position.
      */
     read(index) {
-        index = Number(index) - 1;
+        const zeroBasedIndex = Number(index) - 1;
 
-        fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
-        if (index === this.readUntil + 1) {
+        fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + zeroBasedIndex * this.EntryClass.size);
+        if (zeroBasedIndex === this.readUntil + 1) {
             this.readUntil++;
         }
-        this.data[index] = this.EntryClass.fromBuffer(this.readBuffer);
-
-        return this.data[index];
+        const entry = this.EntryClass.fromBuffer(this.readBuffer);
+        this.cache.set(zeroBasedIndex, entry);
+        return entry;
     }
 
     /**
      * Read a range of entries from disk. This method will not do any range checks.
      * It will however optimize to prevent reading entries that have already been read sequentially from start.
+     *
+     * Entries within the cache window are stored in the cache; entries outside the window
+     * (older than cacheSize) are read from disk for the return value but not cached.
      *
      * @private
      * @param {number} from The 1-based index position from where to read from (inclusive).
@@ -275,25 +280,58 @@ class ReadableIndex extends events.EventEmitter {
             return [this.read(from)];
         }
 
-        from--;
-        until--;
+        const zeroBasedFrom = from - 1;
+        const zeroBasedUntil = until - 1;
+        const cacheStart = this.cache.windowStart;
 
-        const readFrom = Math.max(this.readUntil + 1, from);
-        const amount = (until - readFrom + 1);
+        // Build the result array up front
+        const result = new Array(zeroBasedUntil - zeroBasedFrom + 1);
 
-        const readBuffer = Buffer.allocUnsafe(amount * this.EntryClass.size);
-        let readSize = fs.readSync(this.fd, readBuffer, 0, readBuffer.byteLength, this.headerSize + readFrom * this.EntryClass.size);
-        let index = 0;
-        while (index < amount && readSize > 0) {
-            this.data[index + readFrom] = this.EntryClass.fromBuffer(readBuffer, index * this.EntryClass.size);
-            readSize -= this.EntryClass.size;
-            index++;
+        // Part 1: Out-of-window entries [zeroBasedFrom, min(cacheStart-1, zeroBasedUntil)] — read from disk, do not cache
+        const outEnd = Math.min(cacheStart - 1, zeroBasedUntil);
+        if (zeroBasedFrom < cacheStart && outEnd >= zeroBasedFrom) {
+            const count = outEnd - zeroBasedFrom + 1;
+            const outBuf = Buffer.allocUnsafe(count * this.EntryClass.size);
+            const bytesRead = fs.readSync(this.fd, outBuf, 0, outBuf.byteLength, this.headerSize + zeroBasedFrom * this.EntryClass.size);
+            const entries = Math.floor(bytesRead / this.EntryClass.size);
+            for (let idx = 0; idx < entries; idx++) {
+                result[idx] = this.EntryClass.fromBuffer(outBuf, idx * this.EntryClass.size);
+            }
         }
-        if (from <= this.readUntil + 1) {
-            this.readUntil = Math.max(this.readUntil, until);
+
+        // Part 2: In-window entries [max(cacheStart, zeroBasedFrom), zeroBasedUntil] — use cache + disk for uncached ones
+        const inStart = Math.max(cacheStart, zeroBasedFrom);
+        if (inStart <= zeroBasedUntil) {
+            // Optimisation: skip entries already loaded sequentially into the cache
+            const readFrom = Math.max(this.readUntil + 1, inStart);
+
+            // Trim trailing entries already present in the cache
+            let readUntilPos = zeroBasedUntil;
+            while (readUntilPos >= readFrom && this.cache.get(readUntilPos)) {
+                readUntilPos--;
+            }
+
+            if (readFrom <= readUntilPos) {
+                const count = readUntilPos - readFrom + 1;
+                const inBuf = Buffer.allocUnsafe(count * this.EntryClass.size);
+                const bytesRead = fs.readSync(this.fd, inBuf, 0, inBuf.byteLength, this.headerSize + readFrom * this.EntryClass.size);
+                const entries = Math.floor(bytesRead / this.EntryClass.size);
+                for (let idx = 0; idx < entries; idx++) {
+                    const index = readFrom + idx;
+                    this.cache.set(index, this.EntryClass.fromBuffer(inBuf, idx * this.EntryClass.size));
+                }
+                if (inStart <= this.readUntil + 1) {
+                    this.readUntil = Math.max(this.readUntil, readUntilPos);
+                }
+            }
+
+            // Fill the result from the cache for the in-window portion
+            for (let index = inStart; index <= zeroBasedUntil; index++) {
+                result[index - zeroBasedFrom] = this.cache.get(index);
+            }
         }
 
-        return this.data.slice(from, until + 1);
+        return result;
     }
 
     /**
@@ -318,14 +356,13 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {Entry|boolean} The entry at the given index position or false if out of bounds.
      */
     get(index) {
-        index = wrapAndCheck(index, this.length);
+        index = wrapAndCheck(index, this.cache.length);
         if (index <= 0) {
             return false;
         }
 
-        if (this.data[index - 1]) {
-            return this.data[index - 1];
-        }
+        const cached = this.cache.get(index - 1);
+        if (cached) return cached;
 
         return this.read(index);
     }
@@ -354,24 +391,37 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
     range(from, until = -1) {
-        from = wrapAndCheck(from, this.length);
-        until = wrapAndCheck(until, this.length);
+        from = wrapAndCheck(from, this.cache.length);
+        until = wrapAndCheck(until, this.cache.length);
 
         if (from <= 0 || until < from) {
             return false;
         }
 
-        const readFrom = Math.max(this.readUntil + 1, from);
-        let readUntil = until;
-        while (readUntil >= readFrom && this.data[readUntil - 1]) {
-            readUntil--;
+        const zeroBasedFrom = from - 1;
+        const zeroBasedUntil = until - 1;
+        const cacheStart = this.cache.windowStart;
+
+        // Determine if any disk reads are required
+        const hasOutOfWindow = zeroBasedFrom < cacheStart;
+        const inStart = Math.max(cacheStart, zeroBasedFrom);
+        const readFrom = Math.max(this.readUntil + 1, inStart);
+        let needsDiskRead = hasOutOfWindow;
+        if (!needsDiskRead && inStart <= zeroBasedUntil) {
+            // Scan backwards for uncached in-window tail entries
+            let scanUntil = zeroBasedUntil;
+            while (scanUntil >= readFrom && this.cache.get(scanUntil)) {
+                scanUntil--;
+            }
+            needsDiskRead = readFrom <= scanUntil;
         }
 
-        if (readFrom <= readUntil) {
-            this.readRange(readFrom, readUntil);
+        if (needsDiskRead) {
+            return this.readRange(from, until);
         }
 
-        return this.data.slice(from - 1, until);
+        // All required entries are already in the cache — return a slice directly
+        return this.cache.slice(zeroBasedFrom, zeroBasedUntil);
     }
 
     /**
