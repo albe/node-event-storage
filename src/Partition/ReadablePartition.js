@@ -397,13 +397,14 @@ class ReadablePartition extends events.EventEmitter {
      */
     *readAll(after = 0, headerOut = null) {
         let position = after < 0 ? this.size + after + 1 : after;
+        const internalHeader = headerOut !== null ? headerOut : {};
         let data;
-        while ((data = this.readFrom(position, 0, headerOut)) !== false) {
+        while ((data = this.readFrom(position, 0, internalHeader)) !== false) {
             if (headerOut !== null) {
                 headerOut.position = position;
             }
             yield data;
-            position += this.documentWriteSize(headerOut !== null ? headerOut.dataSize : Buffer.byteLength(data, 'utf8'));
+            position += this.documentWriteSize(internalHeader.dataSize);
         }
     }
 
