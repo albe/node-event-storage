@@ -25,7 +25,7 @@
     ".": "./index.js"
   },
   "scripts": {
-    "test": "c8 mocha test/*.spec.js",
+    "test": "c8 --reporter=lcov --reporter=text mocha test/*.spec.js",
     "coverage": "c8 report --reporter=text-lcov | coveralls"
   },
   "files": [

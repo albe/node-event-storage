@@ -124,7 +124,7 @@ How this works:
 Open the store in read-only mode to create consumers that run in a **separate process** from the writer:
 
 ```javascript
-const EventStore = require('event-storage');
+import { EventStore } from 'event-storage';
 
 const eventstore = new EventStore('my-event-store', {
     storageDirectory: './data',

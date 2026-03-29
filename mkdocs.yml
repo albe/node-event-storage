@@ -18,3 +18,4 @@ nav:
   - Consumers: consumers.md
   - Advanced Topics: advanced.md
   - Implementation Architecture: architecture.md
+  - Upgrading from 0.x to 1.0: upgrading.md

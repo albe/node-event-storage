@@ -11,7 +11,7 @@ npm install event-storage
 ## Quick Start
 
 ```javascript
-const EventStore = require('event-storage');
+import { EventStore } from 'event-storage';
 
 const eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
 
@@ -63,11 +63,11 @@ eventstore.commit('orders', [{ type: 'OrderShipped', orderId: 42 }], 3, (err) =>
 
 The `expectedVersion` can be:
 
-- `EventStore.ExpectedVersion.Any` (`-1`) — no check (the default).
-- `EventStore.ExpectedVersion.EmptyStream` (`0`) — only succeeds when the stream has no events yet.
+- `ExpectedVersion.Any` (`-1`) — no check (the default).
+- `ExpectedVersion.EmptyStream` (`0`) — only succeeds when the stream has no events yet.
 - Any positive integer — the stream must currently be at exactly that version.
 
-An `EventStore.OptimisticConcurrencyError` is thrown when the stream version does not match. See [Optimistic Concurrency](streams.md#optimistic-concurrency) for more details.
+An `OptimisticConcurrencyError` is thrown when the stream version does not match. See [Optimistic Concurrency](streams.md#optimistic-concurrency) for more details.
 
 ## Reading Events
 
