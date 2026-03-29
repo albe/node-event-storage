@@ -72,8 +72,7 @@ class ReadableIndex extends events.EventEmitter {
         this.EntryClass = options.EntryClass;
         this.dataDirectory = options.dataDirectory;
         this.fileName = path.resolve(options.dataDirectory, this.name);
-        this.readBuffer = Buffer.allocUnsafe(options.EntryClass.size);
-        this.rangeReadBuffer = Buffer.allocUnsafe(options.writeBufferSize > 0 ? options.writeBufferSize : 4096);
+        this.readBuffer = Buffer.allocUnsafe(Math.max(options.EntryClass.size, options.writeBufferSize > 0 ? options.writeBufferSize : 4096));
 
         if (options.metadata) {
             this.metadata = Object.assign({entryClass: options.EntryClass.name, entrySize: options.EntryClass.size}, options.metadata);
@@ -236,7 +235,6 @@ class ReadableIndex extends events.EventEmitter {
         this.data = [];
         this.readUntil = -1;
         this.readBuffer.fill(0);
-        this.rangeReadBuffer.fill(0);
         if (this.fd) {
             fs.closeSync(this.fd);
             this.fd = null;
@@ -284,8 +282,8 @@ class ReadableIndex extends events.EventEmitter {
         const amount = (until - readFrom + 1);
 
         const bufferSize = amount * this.EntryClass.size;
-        const readBuffer = bufferSize <= this.rangeReadBuffer.byteLength
-            ? this.rangeReadBuffer
+        const readBuffer = bufferSize <= this.readBuffer.byteLength
+            ? this.readBuffer
             : Buffer.allocUnsafe(bufferSize);
         let readSize = fs.readSync(this.fd, readBuffer, 0, bufferSize, this.headerSize + readFrom * this.EntryClass.size);
         let index = 0;
