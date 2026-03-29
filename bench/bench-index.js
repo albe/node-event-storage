@@ -12,6 +12,8 @@ const Stable = require('event-storage');
 const Latest = require('../index');
 
 const WRITES = 1000;
+let stableCallCount = 0;
+let latestCallCount = 0;
 
 function bench(index) {
 	index.open();
@@ -30,11 +32,11 @@ function bench(index) {
 }
 
 Suite.add('index [stable]', function() {
-	bench(new Stable.Index(this.cycles + '.index', { dataDirectory: 'data/stable' }));
+	bench(new Stable.Index((stableCallCount++) + '.index', { dataDirectory: 'data/stable' }));
 });
 
 Suite.add('index [latest]', function() {
-	bench(new Latest.Index(this.cycles + '.index', { dataDirectory: 'data/latest' }));
+	bench(new Latest.Index((latestCallCount++) + '.index', { dataDirectory: 'data/latest' }));
 });
 
 Suite.run();

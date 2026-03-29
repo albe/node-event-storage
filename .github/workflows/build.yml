@@ -9,19 +9,25 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions: {}
+
 jobs:
   build:
 
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      checks: write
 
     strategy:
       matrix:
         node-version: [18.x, 20.x, 22.x, 24.x]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: ${{ matrix.node-version }}
     - run: npm ci
@@ -37,6 +43,8 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      checks: write
     steps:
     - name: Coveralls Finished
       uses: coverallsapp/github-action@v2

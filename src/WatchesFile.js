@@ -35,7 +35,9 @@ const WatchesFile = Base => class extends Base {
      */
     open() {
         if (super.open()) {
-            this.watchFile();
+            if (!this.watcher) {
+                this.watchFile();
+            }
             return true;
         }
         return false;

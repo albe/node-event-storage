@@ -124,18 +124,32 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * @returns {number} -1 if the partition is ok and the sequence number of the broken document if a torn write was detected.
+     * Check if the last document in this partition is a torn write, and return the sequence
+     * number of the relevant document, encoded by sign:
+     *  - Returns a positive value `(lastCompleteSeqnum + 1)` when no torn write was found and the
+     *    partition is non-empty; the last complete document's sequence number is `result - 1`.
+     *  - Returns a negative value `-(tornSeqnum + 1)` when a torn write was detected; the torn
+     *    document's sequence number is `-(result) - 1`, and the last *complete* document's
+     *    sequence number (if any) is `-(result) - 2`.
+     *  - Returns `0` when the partition is empty (no documents at all).
+     *
+     * @returns {number}
      */
     checkTornWrite() {
+        if (this.size === 0) {
+            return 0;
+        }
         const reader = this.prepareReadBufferBackwards(this.size);
         const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
-        if (separator !== DOCUMENT_SEPARATOR) {
-            const position = this.findDocumentPositionBefore(this.size);
-            const reader = this.prepareReadBuffer(position);
-            const { sequenceNumber } = this.readDocumentHeader(reader.buffer, reader.cursor, position);
-            return sequenceNumber;
+        const torn = separator !== DOCUMENT_SEPARATOR;
+        const position = this.findDocumentPositionBefore(this.size);
+        /* istanbul ignore if */
+        if (position === false || position < 0) {
+            return 0;
         }
-        return -1;
+        const lastReader = this.prepareReadBuffer(position);
+        const { sequenceNumber } = this.readDocumentHeader(lastReader.buffer, lastReader.cursor, position);
+        return torn ? -(sequenceNumber + 1) : sequenceNumber + 1;
     }
 
     /**
@@ -292,12 +306,14 @@ class ReadablePartition extends events.EventEmitter {
      * @api
      * @param {number} position The file position to read from.
      * @param {number} [size] The expected byte size of the document at the given position.
+     * @param {object|null} [headerOut] Optional object to populate with the document header fields
+     *   (`dataSize`, `sequenceNumber`, `time64`). Pass an existing object to avoid extra allocation.
      * @returns {string|boolean} The data stored at the given position or false if no data could be read.
      * @throws {Error} if the storage entry at the given position is corrupted.
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
-    readFrom(position, size = 0) {
+    readFrom(position, size = 0, headerOut = null) {
         assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
@@ -307,7 +323,12 @@ class ReadablePartition extends events.EventEmitter {
         }
 
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
-        const { dataSize } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
+        const { dataSize, sequenceNumber, time64 } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
+        if (headerOut !== null) {
+            headerOut.dataSize = dataSize;
+            headerOut.sequenceNumber = sequenceNumber;
+            headerOut.time64 = time64;
+        }
 
         // TODO: This should only be checked on opening
         const writeSize = this.documentWriteSize(dataSize);
@@ -369,14 +390,20 @@ class ReadablePartition extends events.EventEmitter {
     /**
      * @api
      * @param {number} [after] The document position to start reading from.
+     * @param {object|null} [headerOut] Optional object to populate with document header fields
+     *   (`dataSize`, `sequenceNumber`, `time64`, `position`) on each yield. Pass an existing object
+     *   to avoid extra allocation. The object is mutated in place before each yield.
      * @returns {Generator<string>} A generator that returns all documents in this partition.
      */
-    *readAll(after = 0) {
+    *readAll(after = 0, headerOut = null) {
         let position = after < 0 ? this.size + after + 1 : after;
         let data;
-        while ((data = this.readFrom(position)) !== false) {
+        while ((data = this.readFrom(position, 0, headerOut)) !== false) {
+            if (headerOut !== null) {
+                headerOut.position = position;
+            }
             yield data;
-            position += this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
+            position += this.documentWriteSize(headerOut !== null ? headerOut.dataSize : Buffer.byteLength(data, 'utf8'));
         }
     }
 

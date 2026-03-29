@@ -5,3 +5,16 @@ theme: readthedocs
 
 markdown_extensions:
   - admonition
+  - tables
+
+plugins:
+  - search
+  - mermaid2
+
+nav:
+  - Overview: index.md
+  - Getting Started: getting-started.md
+  - Event Streams: streams.md
+  - Consumers: consumers.md
+  - Advanced Topics: advanced.md
+  - Implementation Architecture: architecture.md

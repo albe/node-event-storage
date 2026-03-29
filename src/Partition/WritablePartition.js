@@ -307,18 +307,46 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
+     * Truncate the partition, removing all documents with sequenceNumber > after.
+     * Scans the partition file backwards to find the cutoff position.
+     *
+     * @api
+     * @param {number} after Keep all documents with sequenceNumber <= after. Documents with
+     *   sequenceNumber > after (and any torn write at the end) are removed.
+     */
+    truncateAfterSequence(after) {
+        let position = this.size;
+        let truncateAt = this.size; // default: nothing to truncate
+        while ((position = this.findDocumentPositionBefore(position)) !== false) {
+            const reader = this.prepareReadBufferBackwards(position);
+            if (!reader.buffer) break;
+            const { sequenceNumber } = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+            if (sequenceNumber > after) {
+                // This document must be removed; record its start as the new cutoff.
+                truncateAt = position;
+            } else {
+                break;
+            }
+        }
+        this.truncate(truncateAt);
+    }
+
+    /**
      * Truncate the partition storage at the given position.
      *
      * @api
      * @param {number} after The file position after which to truncate the partition.
      */
     truncate(after) {
-        if (after > this.size) {
+        if (after >= this.size) {
             return;
         }
         this.open();
         after = Math.max(0, after);
         this.flush();
+
+        // Always save the truncated part for manual recovery, even if it contains corrupted data
+        this.branchOff('truncated-' + Date.now(), after);
 
         try {
             this.readFrom(after);
@@ -327,10 +355,6 @@ class WritablePartition extends ReadablePartition {
                 throw new Error('Can only truncate on valid document boundaries.');
             }
         }
-
-        // copy all truncated documents to some delete log
-        const backupName = (new Date()).toISOString().substring(0,10);
-        this.branchOff(backupName, after);
 
         fs.truncateSync(this.fileName, this.headerSize + after);
         this.truncateReadBuffer(after);

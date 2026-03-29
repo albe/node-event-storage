@@ -63,6 +63,31 @@ describe('EventStore', function() {
         fsSync.readdir = originalReaddir;
     });
 
+    it('repairs unfinished commits', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        let events = [{foo: 'bar'}, {foo: 'baz'}, {foo: 'quux'}];
+        eventstore.on('ready', () => {
+            eventstore.commit('foo-bar', events, () => {
+                // Simulate an unfinished write after the second event (but indexes are still written)
+                const entry = eventstore.storage.index.get(3);
+                eventstore.storage.getPartition(entry.partition).truncate(entry.position);
+                eventstore.close();
+
+                eventstore = new EventStore({
+                    storageDirectory
+                });
+                eventstore.on('ready', () => {
+                    expect(eventstore.length).to.be(0);
+                    expect(eventstore.getStreamVersion('foo-bar')).to.be(0);
+                    done();
+                });
+            });
+        });
+    });
+
     it('repairs torn writes', function(done) {
         eventstore = new EventStore({
             storageDirectory
@@ -86,6 +111,131 @@ describe('EventStore', function() {
                     expect(eventstore2.getStreamVersion('foo-bar')).to.be(0);
                     eventstore2.close();
                     done();
+                });
+            });
+        });
+    });
+
+    it('repairs stale index entries when last readable event has a complete commit', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        eventstore.on('ready', () => {
+            // Commit two separate single-event commits to different streams
+            eventstore.commit('stream-a', [{ key: 1 }], () => {
+                eventstore.commit('stream-b', [{ key: 2 }], () => {
+                    // Truncate the partition at the second event's file position, making
+                    // the second index entry point beyond the end of the file, while the
+                    // first event (a complete single-event commit) remains fully intact.
+                    const entry = eventstore.storage.index.get(2);
+                    eventstore.storage.getPartition(entry.partition).truncate(entry.position);
+                    // Close flushes all indexes to disk so the index still has 2 entries
+                    eventstore.close();
+
+                    // Reopen: checkUnfinishedCommits detects the stale entry and truncates
+                    // the index to the last valid event (the else-if (truncateIndex) path)
+                    eventstore = new EventStore({
+                        storageDirectory
+                    });
+                    eventstore.on('ready', () => {
+                        // The first event (stream-a) must still be accessible
+                        expect(eventstore.length).to.be(1);
+                        expect(eventstore.getStreamVersion('stream-a')).to.be(1);
+                        const stream = eventstore.getEventStream('stream-a');
+                        expect(stream.events.length).to.be(1);
+                        expect(stream.events[0]).to.eql({ key: 1 });
+                        // The stale stream-b entry must have been removed
+                        expect(eventstore.getStreamVersion('stream-b')).to.be(0);
+                        done();
+                    });
+                });
+            });
+        });
+    });
+
+    it('does not lose previously committed data after repairing an unfinished commit', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        const committedEvents = [{foo: 'bar'}, {foo: 'baz'}];
+        const partialEvents = [{foo: 'quux'}, {foo: 'corge'}, {foo: 'grault'}];
+        eventstore.on('ready', () => {
+            // Commit first set of events (these should be preserved after repair)
+            eventstore.commit('stream-a', committedEvents, () => {
+                // Commit second set of events, then simulate an unfinished write
+                eventstore.commit('stream-b', partialEvents, () => {
+                    // Simulate an unfinished write: truncate partition after the second event,
+                    // leaving commitVersion=1 written but commitSize=3, so commit is unfinished
+                    const entry = eventstore.storage.index.get(eventstore.length - 1);
+                    eventstore.storage.getPartition(entry.partition).truncate(entry.position);
+                    // Close flushes all indexes to disk so the repair has accurate data
+                    eventstore.close();
+
+                    eventstore = new EventStore({
+                        storageDirectory
+                    });
+                    eventstore.on('ready', () => {
+                        // Previously committed stream-a events must still be accessible
+                        expect(eventstore.getStreamVersion('stream-a')).to.be(committedEvents.length);
+                        const stream = eventstore.getEventStream('stream-a');
+                        let i = 0;
+                        for (let event of stream) {
+                            expect(event).to.eql(committedEvents[i++]);
+                        }
+                        expect(i).to.be(committedEvents.length);
+                        // The unfinished stream-b commit must have been rolled back
+                        expect(eventstore.getStreamVersion('stream-b')).to.be(0);
+                        done();
+                    });
+                });
+            });
+        });
+    });
+
+    it('does not lose previously committed data after repairing a torn write', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        const committedEvents = [{foo: 'bar'}, {foo: 'baz'}];
+        const tornEvent = [{foo: 'quux'.repeat(500)}];
+        eventstore.on('ready', () => {
+            // Commit first set of events (these should be preserved after repair)
+            eventstore.commit('stream-a', committedEvents, () => {
+                // Commit a large event to stream-b, then simulate a torn write
+                eventstore.commit('stream-b', tornEvent, () => {
+                    // Flush all indexes to disk so they reflect committed state before the simulated crash
+                    eventstore.storage.flush();
+                    eventstore.storage.index.flush();
+
+                    // Simulate a torn write: truncate to 512 bytes, well short of the ~2KB document
+                    fs.truncateSync(eventstore.storage.getPartition('stream-b').fileName, 512);
+
+                    // The previous instance was not closed, so the lock still exists
+                    const eventstore2 = new EventStore({
+                        storageDirectory,
+                        storageConfig: {
+                            lock: LOCK_RECLAIM
+                        }
+                    });
+                    eventstore2.on('ready', () => {
+                        // Previously committed stream-a events must still be accessible
+                        expect(eventstore2.getStreamVersion('stream-a')).to.be(committedEvents.length);
+                        const stream = eventstore2.getEventStream('stream-a');
+                        let i = 0;
+                        for (let event of stream) {
+                            expect(event).to.eql(committedEvents[i++]);
+                        }
+                        expect(i).to.be(committedEvents.length);
+                        // The torn stream-b write must have been removed from the primary storage
+                        expect(eventstore2.length).to.be(committedEvents.length);
+                        // The secondary stream index for stream-b must also be repaired
+                        expect(eventstore2.getStreamVersion('stream-b')).to.be(0);
+                        eventstore2.close();
+                        done();
+                    });
                 });
             });
         });
@@ -961,6 +1111,330 @@ describe('EventStore', function() {
                     done();
                 })
             );
+        });
+
+    });
+
+
+    describe('preCommit', function() {
+
+        it('calls the hook before writing with the event and partition metadata', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push({ event, metadata }));
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['admin']);
+            expect(calls[0].event.payload.type).to.be('FooCreated');
+        });
+
+        it('aborts the write when the hook throws', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.preCommit((event, metadata) => {
+                if (!metadata.allowedRoles.includes('user')) {
+                    throw new Error('Not authorized');
+                }
+            });
+            expect(() => eventstore.commit('foo', [{ type: 'FooCreated' }])).to.throwError(/Not authorized/);
+            expect(eventstore.length).to.be(0);
+        });
+
+        it('supports per-stream metadata via a function', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: (streamName) => ({ streamName })
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push(metadata));
+            eventstore.commit('foo', [{ type: 'A' }]);
+            eventstore.commit('bar', [{ type: 'B' }]);
+            expect(calls[0].streamName).to.be('foo');
+            expect(calls[1].streamName).to.be('bar');
+        });
+
+        it('uses an empty metadata object for streams not in the streamMetadata map', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'known-stream': { allowedRoles: ['admin'] } }
+            });
+            const calls = [];
+            eventstore.preCommit((event, metadata) => calls.push(metadata));
+            // 'unknown-stream' is not in the object — should receive {} (no allowedRoles)
+            eventstore.commit('unknown-stream', [{ type: 'A' }]);
+            expect(calls[0].allowedRoles).to.be(undefined);
+        });
+
+        it('throws when the storage is opened in read-only mode', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.close();
+
+            const readOnly = new EventStore({
+                storageDirectory,
+                storageConfig: { readOnly: true }
+            });
+            readOnly.on('ready', () => {
+                expect(() => readOnly.preCommit(() => {})).to.throwError();
+                readOnly.close();
+                eventstore = null;
+                done();
+            });
+        });
+
+        it('supports eventstore.on("preCommit", handler) style', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            const calls = [];
+            eventstore.on('preCommit', (event, metadata) => calls.push({ event, metadata }));
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['admin']);
+        });
+
+        it('supports multiple handlers registered via on()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            const order = [];
+            eventstore.on('preCommit', () => order.push('first'));
+            eventstore.on('preCommit', () => order.push('second'));
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(order).to.eql(['first', 'second']);
+        });
+
+        it('supports removal of a handler via off()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('preCommit', handler);
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            expect(callCount).to.be(1);
+            eventstore.off('preCommit', handler);
+            eventstore.commit('foo', [{ type: 'FooUpdated' }]);
+            expect(callCount).to.be(1);
+        });
+
+        it('supports once() for a one-time handler', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            let callCount = 0;
+            eventstore.once('preCommit', () => callCount++);
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.commit('foo', [{ type: 'FooUpdated' }]);
+            expect(callCount).to.be(1);
+        });
+
+        it('throws when registering preCommit via on() on a read-only store', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.close();
+
+            const readOnly = new EventStore({
+                storageDirectory,
+                storageConfig: { readOnly: true }
+            });
+            readOnly.on('ready', () => {
+                expect(() => readOnly.on('preCommit', () => {})).to.throwError();
+                readOnly.close();
+                eventstore = null;
+                done();
+            });
+        });
+
+    });
+
+    describe('preRead', function() {
+
+        it('calls the hook before reading with the position and partition metadata', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const calls = [];
+            eventstore.preRead((position, metadata) => calls.push({ position, metadata }));
+
+            const stream = eventstore.getEventStream('foo');
+            const events = Array.from(stream);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['user']);
+            expect(typeof calls[0].position).to.be('number');
+        });
+
+        it('aborts the read when the hook throws', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['admin'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.preRead((position, metadata) => {
+                if (!metadata.allowedRoles.includes('user')) {
+                    throw new Error('Not authorized to read');
+                }
+            });
+
+            // EventStream.next() catches iterator errors, so iteration stops with no events
+            const stream = eventstore.getEventStream('foo');
+            const result = Array.from(stream);
+            expect(result).to.have.length(0);
+        });
+
+        it('works on a read-only store', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.close();
+
+            const readOnly = new EventStore({
+                storageDirectory,
+                storageConfig: { readOnly: true }
+            });
+            readOnly.on('ready', () => {
+                const calls = [];
+                expect(() => readOnly.preRead((pos, meta) => calls.push(meta))).to.not.throwError();
+                const stream = readOnly.getEventStream('foo');
+                Array.from(stream);
+                expect(calls).to.have.length(1);
+                readOnly.close();
+                eventstore = null;
+                done();
+            });
+        });
+
+        it('supports eventstore.on("preRead", handler) style', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const calls = [];
+            eventstore.on('preRead', (position, metadata) => calls.push({ position, metadata }));
+
+            const stream = eventstore.getEventStream('foo');
+            Array.from(stream);
+            expect(calls).to.have.length(1);
+            expect(calls[0].metadata.allowedRoles).to.eql(['user']);
+        });
+
+        it('supports multiple read handlers via on()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const order = [];
+            eventstore.on('preRead', () => order.push('first'));
+            eventstore.on('preRead', () => order.push('second'));
+
+            Array.from(eventstore.getEventStream('foo'));
+            expect(order).to.eql(['first', 'second']);
+        });
+
+        it('supports once() for a one-time preRead handler', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }, { type: 'FooUpdated' }]);
+            let callCount = 0;
+            eventstore.once('preRead', () => callCount++);
+            Array.from(eventstore.getEventStream('foo'));
+            expect(callCount).to.be(1);
+        });
+
+        it('supports removal of a read handler via off()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }, { type: 'FooUpdated' }]);
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('preRead', handler);
+            Array.from(eventstore.getEventStream('foo'));
+            expect(callCount).to.be(2);
+            eventstore.off('preRead', handler);
+            Array.from(eventstore.getEventStream('foo').reset());
+            expect(callCount).to.be(2);
+        });
+
+        it('supports removal of a read handler via removeListener()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }, { type: 'FooUpdated' }]);
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('preRead', handler);
+            Array.from(eventstore.getEventStream('foo'));
+            expect(callCount).to.be(2);
+            eventstore.removeListener('preRead', handler);
+            Array.from(eventstore.getEventStream('foo').reset());
+            expect(callCount).to.be(2);
+        });
+
+        it('delegates non-hook once() to EventEmitter', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            eventstore.once('ready', () => {
+                callCount++;
+                expect(callCount).to.be(1);
+                done();
+            });
+        });
+
+        it('delegates non-hook off() to EventEmitter', function() {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('ready', handler);
+            eventstore.off('ready', handler);
+            // No assertion needed — just must not throw
+        });
+
+        it('delegates addListener() to on()', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                streamMetadata: { 'foo': { allowedRoles: ['user'] } }
+            });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            const calls = [];
+            eventstore.addListener('preRead', (position, metadata) => calls.push(metadata));
+            Array.from(eventstore.getEventStream('foo'));
+            expect(calls).to.have.length(1);
+            expect(calls[0].allowedRoles).to.eql(['user']);
+        });
+
+        it('delegates removeListener() to off() for non-hook events', function() {
+            eventstore = new EventStore({ storageDirectory });
+            let callCount = 0;
+            const handler = () => callCount++;
+            eventstore.on('ready', handler);
+            eventstore.removeListener('ready', handler);
+            // No assertion needed — just must not throw
         });
 
     });

@@ -9,19 +9,24 @@ on:
   pull_request:
     types: [closed]
 
+permissions: {}
+
 jobs:
   bench:
     if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
 
     strategy:
       matrix:
         node-version: ['*']
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: ${{ matrix.node-version }}
     - run: npm ci
