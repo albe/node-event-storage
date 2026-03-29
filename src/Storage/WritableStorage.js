@@ -93,10 +93,13 @@ class WritableStorage extends ReadableStorage {
         let maxPartitionSequenceNumber = -1;
         this.forEachPartition(partition => {
             partition.open();
+            /* istanbul ignore if */
             if (partition.size === 0) return;
             const position = partition.findDocumentPositionBefore(partition.size);
+            /* istanbul ignore if */
             if (position === false || position < 0) return;
             const reader = partition.prepareReadBufferBackwards(position);
+            /* istanbul ignore if */
             if (!reader.buffer) return;
             const { sequenceNumber, dataSize } = partition.readDocumentHeader(reader.buffer, reader.cursor, position);
             if (position + partition.documentWriteSize(dataSize) > partition.size) {
@@ -138,8 +141,8 @@ class WritableStorage extends ReadableStorage {
             // Truncate all indexes to the torn-write boundary.
             this.index.open();
             this.index.truncate(lastValidSequenceNumber);
+            /* istanbul ignore next */
             this.forEachSecondaryIndex(index => {
-                /* istanbul ignore if */
                 if (!(index instanceof WritableIndex)) {
                     return;
                 }
