@@ -334,7 +334,7 @@ class ReadableStorage extends events.EventEmitter {
             const headerOut = {};
             const reader = partition.readAll(0, headerOut);
 
-            // Advance to the first document with sequenceNumber >= fromSeq
+            // Advance to the first document with sequenceNumber >= fromSeq.
             let result = reader.next();
             while (!result.done && headerOut.sequenceNumber < fromSeq) {
                 result = reader.next();
