@@ -49,9 +49,9 @@ Writable  ──extends──▶  Readable / Base
 ReadOnly  ──extends──▶  Readable / Base
 ```
 
-The diagram below shows the full dependency graph. **Solid arrows** (`──▶`) indicate a *uses / instantiates* relationship; **dashed arrows** (`- -▶`) indicate *extends / inherits*.
+The diagram below shows the key relationships between the four layers. **Arrows** (`──▶`) indicate a *uses / coordinates* relationship.
 
-> **Note:** `util` is a shared helper module imported by almost every component and is omitted from the diagram for readability.
+> **Note:** Each layer box represents all variants within that layer (Writable, Readable, ReadOnly). The per-variant inheritance chain and utility components are detailed in the tables above and the component descriptions below.
 
 ```mermaid
 graph TD
@@ -63,67 +63,31 @@ graph TD
     end
 
     subgraph storageLayer["Storage Layer"]
-        WritableStorage
-        ReadableStorage
-        ReadOnlyStorage
+        Storage
     end
 
     subgraph partitionLayer["Partition Layer"]
-        WritablePartition
-        ReadablePartition
-        ReadOnlyPartition
+        Partition
     end
 
     subgraph indexLayer["Index Layer"]
-        WritableIndex
-        ReadableIndex
-        ReadOnlyIndex
+        Index
     end
 
-    subgraph utilities["Utilities"]
-        Clock
-        IndexEntry
-        Watcher
-        WatchesFile
-    end
-
-    %% API Layer
-    EventStore     --> WritableStorage
-    EventStore     --> EventStream
-    EventStore     --> JoinEventStream
-    EventStore     --> Consumer
+    %% API relationships
+    EventStore --> Storage
+    EventStore --> EventStream
+    EventStore --> Consumer
     JoinEventStream --> EventStream
-    Consumer       --> ReadableStorage
+    Consumer --> Storage
 
-    %% Storage inheritance
-    WritableStorage -.-> ReadableStorage
-    ReadOnlyStorage -.-> ReadableStorage
+    %% Storage coordinates Partition and Index
+    Storage --> Partition
+    Storage --> Index
 
-    %% Storage → Partition / Index
-    WritableStorage --> WritablePartition
-    WritableStorage --> WritableIndex
-    ReadableStorage --> ReadOnlyPartition
-    ReadableStorage --> ReadOnlyIndex
-    ReadOnlyStorage --> Watcher
-
-    %% Partition inheritance
-    WritablePartition -.-> ReadablePartition
-    ReadOnlyPartition -.-> ReadablePartition
-
-    %% Partition → utilities
-    WritablePartition --> Clock
-    ReadOnlyPartition --> WatchesFile
-
-    %% Index inheritance
-    WritableIndex -.-> ReadableIndex
-    ReadOnlyIndex -.-> ReadableIndex
-
-    %% Index → utilities
-    ReadOnlyIndex --> WatchesFile
-    ReadableIndex --> IndexEntry
-
-    %% Watcher plumbing
-    WatchesFile --> Watcher
+    %% EventStream is the bridge: resolves positions via Index, reads data from Partition
+    EventStream --> Index
+    EventStream --> Partition
 ```
 
 ---
