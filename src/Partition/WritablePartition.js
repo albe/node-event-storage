@@ -308,6 +308,31 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
+     * Truncate the partition, removing all documents with sequenceNumber > after.
+     * Scans the partition file backwards to find the cutoff position.
+     *
+     * @api
+     * @param {number} after Keep all documents with sequenceNumber <= after. Documents with
+     *   sequenceNumber > after (and any torn write at the end) are removed.
+     */
+    truncateAfterSequence(after) {
+        let position = this.size;
+        let truncateAt = this.size; // default: nothing to truncate
+        while ((position = this.findDocumentPositionBefore(position)) !== false) {
+            const reader = this.prepareReadBufferBackwards(position);
+            if (!reader.buffer) break;
+            const { sequenceNumber } = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+            if (sequenceNumber > after) {
+                // This document must be removed; record its start as the new cutoff.
+                truncateAt = position;
+            } else {
+                break;
+            }
+        }
+        this.truncate(truncateAt);
+    }
+
+    /**
      * Truncate the partition storage at the given position.
      *
      * @api

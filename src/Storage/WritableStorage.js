@@ -81,32 +81,22 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Check all partitions for torn writes, physically repair each partition, truncate all indexes
-     * to the torn-write boundary, and then reindex to rebuild any missing index entries.
+     * Scan every partition's last document to detect torn writes inline.
+     * A document is torn when its expected end exceeds the actual file size:
+     *   position + documentWriteSize(dataSize) > partition.size
      *
-     * A document is torn when the partition file ends before the document's expected end position
-     * (i.e. position + documentWriteSize(dataSize) > partition.size).  This is detected inline
-     * during the backward scan, so no separate checkTornWrite() call is needed.
-     *
-     * Repair flow:
-     * 1. Read the last document of every partition.  When it is torn, record its sequence number
-     *    as a candidate for the global torn-write boundary (minimum across all partitions).
-     * 2. If torn writes were found, scan each partition backwards to find the last complete
-     *    document strictly before the boundary and truncate the file right after it.
-     * 3. Truncate all indexes to the torn-write boundary, then reindex to fill any lagging entries.
-     * 4. If no torn writes were found but the index is lagging, reindex directly.
+     * @private
+     * @returns {{ lastValidSequenceNumber: number, maxPartitionSequenceNumber: number }}
      */
-    checkTornWrites() {
+    findTornWriteBoundary() {
         let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
         let maxPartitionSequenceNumber = -1;
-
-        // Phase 1: read the last document of each partition to detect torn writes.
         this.forEachPartition(partition => {
             partition.open();
             if (partition.size === 0) return;
             const position = partition.findDocumentPositionBefore(partition.size);
             if (position === false || position < 0) return;
-            const reader = partition.prepareReadBuffer(position);
+            const reader = partition.prepareReadBufferBackwards(position);
             if (!reader.buffer) return;
             const { sequenceNumber, dataSize } = partition.readDocumentHeader(reader.buffer, reader.cursor, position);
             if (position + partition.documentWriteSize(dataSize) > partition.size) {
@@ -116,29 +106,37 @@ class WritableStorage extends ReadableStorage {
                 maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, sequenceNumber);
             }
         });
+        return { lastValidSequenceNumber, maxPartitionSequenceNumber };
+    }
+
+    /**
+     * Check all partitions for torn writes, physically repair each partition, truncate all indexes
+     * to the torn-write boundary, and then reindex to rebuild any missing index entries.
+     *
+     * A document is torn when the partition file ends before the document's expected end position
+     * (i.e. position + documentWriteSize(dataSize) > partition.size).  Detected inline in
+     * findTornWriteBoundary(), without any checkTornWrite() call.
+     *
+     * Repair flow:
+     * 1. findTornWriteBoundary() reads the last document of every partition and finds the global
+     *    torn-write boundary (minimum torn sequence number across all partitions).
+     * 2. If torn writes were found, truncateAfterSequence() removes all documents at or beyond
+     *    the boundary from each partition.
+     * 3. Truncate all indexes to the torn-write boundary, then reindex to fill any lagging entries.
+     * 4. If no torn writes were found but the index is lagging, reindex directly.
+     */
+    checkTornWrites() {
+        const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
 
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
-            // Phase 2: truncate each partition at the last complete document before the boundary.
+            // Phase 2: remove all documents at or beyond the torn-write boundary from each partition.
             this.forEachPartition(partition => {
                 partition.open();
-                let position = partition.size;
-                let truncateAt = 0;
-                while ((position = partition.findDocumentPositionBefore(position)) !== false) {
-                    const reader = partition.prepareReadBuffer(position);
-                    if (!reader.buffer) break;
-                    const { sequenceNumber, dataSize } = partition.readDocumentHeader(reader.buffer, reader.cursor, position);
-                    if (sequenceNumber < lastValidSequenceNumber) {
-                        truncateAt = position + partition.documentWriteSize(dataSize);
-                        break;
-                    }
-                }
-                partition.truncate(truncateAt);
+                partition.truncateAfterSequence(lastValidSequenceNumber - 1);
             });
 
             // Truncate all indexes to the torn-write boundary.
-            if (!this.index.isOpen()) {
-                this.index.open();
-            }
+            this.index.open();
             this.index.truncate(lastValidSequenceNumber);
             this.forEachSecondaryIndex(index => {
                 /* istanbul ignore if */
