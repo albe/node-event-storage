@@ -84,50 +84,45 @@ class WritableStorage extends ReadableStorage {
      * Check all partitions for torn writes, physically repair each partition, truncate all indexes
      * to the torn-write boundary, and then reindex to rebuild any missing index entries.
      *
-     * Torn-write repair flow:
-     * 1. Scan every partition's last document to detect incomplete writes (checkTornWrite).
-     * 2. Find the minimum torn sequence number across all partitions.
-     * 3. For each partition, walk backwards to find the last complete document strictly before
-     *    the torn boundary and truncate the partition file right after that document.
-     * 4. Truncate all indexes to the torn-write boundary.
-     * 5. Reindex from the current index length to fill in any index entries that were missing
-     *    before the crash (lagging index). Partitions are now clean, so reindex completes
-     *    without error.
+     * A document is torn when the partition file ends before the document's expected end position
+     * (i.e. position + documentWriteSize(dataSize) > partition.size).  This is detected inline
+     * during the backward scan, so no separate checkTornWrite() call is needed.
      *
-     * When no torn writes are detected but the index is lagging, the method repairs the index
-     * by calling reindex() directly.
+     * Repair flow:
+     * 1. Read the last document of every partition.  When it is torn, record its sequence number
+     *    as a candidate for the global torn-write boundary (minimum across all partitions).
+     * 2. If torn writes were found, scan each partition backwards to find the last complete
+     *    document strictly before the boundary and truncate the file right after it.
+     * 3. Truncate all indexes to the torn-write boundary, then reindex to fill any lagging entries.
+     * 4. If no torn writes were found but the index is lagging, reindex directly.
      */
     checkTornWrites() {
         let lastValidSequenceNumber = Number.MAX_SAFE_INTEGER;
         let maxPartitionSequenceNumber = -1;
+
+        // Phase 1: read the last document of each partition to detect torn writes.
         this.forEachPartition(partition => {
             partition.open();
-            const result = partition.checkTornWrite();
-            if (result < 0) {
-                // Torn write: result encodes -(tornSeqnum + 1), so torn seqnum = -result - 1.
-                const tornSeqnum = -result - 1;
-                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, tornSeqnum);
-                // Any complete documents before the torn one contribute to the lagging check.
-                // Their last seqnum is tornSeqnum - 1 (if > 0; otherwise no complete docs).
-                if (tornSeqnum > 0) {
-                    maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, tornSeqnum - 1);
-                }
-            } else if (result > 0) {
-                // No torn write: result encodes (lastCompleteSeqnum + 1), so seqnum = result - 1.
-                maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, result - 1);
+            if (partition.size === 0) return;
+            const position = partition.findDocumentPositionBefore(partition.size);
+            if (position === false || position < 0) return;
+            const reader = partition.prepareReadBuffer(position);
+            if (!reader.buffer) return;
+            const { sequenceNumber, dataSize } = partition.readDocumentHeader(reader.buffer, reader.cursor, position);
+            if (position + partition.documentWriteSize(dataSize) > partition.size) {
+                // Torn write: the document extends beyond the end of the file.
+                lastValidSequenceNumber = Math.min(lastValidSequenceNumber, sequenceNumber);
+            } else {
+                maxPartitionSequenceNumber = Math.max(maxPartitionSequenceNumber, sequenceNumber);
             }
-            // result === 0: empty partition, no action needed.
         });
 
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
-            // Torn write(s) detected: truncate each partition at the byte boundary right after the
-            // last complete document with sequenceNumber strictly less than lastValidSequenceNumber.
-            // The torn write itself has sequenceNumber === lastValidSequenceNumber, so using strict
-            // less-than correctly excludes it even when its header is still readable in the file.
+            // Phase 2: truncate each partition at the last complete document before the boundary.
             this.forEachPartition(partition => {
                 partition.open();
                 let position = partition.size;
-                let truncateAt = 0; // default: truncate all if no valid doc found
+                let truncateAt = 0;
                 while ((position = partition.findDocumentPositionBefore(position)) !== false) {
                     const reader = partition.prepareReadBuffer(position);
                     if (!reader.buffer) break;
@@ -161,9 +156,7 @@ class WritableStorage extends ReadableStorage {
                 }
             });
 
-            // Reindex from the current index length to fill in any missing complete-document
-            // entries. Partitions are now clean (torn writes removed), so reindex will complete
-            // without encountering any CorruptFileError.
+            // Reindex to fill in any missing complete-document entries.
             this.reindex(this.index.length);
         } else if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
             // No torn writes, but the index is lagging — repair it.
