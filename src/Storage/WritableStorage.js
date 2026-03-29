@@ -411,11 +411,15 @@ class WritableStorage extends ReadableStorage {
     /**
      * Truncate all partitions after the given (global) sequence number.
      *
-     * For each partition, find the last index entry at or before `after` and truncate the
-     * partition file right after that document (at entry.position + documentWriteSize(entry.size)).
-     * This means no index entry for any document *after* `after` is needed — in particular,
-     * torn-write entries that were never flushed to the index are handled correctly.
-     * Partitions with no valid entries at or before `after` are truncated to 0.
+     * For each partition, scan the partition file backwards from its end to find the last document
+     * with sequenceNumber <= `after`, then truncate the file right after that document
+     * (at position + documentWriteSize(dataSize)).  Partitions whose every document is past the
+     * cutoff are truncated to 0.
+     *
+     * Scanning the file backwards is efficient because truncations almost always happen near the
+     * end of the log (torn-write repair, unfinished-commit repair), so only the last few documents
+     * per partition need to be inspected.  No index access is required; this is correct even when
+     * the index does not contain entries past the cutoff point.
      *
      * @private
      * @param {number} after The document sequence number to truncate after.
@@ -426,27 +430,21 @@ class WritableStorage extends ReadableStorage {
             return;
         }
 
-        // Walk the index backwards from the last entry at or before `after`, collecting the most
-        // recent entry for each partition.  Stop as soon as every partition has been covered.
-        const lastEntryPerPartition = new Map();
-        const numPartitions = Object.keys(this.partitions).length;
-        const untilPos = this.index.find(after);
-        for (let i = untilPos; i >= 1 && lastEntryPerPartition.size < numPartitions; i--) {
-            const entry = this.index.get(i);
-            if (entry !== false && !lastEntryPerPartition.has(entry.partition)) {
-                lastEntryPerPartition.set(entry.partition, entry);
-            }
-        }
-
         this.forEachPartition(partition => {
             partition.open();
-            const entry = lastEntryPerPartition.get(partition.id);
-            if (entry) {
-                partition.truncate(entry.position + partition.documentWriteSize(entry.size));
-            } else {
-                // No valid entry for this partition at or before `after` — remove all its data.
-                partition.truncate(0);
+            // Walk the partition file backwards until we find a document with seqnum <= after.
+            let position = partition.size;
+            let truncateAt = 0; // if no document with seqnum <= after exists, truncate all
+            while ((position = partition.findDocumentPositionBefore(position)) !== false) {
+                const reader = partition.prepareReadBuffer(position);
+                if (!reader.buffer) break;
+                const { sequenceNumber, dataSize } = partition.readDocumentHeader(reader.buffer, reader.cursor, position);
+                if (sequenceNumber <= after) {
+                    truncateAt = position + partition.documentWriteSize(dataSize);
+                    break;
+                }
             }
+            partition.truncate(truncateAt);
         });
     }
 
