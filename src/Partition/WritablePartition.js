@@ -77,6 +77,8 @@ class WritablePartition extends ReadablePartition {
         // How many documents are currently in the write buffer
         this.writeBufferDocuments = 0;
         this.flushCallbacks = [];
+        // Pre-allocated buffer for document header (16 bytes) + size footer (4 bytes) used in writeUnbuffered
+        this.writeMetaBuffer = Buffer.allocUnsafe(DOCUMENT_HEADER_SIZE + 4);
 
         this.clock = new this.ClockConstructor(this.metadata.epoch);
 
@@ -97,6 +99,7 @@ class WritablePartition extends ReadablePartition {
             this.writeBuffer = null;
             this.writeBufferCursor = 0;
             this.writeBufferDocuments = 0;
+            this.writeMetaBuffer = null;
         }
         super.close();
     }
@@ -134,32 +137,11 @@ class WritablePartition extends ReadablePartition {
 
         this.writeBufferCursor = 0;
         this.writeBufferDocuments = 0;
-        this.flushCallbacks.forEach(callback => callback());
+        const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
+        for (let i = 0; i < callbacks.length; i++) callbacks[i]();
 
         return true;
-    }
-
-    /**
-     * @private
-     * @param {number} dataSize The size of the data that needs to go into the write buffer next.
-     */
-    flushIfWriteBufferTooSmall(dataSize) {
-        if (this.writeBufferCursor > 0 && dataSize + this.writeBufferCursor > this.writeBuffer.byteLength) {
-            this.flush();
-        }
-        if (this.writeBufferCursor === 0) {
-            process.nextTick(() => this.flush());
-        }
-    }
-
-    /**
-     * @private
-     */
-    flushIfWriteBufferDocumentsFull() {
-        if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
-            this.flush();
-        }
     }
 
     /**
@@ -199,17 +181,15 @@ class WritablePartition extends ReadablePartition {
      */
     writeUnbuffered(data, dataSize, sequenceNumber, callback) {
         this.flush();
-        const dataHeader = Buffer.alloc(DOCUMENT_HEADER_SIZE);
-        this.writeDocumentHeader(dataHeader, 0, dataSize, sequenceNumber);
+        this.writeDocumentHeader(this.writeMetaBuffer, 0, dataSize, sequenceNumber);
 
         let bytesWritten = 0;
-        bytesWritten += fs.writeSync(this.fd, dataHeader);
+        bytesWritten += fs.writeSync(this.fd, this.writeMetaBuffer, 0, DOCUMENT_HEADER_SIZE);
         bytesWritten += fs.writeSync(this.fd, data);
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
         bytesWritten += fs.writeSync(this.fd, DOCUMENT_PAD.substr(0, padSize));
-        const dataSizeBuffer = Buffer.alloc(4);
-        dataSizeBuffer.writeUInt32BE(dataSize, 0);
-        bytesWritten += fs.writeSync(this.fd, dataSizeBuffer);
+        this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
+        bytesWritten += fs.writeSync(this.fd, this.writeMetaBuffer, 0, 4);
         bytesWritten += fs.writeSync(this.fd, DOCUMENT_SEPARATOR);
         if (typeof callback === 'function') {
             process.nextTick(callback);
@@ -227,8 +207,13 @@ class WritablePartition extends ReadablePartition {
      * @returns {number} Number of bytes written.
      */
     writeBuffered(data, dataSize, sequenceNumber, callback) {
-        const bytesToWrite = this.documentWriteSize(Buffer.byteLength(data, 'utf8'));
-        this.flushIfWriteBufferTooSmall(bytesToWrite);
+        const bytesToWrite = this.documentWriteSize(dataSize);
+        if (this.writeBufferCursor > 0 && bytesToWrite + this.writeBufferCursor > this.writeBuffer.byteLength) {
+            this.flush();
+        }
+        if (this.writeBufferCursor === 0) {
+            process.nextTick(() => this.flush());
+        }
 
         let bytesWritten = 0;
         bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
@@ -243,7 +228,9 @@ class WritablePartition extends ReadablePartition {
         if (typeof callback === 'function') {
             this.flushCallbacks.push(callback);
         }
-        this.flushIfWriteBufferDocumentsFull();
+        if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
+            this.flush();
+        }
         return bytesWritten;
     }
 
