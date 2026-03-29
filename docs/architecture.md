@@ -62,7 +62,7 @@ graph TD
     end
 
     subgraph storageLayer["Storage Layer"]
-        Storage
+        Storage["Storage<br/><i>single ordered log</i>"]
     end
 
     subgraph partitionLayer["Partition Layer"]
@@ -76,18 +76,17 @@ graph TD
     Disk["💾 Disk"]
 
     %% API relationships
-    EventStore -->|"single ordered log"| Storage
+    EventStore -->|"writes to stream=partition"| Storage
     EventStore -->|"exposes"| EventStream
     EventStore -->|"exposes"| Consumer
-    EventStore -->|"writes to (default partition)"| Partition
     Consumer -->|"persists state"| Disk
 
     %% Storage coordinates Partition and Index
     Storage -->|"made up of multiple"| Partition
-    Storage -->|"primary index"| Index
+    Index -->|"primary index (over all partitions)"| Storage
 
-    %% Partition has a secondary index (1:1 with a stream)
-    Partition -->|"secondary index (1:1 with stream)"| Index
+    %% Index covers 1-n partitions as a secondary index (per stream)
+    Index -->|"secondary index (stream) over 1-n"| Partition
 
     %% EventStream iterates an index (independent of which partitions are visited)
     EventStream -->|"iterates"| Index
