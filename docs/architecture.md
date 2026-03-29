@@ -58,7 +58,6 @@ graph TD
     subgraph api["API Layer"]
         EventStore
         EventStream
-        JoinEventStream
         Consumer
     end
 
@@ -74,20 +73,25 @@ graph TD
         Index
     end
 
+    Disk["💾 Disk"]
+
     %% API relationships
-    EventStore --> Storage
-    EventStore --> EventStream
-    EventStore --> Consumer
-    JoinEventStream --> EventStream
-    Consumer --> Storage
+    EventStore -->|"single ordered log"| Storage
+    EventStore -->|"exposes"| EventStream
+    EventStore -->|"exposes"| Consumer
+    Consumer -->|"iterates"| EventStream
+    Consumer -->|"persists state"| Disk
 
     %% Storage coordinates Partition and Index
-    Storage --> Partition
-    Storage --> Index
+    Storage -->|"made up of multiple"| Partition
+    Storage -->|"primary index"| Index
+
+    %% Partition has a secondary index (1:1 with a stream)
+    Partition -->|"secondary index (1:1 with stream)"| Index
 
     %% EventStream is the bridge: resolves positions via Index, reads data from Partition
-    EventStream --> Index
-    EventStream --> Partition
+    EventStream -->|"iterates"| Index
+    EventStream -->|"encompasses one partition (by default)"| Partition
 ```
 
 ---
