@@ -49,81 +49,47 @@ Writable  ──extends──▶  Readable / Base
 ReadOnly  ──extends──▶  Readable / Base
 ```
 
-The diagram below shows the full dependency graph. **Solid arrows** (`──▶`) indicate a *uses / instantiates* relationship; **dashed arrows** (`- -▶`) indicate *extends / inherits*.
+The diagram below shows the key relationships between the four layers. **Arrows** (`──▶`) indicate a *uses / coordinates* relationship.
 
-> **Note:** `util` is a shared helper module imported by almost every component and is omitted from the diagram for readability.
+> **Note:** Each layer box represents all variants within that layer (Writable, Readable, ReadOnly). The per-variant inheritance chain and utility components are detailed in the tables above and the component descriptions below.
 
 ```mermaid
 graph TD
     subgraph api["API Layer"]
         EventStore
         EventStream
-        JoinEventStream
         Consumer
     end
 
     subgraph storageLayer["Storage Layer"]
-        WritableStorage
-        ReadableStorage
-        ReadOnlyStorage
+        Storage["Storage<br/><i>single ordered log</i>"]
     end
 
     subgraph partitionLayer["Partition Layer"]
-        WritablePartition
-        ReadablePartition
-        ReadOnlyPartition
+        Partition
     end
 
     subgraph indexLayer["Index Layer"]
-        WritableIndex
-        ReadableIndex
-        ReadOnlyIndex
+        Index
     end
 
-    subgraph utilities["Utilities"]
-        Clock
-        IndexEntry
-        Watcher
-        WatchesFile
-    end
+    Disk["💾 Disk"]
 
-    %% API Layer
-    EventStore     --> WritableStorage
-    EventStore     --> EventStream
-    EventStore     --> JoinEventStream
-    EventStore     --> Consumer
-    JoinEventStream --> EventStream
-    Consumer       --> ReadableStorage
+    %% API relationships
+    EventStore -->|"writes to stream=partition"| Storage
+    EventStore -->|"exposes"| EventStream
+    EventStore -->|"exposes"| Consumer
+    Consumer -->|"persists state"| Disk
 
-    %% Storage inheritance
-    WritableStorage -.-> ReadableStorage
-    ReadOnlyStorage -.-> ReadableStorage
+    %% Storage coordinates Partition and Index
+    Storage -->|"made up of multiple"| Partition
+    Index -->|"primary index (over all partitions)"| Storage
 
-    %% Storage → Partition / Index
-    WritableStorage --> WritablePartition
-    WritableStorage --> WritableIndex
-    ReadableStorage --> ReadOnlyPartition
-    ReadableStorage --> ReadOnlyIndex
-    ReadOnlyStorage --> Watcher
+    %% Index covers 1-n partitions as a secondary index (per stream)
+    Index -->|"secondary index (stream) over 1-n"| Partition
 
-    %% Partition inheritance
-    WritablePartition -.-> ReadablePartition
-    ReadOnlyPartition -.-> ReadablePartition
-
-    %% Partition → utilities
-    WritablePartition --> Clock
-    ReadOnlyPartition --> WatchesFile
-
-    %% Index inheritance
-    WritableIndex -.-> ReadableIndex
-    ReadOnlyIndex -.-> ReadableIndex
-
-    %% Index → utilities
-    ReadOnlyIndex --> WatchesFile
-    ReadableIndex --> IndexEntry
-
-    %% Watcher plumbing
-    WatchesFile --> Watcher
+    %% EventStream iterates an index (independent of which partitions are visited)
+    EventStream -->|"iterates"| Index
 ```
 
 ---
