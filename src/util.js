@@ -201,6 +201,31 @@ function ensureDirectory(dirName) {
     return true;
 }
 
+/**
+ * Scan a directory for files whose names match a regex pattern, calling a callback for each match.
+ * The `onEach` callback receives the first capturing group of the match (`match[1]`), or the full
+ * match (`match[0]`) when no capturing group is defined in the pattern.
+ *
+ * @param {string} directory The directory to scan.
+ * @param {RegExp} regexPattern The pattern to match file names against.
+ * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching file name.
+ * @param {function(Error?)} onDone Called when the scan is complete, or with an error if one occurred.
+ */
+function scanForFiles(directory, regexPattern, onEach, onDone) {
+    fs.readdir(directory, (err, files) => {
+        if (err) {
+            return onDone(err);
+        }
+        let match;
+        for (let file of files) {
+            if ((match = file.match(regexPattern)) !== null) {
+                onEach(match[1] !== undefined ? match[1] : match[0]);
+            }
+        }
+        onDone(null);
+    });
+}
+
 
 module.exports = {
     assert,
@@ -213,5 +238,6 @@ module.exports = {
     buildMatcherFromMetadata,
     buildMetadataHeader,
     alignTo,
-    ensureDirectory
+    ensureDirectory,
+    scanForFiles
 };

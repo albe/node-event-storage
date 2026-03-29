@@ -5,7 +5,7 @@ const path = require('path');
 const events = require('events');
 const Storage = require('./Storage');
 const Consumer = require('./Consumer');
-const { assert } = require('./util');
+const { assert, scanForFiles } = require('./util');
 
 const ExpectedVersion = {
     Any: -1,
@@ -132,18 +132,7 @@ class EventStore extends events.EventEmitter {
             callback = () => {};
         }
         // Find existing streams by scanning dir for filenames starting with 'stream-'
-        fs.readdir(this.streamsDirectory, (err, files) => {
-            if (err) {
-                return callback(err);
-            }
-            let match;
-            for (let file of files) {
-                if ((match = file.match(/(stream-.*)\.index$/)) !== null) {
-                    this.registerStream(match[1]);
-                }
-            }
-            callback();
-        });
+        scanForFiles(this.streamsDirectory, /(stream-.*)\.index$/, this.registerStream.bind(this), callback);
         this.storage.on('index-created', this.registerStream.bind(this));
     }
 
@@ -589,18 +578,11 @@ class EventStore extends events.EventEmitter {
             callback(null, []);
             return;
         }
-        fs.readdir(consumersPath, (err, files) => {
-            /* istanbul ignore if */
+        const regex = new RegExp(`^${this.storage.storageFile}\\.([^.]*\\..*)$`);
+        const consumers = [];
+        scanForFiles(consumersPath, regex, consumers.push.bind(consumers), /* istanbul ignore next */ (err) => {
             if (err) {
                 return callback(err, []);
-            }
-            let matches;
-            const regex = new RegExp(`^${this.storage.storageFile}\.([^.]*\..*)$`);
-            const consumers = [];
-            for (let file of files) {
-                if ((matches = file.match(regex)) !== null) {
-                    consumers.push(matches[1]);
-                }
             }
             callback(null, consumers);
         });
