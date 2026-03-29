@@ -146,6 +146,28 @@ class WritablePartition extends ReadablePartition {
 
     /**
      * @private
+     * @param {number} dataSize The size of the data that needs to go into the write buffer next.
+     */
+    flushIfWriteBufferTooSmall(dataSize) {
+        if (this.writeBufferCursor > 0 && dataSize + this.writeBufferCursor > this.writeBuffer.byteLength) {
+            this.flush();
+        }
+        if (this.writeBufferCursor === 0) {
+            process.nextTick(() => this.flush());
+        }
+    }
+
+    /**
+     * @private
+     */
+    flushIfWriteBufferDocumentsFull() {
+        if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
+            this.flush();
+        }
+    }
+
+    /**
+     * @private
      * @param {Buffer} buffer The buffer to write the document header to
      * @param {number} offset The offset inside the buffer to start writing at
      * @param {number} dataSize The size of the document
@@ -208,12 +230,7 @@ class WritablePartition extends ReadablePartition {
      */
     writeBuffered(data, dataSize, sequenceNumber, callback) {
         const bytesToWrite = this.documentWriteSize(dataSize);
-        if (this.writeBufferCursor > 0 && bytesToWrite + this.writeBufferCursor > this.writeBuffer.byteLength) {
-            this.flush();
-        }
-        if (this.writeBufferCursor === 0) {
-            process.nextTick(() => this.flush());
-        }
+        this.flushIfWriteBufferTooSmall(bytesToWrite);
 
         let bytesWritten = 0;
         bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
@@ -228,9 +245,7 @@ class WritablePartition extends ReadablePartition {
         if (typeof callback === 'function') {
             this.flushCallbacks.push(callback);
         }
-        if (this.maxWriteBufferDocuments > 0 && this.writeBufferDocuments >= this.maxWriteBufferDocuments) {
-            this.flush();
-        }
+        this.flushIfWriteBufferDocumentsFull();
         return bytesWritten;
     }
 
