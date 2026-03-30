@@ -202,6 +202,31 @@ function ensureDirectory(dirName) {
 }
 
 /**
+ * Perform a k-way merge over multiple streams, invoking a callback for each item in ascending key order.
+ * Each stream object is mutated in place by the `advance` function.
+ *
+ * @param {object[]} streams Array of stream state objects; entries are removed when exhausted.
+ * @param {function(object): number} getKey Returns the current sort key for a stream state.
+ * @param {function(object): boolean} advance Advances the stream to its next item.
+ *   Returns true if the stream has more items within range, false if exhausted.
+ * @param {function(object): void} visit Called for each stream state in merged order.
+ */
+function kWayMerge(streams, getKey, advance, visit) {
+    while (streams.length > 0) {
+        let minIdx = 0;
+        for (let i = 1; i < streams.length; i++) {
+            if (getKey(streams[i]) < getKey(streams[minIdx])) {
+                minIdx = i;
+            }
+        }
+        visit(streams[minIdx]);
+        if (!advance(streams[minIdx])) {
+            streams.splice(minIdx, 1);
+        }
+    }
+}
+
+/**
  * Scan a directory for files whose names match a regex pattern, calling a callback for each match.
  * The `onEach` callback receives the first capturing group of the match (`match[1]`), or the full
  * match (`match[0]`) when no capturing group is defined in the pattern.
@@ -239,5 +264,6 @@ module.exports = {
     buildMetadataHeader,
     alignTo,
     ensureDirectory,
-    scanForFiles
+    scanForFiles,
+    kWayMerge
 };

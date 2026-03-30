@@ -3,7 +3,7 @@ const path = require('path');
 const events = require('events');
 const Partition = require('../Partition');
 const Index = require('../Index');
-const { assert, createHmac, matches, wrapAndCheck, buildMetadataForMatcher } = require('../util');
+const { assert, createHmac, matches, wrapAndCheck, buildMetadataForMatcher, kWayMerge } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
@@ -374,9 +374,9 @@ class ReadableStorage extends events.EventEmitter {
      * @param {function({document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partitionId: number}): void} callback
      */
     forEachDocumentNoIndex(from, until, callback) {
-        const partitions = [];
+        const streams = [];
 
-        for (const partition of Object.values(this.partitions)) {
+        this.forEachPartition(partition => {
             if (!partition.isOpen()) {
                 partition.open();
             }
@@ -390,32 +390,30 @@ class ReadableStorage extends events.EventEmitter {
             }
 
             if (!result.done && headerOut.sequenceNumber <= until) {
-                partitions.push({ reader, headerOut, data: result.value, sequenceNumber: headerOut.sequenceNumber, position: headerOut.position, size: headerOut.dataSize, partitionId: partition.id, partitionName: partition.name });
+                streams.push({ reader, headerOut, data: result.value, partitionId: partition.id, partitionName: partition.name });
             }
-        }
+        });
 
-        // K-way merge: at each step, invoke the callback for the document with the smallest sequenceNumber.
-        while (partitions.length > 0) {
-            let minIdx = 0;
-            for (let i = 1; i < partitions.length; i++) {
-                if (partitions[i].sequenceNumber < partitions[minIdx].sequenceNumber) {
-                    minIdx = i;
+        kWayMerge(
+            streams,
+            stream => stream.headerOut.sequenceNumber,
+            stream => {
+                const next = stream.reader.next();
+                if (!next.done && stream.headerOut.sequenceNumber <= until) {
+                    stream.data = next.value;
+                    return true;
                 }
-            }
-
-            const { data, sequenceNumber, partitionName, position, size, partitionId } = partitions[minIdx];
-            callback({ document: this.serializer.deserialize(data), sequenceNumber, partitionName, position, size, partitionId });
-
-            const next = partitions[minIdx].reader.next();
-            if (!next.done && partitions[minIdx].headerOut.sequenceNumber <= until) {
-                partitions[minIdx].data = next.value;
-                partitions[minIdx].sequenceNumber = partitions[minIdx].headerOut.sequenceNumber;
-                partitions[minIdx].position = partitions[minIdx].headerOut.position;
-                partitions[minIdx].size = partitions[minIdx].headerOut.dataSize;
-            } else {
-                partitions.splice(minIdx, 1);
-            }
-        }
+                return false;
+            },
+            stream => callback({
+                document: this.serializer.deserialize(stream.data),
+                sequenceNumber: stream.headerOut.sequenceNumber,
+                partitionName: stream.partitionName,
+                position: stream.headerOut.position,
+                size: stream.headerOut.dataSize,
+                partitionId: stream.partitionId,
+            })
+        );
     }
 
     /**
