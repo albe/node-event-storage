@@ -388,6 +388,25 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Read the header and file position of the last document in this partition.
+     *
+     * @api
+     * @returns {{ header: {dataSize: number, sequenceNumber: number, time64: number}, position: number } | null}
+     *   The last document's header and its file position, or null if the partition is empty or unreadable.
+     */
+    readLast() {
+        if (this.size === 0) return null;
+        const position = this.findDocumentPositionBefore(this.size);
+        /* istanbul ignore if */
+        if (position === false || position < 0) return null;
+        const reader = this.prepareReadBufferBackwards(position);
+        /* istanbul ignore if */
+        if (!reader.buffer) return null;
+        const header = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+        return { header, position };
+    }
+
+    /**
      * @api
      * @param {number} [after] The document position to start reading from.
      * @param {object|null} [headerOut] Optional object to populate with document header fields

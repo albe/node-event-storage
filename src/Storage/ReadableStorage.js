@@ -419,6 +419,21 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
+     * Iterate documents across all partitions in sequenceNumber order using a k-way merge,
+     * invoking a callback for each entry. Opens any closed partition automatically.
+     *
+     * @api
+     * @param {number} from The 0-based sequenceNumber to start from (inclusive).
+     * @param {number} until The 0-based sequenceNumber to read until (inclusive).
+     * @param {function({document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partitionId: number}): void} callback
+     */
+    forEachDocumentNoIndex(from, until, callback) {
+        for (const entry of this.iteratePartitionsBySequenceNumber(from, until)) {
+            callback(entry);
+        }
+    }
+
+    /**
      * Helper method to iterate over all documents.
      *
      * @protected

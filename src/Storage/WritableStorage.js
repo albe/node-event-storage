@@ -81,6 +81,26 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * Helper method to iterate over all writable secondary indexes.
+     * Opens each index before calling the callback (passing the previous open status),
+     * and closes it afterwards if it was not already open.
+     *
+     * @protected
+     * @param {function(WritableIndex, string, boolean)} iterationHandler Called with (index, name, wasOpen).
+     * @param {object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
+     */
+    forEachWritableSecondaryIndex(iterationHandler, matchDocument) {
+        this.forEachSecondaryIndex((index, name) => {
+            /* istanbul ignore if */
+            if (!(index instanceof WritableIndex)) return;
+            const wasOpen = index.isOpen();
+            if (!wasOpen) index.open();
+            iterationHandler(index, name, wasOpen);
+            if (!wasOpen) index.close();
+        }, matchDocument);
+    }
+
+    /**
      * Scan every partition's last document to detect torn writes inline.
      * A document is torn when its expected end exceeds the actual file size:
      *   position + documentWriteSize(dataSize) > partition.size
@@ -93,15 +113,10 @@ class WritableStorage extends ReadableStorage {
         let maxPartitionSequenceNumber = -1;
         this.forEachPartition(partition => {
             partition.open();
+            const last = partition.readLast();
             /* istanbul ignore if */
-            if (partition.size === 0) return;
-            const position = partition.findDocumentPositionBefore(partition.size);
-            /* istanbul ignore if */
-            if (position === false || position < 0) return;
-            const reader = partition.prepareReadBufferBackwards(position);
-            /* istanbul ignore if */
-            if (!reader.buffer) return;
-            const { sequenceNumber, dataSize } = partition.readDocumentHeader(reader.buffer, reader.cursor, position);
+            if (!last) return;
+            const { header: { sequenceNumber, dataSize }, position } = last;
             if (position + partition.documentWriteSize(dataSize) > partition.size) {
                 // Torn write: the document extends beyond the end of the file.
                 lastValidSequenceNumber = Math.min(lastValidSequenceNumber, sequenceNumber);
@@ -142,19 +157,8 @@ class WritableStorage extends ReadableStorage {
             this.index.open();
             this.index.truncate(lastValidSequenceNumber);
             /* istanbul ignore next */
-            this.forEachSecondaryIndex(index => {
-                if (!(index instanceof WritableIndex)) {
-                    return;
-                }
-                let closeIndex = false;
-                if (!index.isOpen()) {
-                    index.open();
-                    closeIndex = true;
-                }
+            this.forEachWritableSecondaryIndex(index => {
                 index.truncate(index.find(lastValidSequenceNumber));
-                if (closeIndex) {
-                    index.close();
-                }
             });
 
             // Reindex to fill in any missing complete-document entries.
@@ -183,43 +187,21 @@ class WritableStorage extends ReadableStorage {
         this.index.truncate(fromSequenceNumber);
 
         // Truncate all loaded secondary indexes to match the new primary length.
-        this.forEachSecondaryIndex(index => {
-            /* istanbul ignore if */
-            if (!(index instanceof WritableIndex)) {
-                return;
-            }
+        this.forEachWritableSecondaryIndex(index => {
             // find(0) returns 0, so truncate(0) will remove all entries when fromSequenceNumber===0
             index.truncate(fromSequenceNumber === 0 ? 0 : index.find(fromSequenceNumber));
         });
 
-        // Ensure all partitions are open so iteratePartitionsBySequenceNumber can read them.
-        this.forEachPartition(partition => {
-            if (!partition.isOpen()) {
-                partition.open();
-            }
-        });
-
         // Scan partitions in sequence-number order and rebuild index entries.
-        for (const { document, partitionId, position, size } of
-            this.iteratePartitionsBySequenceNumber(fromSequenceNumber, Number.MAX_SAFE_INTEGER)) {
+        // forEachDocumentNoIndex opens any closed partitions automatically.
+        this.forEachDocumentNoIndex(fromSequenceNumber, Number.MAX_SAFE_INTEGER, ({ document, partitionId, position, size }) => {
             const newEntry = new WritableIndex.Entry(this.index.length + 1, position, size, partitionId);
             this.index.add(newEntry);
 
-            this.forEachSecondaryIndex((secIndex, name) => {
-                /* istanbul ignore if */
-                if (!(secIndex instanceof WritableIndex)) {
-                    return;
-                }
-                /* istanbul ignore if */
-                if (!secIndex.isOpen()) {
-                    secIndex.open();
-                }
-                const { matcher } = this.secondaryIndexes[name];
-                if (matches(document, matcher)) {
-                    secIndex.add(newEntry);
-                }
-            });
-        }
+            this.forEachWritableSecondaryIndex((secIndex) => {
+                secIndex.add(newEntry);
+            }, document);
+        });
 
         this.flush();
     }
@@ -500,20 +482,8 @@ class WritableStorage extends ReadableStorage {
         this.truncatePartitions(after);
 
         this.index.truncate(after);
-        this.forEachSecondaryIndex(index => {
-            /* istanbul ignore if */
-            if (!(index instanceof WritableIndex)) {
-                return;
-            }
-            let closeIndex = false;
-            if (!index.isOpen()) {
-                index.open();
-                closeIndex = true;
-            }
+        this.forEachWritableSecondaryIndex(index => {
             index.truncate(index.find(after));
-            if (closeIndex) {
-                index.close();
-            }
         });
     }
 

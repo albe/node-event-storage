@@ -502,6 +502,27 @@ describe('Storage', function() {
             }
         });
 
+        it('forEachDocumentNoIndex calls callback with document, sequenceNumber, partitionName and position', function() {
+            storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
+            storage.open();
+
+            for (let i = 1; i <= 6; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            storage.open();
+
+            const entries = [];
+            storage.forEachDocumentNoIndex(0, 5, entry => entries.push(entry));
+            expect(entries.length).to.be(6);
+            for (let i = 0; i < 6; i++) {
+                expect(entries[i].document).to.eql({ foo: i + 1 });
+                expect(entries[i].sequenceNumber).to.be(i);
+                expect(typeof entries[i].partitionName).to.be('string');
+                expect(typeof entries[i].position).to.be('number');
+            }
+        });
+
     });
 
     describe('ensureIndex', function() {
