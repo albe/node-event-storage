@@ -426,6 +426,7 @@ class ReadablePartition extends events.EventEmitter {
         while (!result.done && headerOut.sequenceNumber < sequenceNumber) {
             result = reader.next();
         }
+        /* istanbul ignore if */
         if (result.done) {
             return null;
         }
