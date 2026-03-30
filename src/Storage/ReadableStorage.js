@@ -299,7 +299,7 @@ class ReadableStorage extends events.EventEmitter {
         if (index === false) {
             // Explicitly disabled index: iterate all partitions and merge by sequenceNumber.
             // Document header sequenceNumber is 0-based; from/until are 1-based index positions.
-            for (const entry of this._iterateDocumentsNoIndex(from - 1, until - 1)) {
+            for (const entry of this.iterateDocumentsNoIndex(from - 1, until - 1)) {
                 yield entry.document;
             }
             return;
@@ -371,24 +371,17 @@ class ReadableStorage extends events.EventEmitter {
      * @param {number} [until=Number.MAX_SAFE_INTEGER] The 0-based sequenceNumber to read until (inclusive).
      * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partition: number}>}
      */
-    *_iterateDocumentsNoIndex(from = 0, until = Number.MAX_SAFE_INTEGER) {
+    *iterateDocumentsNoIndex(from = 0, until = Number.MAX_SAFE_INTEGER) {
         const streams = [];
 
         this.forEachPartition(partition => {
             if (!partition.isOpen()) {
                 partition.open();
             }
-            const headerOut = {};
-            const reader = partition.readAll(0, headerOut);
 
-            // Advance to the first document with sequenceNumber >= from.
-            let result = reader.next();
-            while (!result.done && headerOut.sequenceNumber < from) {
-                result = reader.next();
-            }
-
-            if (!result.done && headerOut.sequenceNumber <= until) {
-                streams.push({ reader, headerOut, data: result.value, partition: partition.id, partitionName: partition.name });
+            const found = partition.findDocument(from);
+            if (found && found.headerOut.sequenceNumber <= until) {
+                streams.push({ ...found, partition: partition.id, partitionName: partition.name });
             }
         });
 
@@ -435,7 +428,7 @@ class ReadableStorage extends events.EventEmitter {
         }
 
         if (noIndex) {
-            for (const { document, ...entryInfo } of this._iterateDocumentsNoIndex()) {
+            for (const { document, ...entryInfo } of this.iterateDocumentsNoIndex()) {
                 iterationHandler(document, entryInfo);
             }
             return;

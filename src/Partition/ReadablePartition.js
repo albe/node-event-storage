@@ -407,6 +407,32 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Find the first document whose sequenceNumber is >= the given value.
+     * Uses readLast() to short-circuit when the partition contains no such document.
+     *
+     * @api
+     * @param {number} sequenceNumber The 0-based sequence number to search for.
+     * @returns {{ reader: Generator<string>, headerOut: object, data: string }|null}
+     *   The matched document with its reader and shared headerOut, or null if no such document exists.
+     */
+    findDocument(sequenceNumber) {
+        const last = this.readLast();
+        if (!last || last.header.sequenceNumber < sequenceNumber) {
+            return null;
+        }
+        const headerOut = {};
+        const reader = this.readAll(0, headerOut);
+        let result = reader.next();
+        while (!result.done && headerOut.sequenceNumber < sequenceNumber) {
+            result = reader.next();
+        }
+        if (result.done) {
+            return null;
+        }
+        return { reader, headerOut, data: result.value };
+    }
+
+    /**
      * @api
      * @param {number} [after] The document position to start reading from.
      * @param {object|null} [headerOut] Optional object to populate with document header fields
