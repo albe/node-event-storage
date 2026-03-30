@@ -475,6 +475,34 @@ describe('Partition', function() {
 
     });
 
+    describe('readLast', function() {
+
+        it('returns null for an empty partition', function() {
+            partition.open();
+            expect(partition.readLast()).to.be(null);
+        });
+
+        it('returns the header and position of the only document', function() {
+            partition.open();
+            fillPartition(1);
+            const last = partition.readLast();
+            expect(last).to.not.be(null);
+            expect(last.position).to.be(0);
+            expect(last.header.sequenceNumber).to.be(1);
+        });
+
+        it('returns the header and position of the last of multiple documents', function() {
+            partition.open();
+            fillPartition(5);
+            const last = partition.readLast();
+            expect(last).to.not.be(null);
+            expect(last.header.sequenceNumber).to.be(5);
+            expect(typeof last.position).to.be('number');
+            expect(last.position).to.be.greaterThan(0);
+        });
+
+    });
+
     describe('concurrency', function(){
 
         it('allows multiple readers for a partition', function(){

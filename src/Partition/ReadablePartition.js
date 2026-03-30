@@ -388,6 +388,52 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Read the header and file position of the last document in this partition.
+     *
+     * @api
+     * @returns {{ header: {dataSize: number, sequenceNumber: number, time64: number}, position: number } | null}
+     *   The last document's header and its file position, or null if the partition is empty or unreadable.
+     */
+    readLast() {
+        if (this.size === 0) return null;
+        const position = this.findDocumentPositionBefore(this.size);
+        /* istanbul ignore if */
+        if (position === false || position < 0) return null;
+        const reader = this.prepareReadBufferBackwards(position);
+        /* istanbul ignore if */
+        if (!reader.buffer) return null;
+        const header = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+        return { header, position };
+    }
+
+    /**
+     * Find the first document whose sequenceNumber is >= the given value.
+     * Uses readLast() to short-circuit when the partition contains no such document.
+     *
+     * @api
+     * @param {number} sequenceNumber The 0-based sequence number to search for.
+     * @returns {{ reader: Generator<string>, headerOut: object, data: string }|null}
+     *   The matched document with its reader and shared headerOut, or null if no such document exists.
+     */
+    findDocument(sequenceNumber) {
+        const last = this.readLast();
+        if (!last || last.header.sequenceNumber < sequenceNumber) {
+            return null;
+        }
+        const headerOut = {};
+        const reader = this.readAll(0, headerOut);
+        let result = reader.next();
+        while (!result.done && headerOut.sequenceNumber < sequenceNumber) {
+            result = reader.next();
+        }
+        /* istanbul ignore if */
+        if (result.done) {
+            return null;
+        }
+        return { reader, headerOut, data: result.value };
+    }
+
+    /**
      * @api
      * @param {number} [after] The document position to start reading from.
      * @param {object|null} [headerOut] Optional object to populate with document header fields

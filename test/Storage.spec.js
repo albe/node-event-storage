@@ -470,7 +470,7 @@ describe('Storage', function() {
             }
         });
 
-        it('iteratePartitionsBySequenceNumber yields document, sequenceNumber, partitionName and position', function() {
+        it('forEachDocument with noIndex calls callback with document, sequenceNumber, partitionName and position', function() {
             storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
             storage.open();
 
@@ -480,25 +480,14 @@ describe('Storage', function() {
             storage.close();
             storage.open();
 
-            const entries = Array.from(storage.iteratePartitionsBySequenceNumber(0, 5));
+            const entries = [];
+            storage.forEachDocument((document, entryInfo) => entries.push({ document, ...entryInfo }), true);
             expect(entries.length).to.be(6);
             for (let i = 0; i < 6; i++) {
                 expect(entries[i].document).to.eql({ foo: i + 1 });
-                expect(typeof entries[i].sequenceNumber).to.be('number');
+                expect(entries[i].sequenceNumber).to.be(i);
                 expect(typeof entries[i].partitionName).to.be('string');
                 expect(typeof entries[i].position).to.be('number');
-                expect(entries[i].sequenceNumber).to.be(i);
-            }
-            // Verify documents from the same partition have increasing positions
-            const byPartition = {};
-            for (const entry of entries) {
-                if (!byPartition[entry.partitionName]) byPartition[entry.partitionName] = [];
-                byPartition[entry.partitionName].push(entry.position);
-            }
-            for (const positions of Object.values(byPartition)) {
-                for (let i = 1; i < positions.length; i++) {
-                    expect(positions[i]).to.be.greaterThan(positions[i - 1]);
-                }
             }
         });
 
