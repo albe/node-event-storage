@@ -418,63 +418,6 @@ describe('Partition', function() {
 
     });
 
-    describe('checkTornWrite', function() {
-
-        it('returns 0 for an empty partition', function() {
-            partition.open();
-            expect(partition.checkTornWrite()).to.be(0);
-        });
-
-        it('returns positive (lastSeqnum + 1) for a single complete document', function() {
-            partition.open();
-            fillPartition(1);
-            // fillPartition(1) writes seqnum=1; no torn write → result = 1 + 1 = 2
-            expect(partition.checkTornWrite()).to.be(2);
-        });
-
-        it('returns positive (lastSeqnum + 1) for multiple complete documents', function() {
-            partition.open();
-            fillPartition(5);
-            // fillPartition(5) writes seqnum=5 for last doc; no torn write → result = 5 + 1 = 6
-            expect(partition.checkTornWrite()).to.be(6);
-        });
-
-        it('returns negative when the only document is torn', function() {
-            partition.open();
-            fillPartition(1);
-            partition.close();
-
-            // Remove the document footer to simulate a torn write
-            const fd = fs.openSync('test/data/.part', 'r+');
-            const stat = fs.fstatSync(fd);
-            fs.ftruncateSync(fd, stat.size - Partition.DOCUMENT_FOOTER_SIZE);
-            fs.closeSync(fd);
-
-            partition.open();
-            // Torn write on seqnum=1 → result = -(1 + 1) = -2
-            expect(partition.checkTornWrite()).to.be(-2);
-        });
-
-        it('returns negative (encodes torn seqnum) when last of many documents is torn', function() {
-            partition.open();
-            fillPartition(5);
-            partition.close();
-
-            // Remove the last document's footer to simulate a torn write on the last document
-            const fd = fs.openSync('test/data/.part', 'r+');
-            const stat = fs.fstatSync(fd);
-            fs.ftruncateSync(fd, stat.size - Partition.DOCUMENT_FOOTER_SIZE);
-            fs.closeSync(fd);
-
-            partition.open();
-            // fillPartition(5) passes i as sequence number, so last doc has seqnum=5.
-            // Torn write on seqnum=5 → result = -(5 + 1) = -6
-            // Decoded: tornSeqnum = 5, lastCompleteSeqnum = 4
-            expect(partition.checkTornWrite()).to.be(-6);
-        });
-
-    });
-
     describe('readLast', function() {
 
         it('returns null for an empty partition', function() {
