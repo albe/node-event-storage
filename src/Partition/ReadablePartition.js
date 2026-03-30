@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const events = require('events');
-const { assert, alignTo } = require('../util');
+const { assert, alignTo, hash } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
@@ -16,30 +16,6 @@ const NES_EPOCH = new Date('2020-01-01T00:00:00');
 
 class CorruptFileError extends Error {}
 class InvalidDataSizeError extends Error {}
-
-/**
- * Method for hashing a string (partition name) to a 32-bit unsigned integer.
- *
- * @param {string} str
- * @returns {number}
- */
-function hash(str) {
-    /* istanbul ignore if */
-    if (str.length === 0) {
-        return 0;
-    }
-    let hash = 5381,
-        i    = str.length;
-
-    while(i) {
-        hash = ((hash << 5) + hash) ^ str.charCodeAt(--i); // jshint ignore:line
-    }
-
-    /* JavaScript does bitwise operations (like XOR, above) on 32-bit signed
-     * integers. Since we want the results to be always positive, convert the
-     * signed int to an unsigned by doing an unsigned bitshift. */
-    return hash >>> 0; // jshint ignore:line
-}
 
 /**
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.

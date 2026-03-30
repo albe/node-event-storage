@@ -3,7 +3,8 @@ const path = require('path');
 const events = require('events');
 const Partition = require('../Partition');
 const Index = require('../Index');
-const { assert, createHmac, matches, wrapAndCheck, buildMetadataForMatcher, kWayMerge } = require('../util');
+const { assert, wrapAndCheck, kWayMerge } = require('../util');
+const { createHmac, matches, buildMetadataForMatcher } = require('../metadataUtil');
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
