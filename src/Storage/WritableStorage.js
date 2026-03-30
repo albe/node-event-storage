@@ -3,7 +3,8 @@ const path = require('path');
 const WritablePartition = require('../Partition/WritablePartition');
 const WritableIndex = require('../Index/WritableIndex');
 const ReadableStorage = require('./ReadableStorage');
-const { assert, matches, buildMetadataForMatcher, buildMatcherFromMetadata, ensureDirectory } = require('../util');
+const { assert, ensureDirectory } = require('../util');
+const { matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('../metadataUtil');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 

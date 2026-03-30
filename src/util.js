@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const fs = require('fs');
 const mkdirpSync = require('mkdirp').sync;
 
@@ -40,74 +39,27 @@ function alignTo(value, alignment) {
 }
 
 /**
- * @param {string} secret The secret to use for calculating further HMACs
- * @returns {function(string)} A function that calculates the HMAC for a given string
+ * Method for hashing a string (e.g. a partition name) to a 32-bit unsigned integer.
+ *
+ * @param {string} str
+ * @returns {number}
  */
-const createHmac = secret => string => {
-        const hmac = crypto.createHmac('sha256', secret);
-        hmac.update(string);
-        return hmac.digest('hex');
-    };
-
-/**
- * @typedef {object|function(object):boolean} Matcher
- */
-
-/**
- * @param {object} document The document to check against the matcher.
- * @param {Matcher} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
- * @returns {boolean} True if the document matches the matcher or false otherwise.
- */
-function matches(document, matcher) {
-    if (typeof document === 'undefined') return false;
-    if (typeof matcher === 'undefined') return true;
-
-    if (typeof matcher === 'function') return matcher(document);
-
-    for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (typeof matcher[prop] === 'object') {
-            if (!matches(document[prop], matcher[prop])) {
-                return false;
-            }
-        } else if (typeof matcher[prop] !== 'undefined' && document[prop] !== matcher[prop]) {
-            return false;
-        }
+function hash(str) {
+    /* istanbul ignore if */
+    if (str.length === 0) {
+        return 0;
     }
-    return true;
-}
+    let hash = 5381,
+        i    = str.length;
 
-/**
- * @param {Matcher} matcher The matcher object or function that should be serialized.
- * @param {function(string)} hmac A function that calculates a HMAC of the given string.
- * @returns {{matcher: string|object, hmac?: string}}
- */
-function buildMetadataForMatcher(matcher, hmac) {
-    if (!matcher) {
-        return undefined;
+    while(i) {
+        hash = ((hash << 5) + hash) ^ str.charCodeAt(--i); // jshint ignore:line
     }
-    if (typeof matcher === 'object') {
-        return { matcher };
-    }
-    const matcherString = matcher.toString();
-    return { matcher: matcherString, hmac: hmac(matcherString) };
-}
 
-/**
- * @param {{matcher: string|object, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
- * @param {function(string)} hmac A function that calculates a HMAC of the given string.
- * @returns {Matcher} The matcher object or function.
- */
-function buildMatcherFromMetadata(matcherMetadata, hmac) {
-    let matcher;
-    if (typeof matcherMetadata.matcher === 'object') {
-        matcher = matcherMetadata.matcher;
-    } else {
-        if (matcherMetadata.hmac !== hmac(matcherMetadata.matcher)) {
-            throw new Error('Invalid HMAC for matcher.');
-        }
-        matcher = eval('(' + matcherMetadata.matcher + ')').bind({}); // jshint ignore:line
-    }
-    return matcher;
+    /* JavaScript does bitwise operations (like XOR, above) on 32-bit signed
+     * integers. Since we want the results to be always positive, convert the
+     * signed int to an unsigned by doing an unsigned bitshift. */
+    return hash >>> 0; // jshint ignore:line
 }
 
 /**
@@ -255,12 +207,9 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
 module.exports = {
     assert,
     assertEqual,
+    hash,
     wrapAndCheck,
     binarySearch,
-    createHmac,
-    matches,
-    buildMetadataForMatcher,
-    buildMatcherFromMetadata,
     buildMetadataHeader,
     alignTo,
     ensureDirectory,
