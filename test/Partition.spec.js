@@ -235,6 +235,7 @@ describe('Partition', function() {
         });
 
         it('reads all unflushed documents in backwards write order', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: true });
             partition.open();
             partition.write('foo-1', 1);
             partition.write('foo-2', 2);
@@ -249,6 +250,7 @@ describe('Partition', function() {
         });
 
         it('reads flushed and unflushed documents in backwards write order', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: true });
             partition.open();
             partition.write('foo-1', 1);
             partition.write('foo-2', 2);
