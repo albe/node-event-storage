@@ -470,7 +470,7 @@ describe('Storage', function() {
             }
         });
 
-        it('forEachDocumentNoIndex calls callback with document, sequenceNumber, partitionName and position', function() {
+        it('forEachDocument with noIndex calls callback with document, sequenceNumber, partitionName and position', function() {
             storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
             storage.open();
 
@@ -481,7 +481,7 @@ describe('Storage', function() {
             storage.open();
 
             const entries = [];
-            storage.forEachDocumentNoIndex(0, 5, entry => entries.push(entry));
+            storage.forEachDocument((document, entryInfo) => entries.push({ document, ...entryInfo }), true);
             expect(entries.length).to.be(6);
             for (let i = 0; i < 6; i++) {
                 expect(entries[i].document).to.eql({ foo: i + 1 });

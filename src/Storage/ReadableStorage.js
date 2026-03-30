@@ -299,11 +299,9 @@ class ReadableStorage extends events.EventEmitter {
         if (index === false) {
             // Explicitly disabled index: iterate all partitions and merge by sequenceNumber.
             // Document header sequenceNumber is 0-based; from/until are 1-based index positions.
-            // forEachDocumentNoIndex is callback-based so results are collected before yielding;
-            // this path is a recovery/repair path and is not performance-critical.
-            const documents = [];
-            this.forEachDocumentNoIndex(from - 1, until - 1, entry => documents.push(entry.document));
-            yield* documents;
+            for (const entry of this._iterateDocumentsNoIndex(from - 1, until - 1)) {
+                yield entry.document;
+            }
             return;
         }
 
@@ -365,15 +363,15 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Iterate documents across all partitions in sequenceNumber order using a k-way merge,
-     * invoking a callback for each entry. Opens any closed partition automatically.
+     * Iterate documents across all partitions in sequenceNumber order using a k-way merge.
+     * Opens any closed partition automatically.
      *
-     * @api
-     * @param {number} from The 0-based sequenceNumber to start from (inclusive).
-     * @param {number} until The 0-based sequenceNumber to read until (inclusive).
-     * @param {function({document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partitionId: number}): void} callback
+     * @protected
+     * @param {number} [from=0] The 0-based sequenceNumber to start from (inclusive).
+     * @param {number} [until=Number.MAX_SAFE_INTEGER] The 0-based sequenceNumber to read until (inclusive).
+     * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partition: number}>}
      */
-    forEachDocumentNoIndex(from, until, callback) {
+    *_iterateDocumentsNoIndex(from = 0, until = Number.MAX_SAFE_INTEGER) {
         const streams = [];
 
         this.forEachPartition(partition => {
@@ -390,10 +388,11 @@ class ReadableStorage extends events.EventEmitter {
             }
 
             if (!result.done && headerOut.sequenceNumber <= until) {
-                streams.push({ reader, headerOut, data: result.value, partitionId: partition.id, partitionName: partition.name });
+                streams.push({ reader, headerOut, data: result.value, partition: partition.id, partitionName: partition.name });
             }
         });
 
+        const items = [];
         kWayMerge(
             streams,
             stream => stream.headerOut.sequenceNumber,
@@ -405,26 +404,40 @@ class ReadableStorage extends events.EventEmitter {
                 }
                 return false;
             },
-            stream => callback({
+            stream => items.push({
                 document: this.serializer.deserialize(stream.data),
                 sequenceNumber: stream.headerOut.sequenceNumber,
                 partitionName: stream.partitionName,
                 position: stream.headerOut.position,
                 size: stream.headerOut.dataSize,
-                partitionId: stream.partitionId,
+                partition: stream.partition,
             })
         );
+
+        yield* items;
     }
 
     /**
-     * Helper method to iterate over all documents.
+     * Helper method to iterate over all documents, invoking a callback for each one.
+     * Pass `noIndex = true` to iterate all partitions directly in sequenceNumber order
+     * (useful when the global index is unavailable or corrupted).
+     * When `noIndex` is false the second callback argument is the raw index `EntryInterface`.
+     * When `noIndex` is true the second callback argument has `{ partition, position, size, sequenceNumber, partitionName }`.
      *
      * @protected
-     * @param {function(object, EntryInterface)} iterationHandler
+     * @param {function(object, object): void} iterationHandler
+     * @param {boolean} [noIndex=false] When true, bypasses the index and iterates partitions directly.
      */
-    forEachDocument(iterationHandler) {
+    forEachDocument(iterationHandler, noIndex = false) {
         /* istanbul ignore if  */
         if (typeof iterationHandler !== 'function') {
+            return;
+        }
+
+        if (noIndex) {
+            for (const { document, ...entryInfo } of this._iterateDocumentsNoIndex()) {
+                iterationHandler(document, entryInfo);
+            }
             return;
         }
 

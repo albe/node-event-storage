@@ -193,15 +193,15 @@ class WritableStorage extends ReadableStorage {
         });
 
         // Scan partitions in sequence-number order and rebuild index entries.
-        // forEachDocumentNoIndex opens any closed partitions automatically.
-        this.forEachDocumentNoIndex(fromSequenceNumber, Number.MAX_SAFE_INTEGER, ({ document, partitionId, position, size }) => {
-            const newEntry = new WritableIndex.Entry(this.index.length + 1, position, size, partitionId);
+        // _iterateDocumentsNoIndex opens any closed partitions automatically.
+        for (const { document, partition, position, size } of this._iterateDocumentsNoIndex(fromSequenceNumber, Number.MAX_SAFE_INTEGER)) {
+            const newEntry = new WritableIndex.Entry(this.index.length + 1, position, size, partition);
             this.index.add(newEntry);
 
             this.forEachWritableSecondaryIndex((secIndex) => {
                 secIndex.add(newEntry);
             }, document);
-        });
+        }
 
         this.flush();
     }
