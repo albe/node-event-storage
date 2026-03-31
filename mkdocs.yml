@@ -18,3 +18,4 @@ nav:
   - Consumers: consumers.md
   - Advanced Topics: advanced.md
   - Implementation Architecture: architecture.md
+  - API Reference: api.md
