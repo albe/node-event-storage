@@ -346,10 +346,10 @@ class ReadablePartition extends events.EventEmitter {
         const position = this.findDocumentPositionBefore(this.size);
         /* istanbul ignore if */
         if (position === false || position < 0) return null;
-        const reader = this.prepareReadBufferBackwards(position);
+        const reader = this.prepareReadBufferBackwards(this.size);
         /* istanbul ignore if */
         if (!reader.buffer) return null;
-        const header = this.readDocumentHeader(reader.buffer, reader.cursor, position);
+        const header = this.readDocumentHeader(reader.buffer, position - this.readBufferPos, position);
         return { header, position };
     }
 
