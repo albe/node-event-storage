@@ -16,7 +16,7 @@
  *   - Partition: direct ReadOnlyPartition open/close cycles
  *   - Stream  : EventStore write + closeEventStream (make stream read-only)
  *   - EventStore (writable): open/close the full store lifecycle
- *   - EventStore (read-only): open/close with stream iteration
+ *   - EventStore (read-only): open/close the full store lifecycle with ReadOnlyIndex
  *
  * After phases 1 and 2 a consumption-growth table is printed.  The test then
  * asserts that memory growth is not super-linear: doubling the number of
@@ -467,8 +467,10 @@ function runLeakPhase(callback) {
             // ---------------------------------------------------------------
             // 3e. EventStore open/close (read-only)
             // Each cycle opens the EventStore in read-only mode; the existing
-            // stream is opened as a ReadOnlyIndex.  The cycle iterates over
-            // all events to exercise the read-only stream, then closes.
+            // stream index is scanned and opened as a ReadOnlyIndex.  The
+            // cycle closes immediately without reading events, mirroring 3d
+            // so that both tests measure the open/close lifecycle cost.
+            // (Event reading is already covered in Phase 2.)
             // ---------------------------------------------------------------
             runAsyncCycles((i, done) => {
                 const store = new EventStore('memory-test', {
@@ -476,8 +478,6 @@ function runLeakPhase(callback) {
                     readOnly: true,
                 });
                 store.on('ready', () => {
-                    // Exercise the stream so its read-only index is fully used.
-                    for (const _e of store.getEventStream(STREAM_NAME)) { /* consume */ }
                     store.close();
                     done();
                 });
