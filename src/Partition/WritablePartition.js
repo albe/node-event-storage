@@ -302,9 +302,6 @@ class WritablePartition extends ReadablePartition {
      * @returns {object} A reader object with properties `buffer`, `cursor` and `length`.
      */
     prepareReadBufferBackwards(position) {
-        if (position < 0) {
-            return { buffer: null, cursor: 0, length: 0 };
-        }
         const bufferPos = this.size - this.writeBufferCursor;
         // Handle the case when data that is still in write buffer is supposed to be read backwards
         if (this.dirtyReads && this.writeBufferCursor > 0 && position > bufferPos) {
