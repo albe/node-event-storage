@@ -486,7 +486,6 @@ describe('Partition', function() {
 
     describe('findDocument', function() {
 
-        // Below the binary-search threshold (partition smaller than readBufferSize * 8)
         it('returns null for an empty partition', function() {
             partition.open();
             expect(partition.findDocument(1)).to.be(null);
@@ -498,7 +497,7 @@ describe('Partition', function() {
             expect(partition.findDocument(6)).to.be(null);
         });
 
-        it('finds the first document by sequence number (linear path)', function() {
+        it('finds the first document by sequence number', function() {
             partition.open();
             fillPartition(5, i => 'doc-' + i);
             const found = partition.findDocument(1);
@@ -507,7 +506,7 @@ describe('Partition', function() {
             expect(found.data).to.be('doc-1');
         });
 
-        it('finds a middle document by sequence number (linear path)', function() {
+        it('finds a middle document by sequence number', function() {
             partition.open();
             fillPartition(5, i => 'doc-' + i);
             const found = partition.findDocument(3);
@@ -516,7 +515,7 @@ describe('Partition', function() {
             expect(found.data).to.be('doc-3');
         });
 
-        it('finds the last document by sequence number (linear path)', function() {
+        it('finds the last document by sequence number', function() {
             partition.open();
             fillPartition(5, i => 'doc-' + i);
             const found = partition.findDocument(5);
@@ -525,11 +524,8 @@ describe('Partition', function() {
             expect(found.data).to.be('doc-5');
         });
 
-        // Above the binary-search threshold.
-        // readBufferSize: 4 KiB — well above a single ~484-byte document so
-        // findDocumentPositionBefore() never operates on a stale buffer, yet
-        // small enough that 100 × 484-byte docs (≈ 48 kB) exceed the threshold
-        // of readBufferSize × BINARY_SEARCH_THRESHOLD = 4096 × 8 = 32 768 bytes.
+        // Use a small readBufferSize so that even a few documents cause many binary search
+        // probes, exercising the full binary search path.
         function createBinarySearchReader() {
             return createReader({ readBufferSize: 4 * 1024 });
         }

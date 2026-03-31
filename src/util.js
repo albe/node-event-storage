@@ -90,11 +90,9 @@ function buildMetadataHeader(magic, metadata) {
  * @param {number} number The value to search for
  * @param {number} length The upper position to search up to
  * @param {function(number)} get The getter function to retrieve the values at the specific position
- * @param {function(number, number): boolean} [continueWhile] Optional predicate called with (low, high) that
- *   controls whether to keep looping. Defaults to the standard binary search condition (low <= high).
  * @returns {Array<number>} An array of the low and high position that match the searched number
  */
-function binarySearch(number, length, get, continueWhile = (low, high) => low <= high) {
+function binarySearch(number, length, get) {
     let low = 1;
     let high = length;
 
@@ -105,7 +103,7 @@ function binarySearch(number, length, get, continueWhile = (low, high) => low <=
         return [0, high];
     }
 
-    while (continueWhile(low, high)) {
+    while (low <= high) {
         const mid = low + ((high - low) >> 1);
         const value = get(mid);
         if (value === number) {
