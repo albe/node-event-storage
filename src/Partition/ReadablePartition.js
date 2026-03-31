@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const events = require('events');
-const { assert, alignTo, hash } = require('../util');
+const { assert, alignTo, hash, binarySearch } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
@@ -240,7 +240,7 @@ class ReadablePartition extends events.EventEmitter {
             return ({ buffer: null, cursor: 0, length: 0 });
         }
         let bufferCursor = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE)) {
+        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE) || bufferCursor > this.readBufferLength) {
             this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
             bufferCursor = position - this.readBufferPos;
         }
@@ -335,6 +335,32 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Find the document that starts immediately before `position`, fill the read buffer
+     * centered around that document's start, and return its file position and parsed header.
+     * The buffer is centered by calling `prepareReadBufferBackwards` with a position
+     * half a buffer-length ahead of the document start, clamped to file size, so the
+     * document start lands near the middle of the buffer.
+     *
+     * @private
+     * @param {number} position The file position to search before.
+     * @returns {{ header: {dataSize: number, sequenceNumber: number, time64: number}, position: number }|null}
+     *   The document header and file position, or null if no document could be found.
+     */
+    readDocumentBefore(position) {
+        const docPos = this.findDocumentPositionBefore(position);
+        /* istanbul ignore if */
+        if (docPos === false || docPos < 0) return null;
+        const reader = this.prepareReadBufferBackwards(Math.min(docPos + (this.readBuffer.byteLength >> 1), this.size));
+        /* istanbul ignore if */
+        if (!reader.buffer) return null;
+        const cursor = docPos - this.readBufferPos;
+        /* istanbul ignore if */
+        if (cursor < 0 || cursor + DOCUMENT_HEADER_SIZE > reader.length) return null;
+        const header = this.readDocumentHeader(reader.buffer, cursor, docPos);
+        return { header, position: docPos };
+    }
+
+    /**
      * Read the header and file position of the last document in this partition.
      *
      * @api
@@ -343,19 +369,17 @@ class ReadablePartition extends events.EventEmitter {
      */
     readLast() {
         if (this.size === 0) return null;
-        const position = this.findDocumentPositionBefore(this.size);
-        /* istanbul ignore if */
-        if (position === false || position < 0) return null;
-        const reader = this.prepareReadBufferBackwards(this.size);
-        /* istanbul ignore if */
-        if (!reader.buffer) return null;
-        const header = this.readDocumentHeader(reader.buffer, position - this.readBufferPos, position);
-        return { header, position };
+        return this.readDocumentBefore(this.size);
     }
 
     /**
      * Find the first document whose sequenceNumber is >= the given value.
      * Uses readLast() to short-circuit when the partition contains no such document.
+     * Uses a binary search over file positions via readDocumentBefore() to locate the
+     * document. The search tracks both the lower bound (position just after the last
+     * confirmed "< sequenceNumber" doc) and the upper bound (minimum position of any
+     * probed doc with sequenceNumber >= target). The upper bound, when available, is
+     * the exact target document, so no further linear scan is needed.
      *
      * @api
      * @param {number} sequenceNumber The 0-based sequence number to search for.
@@ -367,17 +391,31 @@ class ReadablePartition extends events.EventEmitter {
         if (!last || last.header.sequenceNumber < sequenceNumber) {
             return null;
         }
+
+        let startPosition = this.size;
+        binarySearch(
+            sequenceNumber,
+            this.size,
+            (pos) => {
+                const doc = this.readDocumentBefore(pos);
+                if (!doc) return sequenceNumber;
+                if (doc.header.sequenceNumber < sequenceNumber) {
+                    startPosition = Math.max(startPosition, doc.position + this.documentWriteSize(doc.header.dataSize));
+                } else {
+                    startPosition = Math.min(startPosition, doc.position);
+                }
+                return doc.header.sequenceNumber;
+            }
+        );
+
         const headerOut = {};
-        const reader = this.readAll(0, headerOut);
-        let result = reader.next();
-        while (!result.done && headerOut.sequenceNumber < sequenceNumber) {
-            result = reader.next();
-        }
+        const data = this.readFrom(startPosition, 0, headerOut);
         /* istanbul ignore if */
-        if (result.done) {
+        if (data === false) {
             return null;
         }
-        return { reader, headerOut, data: result.value };
+        headerOut.position = startPosition;
+        return { headerOut, data };
     }
 
     /**

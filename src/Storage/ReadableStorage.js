@@ -382,7 +382,9 @@ class ReadableStorage extends events.EventEmitter {
 
             const found = partition.findDocument(from);
             if (found && found.headerOut.sequenceNumber <= until) {
-                streams.push({ ...found, partition: partition.id, partitionName: partition.name });
+                const nextPosition = found.headerOut.position + partition.documentWriteSize(found.headerOut.dataSize);
+                const reader = partition.readAll(nextPosition, found.headerOut);
+                streams.push({ ...found, reader, partition: partition.id, partitionName: partition.name });
             }
         });
 
