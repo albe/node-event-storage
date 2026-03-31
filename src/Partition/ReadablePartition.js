@@ -409,13 +409,14 @@ class ReadablePartition extends events.EventEmitter {
         );
 
         const headerOut = {};
-        const reader = this.readAll(startPosition, headerOut);
-        const result = reader.next();
+        const data = this.readFrom(startPosition, 0, headerOut);
         /* istanbul ignore if */
-        if (result.done) {
+        if (data === false) {
             return null;
         }
-        return { reader, headerOut, data: result.value };
+        headerOut.position = startPosition;
+        const reader = this.readAll(startPosition + this.documentWriteSize(headerOut.dataSize), headerOut);
+        return { reader, headerOut, data };
     }
 
     /**
