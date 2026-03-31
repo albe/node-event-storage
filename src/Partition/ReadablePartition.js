@@ -376,7 +376,10 @@ class ReadablePartition extends events.EventEmitter {
      * Find the first document whose sequenceNumber is >= the given value.
      * Uses readLast() to short-circuit when the partition contains no such document.
      * Uses a binary search over file positions via readDocumentBefore() to locate the
-     * document efficiently, then falls back to a short linear scan from that position.
+     * document. The search tracks both the lower bound (position just after the last
+     * confirmed "< sequenceNumber" doc) and the upper bound (minimum position of any
+     * probed doc with sequenceNumber >= target). The upper bound, when available, is
+     * the exact target document, so no further linear scan is needed.
      *
      * @api
      * @param {number} sequenceNumber The 0-based sequence number to search for.
@@ -390,6 +393,7 @@ class ReadablePartition extends events.EventEmitter {
         }
 
         let startPosition = 0;
+        let upperBound = null;
         binarySearch(
             sequenceNumber,
             this.size,
@@ -398,17 +402,17 @@ class ReadablePartition extends events.EventEmitter {
                 if (!doc) return sequenceNumber;
                 if (doc.header.sequenceNumber < sequenceNumber) {
                     startPosition = doc.position + this.documentWriteSize(doc.header.dataSize);
+                } else if (upperBound === null || doc.position < upperBound) {
+                    upperBound = doc.position;
                 }
                 return doc.header.sequenceNumber;
             }
         );
+        startPosition = upperBound ?? startPosition;
 
         const headerOut = {};
         const reader = this.readAll(startPosition, headerOut);
-        let result = reader.next();
-        while (!result.done && headerOut.sequenceNumber < sequenceNumber) {
-            result = reader.next();
-        }
+        const result = reader.next();
         /* istanbul ignore if */
         if (result.done) {
             return null;
