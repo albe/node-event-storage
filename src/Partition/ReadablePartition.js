@@ -392,8 +392,7 @@ class ReadablePartition extends events.EventEmitter {
             return null;
         }
 
-        let startPosition = 0;
-        let upperBound = null;
+        let startPosition = this.size;
         binarySearch(
             sequenceNumber,
             this.size,
@@ -401,14 +400,13 @@ class ReadablePartition extends events.EventEmitter {
                 const doc = this.readDocumentBefore(pos);
                 if (!doc) return sequenceNumber;
                 if (doc.header.sequenceNumber < sequenceNumber) {
-                    startPosition = doc.position + this.documentWriteSize(doc.header.dataSize);
-                } else if (upperBound === null || doc.position < upperBound) {
-                    upperBound = doc.position;
+                    startPosition = Math.max(startPosition, doc.position + this.documentWriteSize(doc.header.dataSize));
+                } else {
+                    startPosition = Math.min(startPosition, doc.position);
                 }
                 return doc.header.sequenceNumber;
             }
         );
-        startPosition = upperBound ?? startPosition;
 
         const headerOut = {};
         const reader = this.readAll(startPosition, headerOut);
