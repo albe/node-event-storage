@@ -295,7 +295,40 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
-     * Truncate the internal read buffer after the given position.
+     * Prepare the read buffer for reading *before* the specified position. Don't try to read *after* the returned cursor.
+     *
+     * @protected
+     * @param {number} position The position in the file to prepare the read buffer for reading before.
+     * @returns {object} A reader object with properties `buffer`, `cursor` and `length`.
+     */
+    prepareReadBufferBackwards(position) {
+        const bufferPos = this.size - this.writeBufferCursor;
+        // Handle the case when data that is still in write buffer is supposed to be read backwards
+        if (this.dirtyReads && this.writeBufferCursor > 0 && position > bufferPos) {
+            return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
+        }
+        return super.prepareReadBufferBackwards(position);
+    }
+
+    /**
+     * Read all documents in reverse write order, ignoring any unflushed write-buffer data when
+     * dirty reads are disabled.
+     *
+     * @api
+     * @param {number} [before] The document position to start reading backward from.
+     * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
+     */
+    *readAllBackwards(before = -1) {
+        if (!this.dirtyReads && this.writeBufferCursor > 0) {
+            const flushedSize = this.size - this.writeBufferCursor;
+            const clampedBefore = before < 0 ? flushedSize : Math.min(before, flushedSize);
+            yield* super.readAllBackwards(clampedBefore);
+            return;
+        }
+        yield* super.readAllBackwards(before);
+    }
+
+    /**
      *
      * @internal
      * @param {number} after The byte position to truncate the read buffer after.

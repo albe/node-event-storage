@@ -234,6 +234,72 @@ describe('Partition', function() {
             reader.close();
         });
 
+        it('reads all unflushed documents in backwards write order', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: true });
+            partition.open();
+            partition.write('foo-1', 1);
+            partition.write('foo-2', 2);
+            partition.write('foo-3', 3);
+            // do NOT flush - all data is in the write buffer
+            let i = 3;
+            for (let data of partition.readAllBackwards()) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
+        it('reads flushed and unflushed documents in backwards write order', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: true });
+            partition.open();
+            partition.write('foo-1', 1);
+            partition.write('foo-2', 2);
+            partition.flush();
+            partition.write('foo-3', 3);
+            partition.write('foo-4', 4);
+            // foo-3 and foo-4 are still in the write buffer
+            let i = 4;
+            for (let data of partition.readAllBackwards()) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
+        it('does not read unflushed documents in forward order when dirtyReads is disabled', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: false });
+            partition.open();
+            partition.write('foo-1', 1);
+            partition.write('foo-2', 2);
+            partition.flush();
+            partition.write('foo-3', 3);
+            partition.write('foo-4', 4);
+            // foo-3 and foo-4 are still in the write buffer and must not be visible
+            let i = 1;
+            for (let data of partition.readAll()) {
+                expect(data).to.be('foo-' + i.toString());
+                i++;
+            }
+            expect(i).to.be(3);
+        });
+
+        it('does not read unflushed documents in backwards order when dirtyReads is disabled', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: false });
+            partition.open();
+            partition.write('foo-1', 1);
+            partition.write('foo-2', 2);
+            partition.flush();
+            partition.write('foo-3', 3);
+            partition.write('foo-4', 4);
+            // foo-3 and foo-4 are still in the write buffer and must not be visible
+            let i = 2;
+            for (let data of partition.readAllBackwards()) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
     });
 
     describe('readFrom', function() {
