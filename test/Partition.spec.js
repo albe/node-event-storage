@@ -582,7 +582,7 @@ describe('Partition', function() {
             expect(found.headerOut.sequenceNumber).to.be(51);
         });
 
-        it('returns all subsequent documents from the returned reader', function() {
+        it('returns subsequent documents when iterating with readAll from found position', function() {
             partition.open();
             fillPartition(100, () => 'x'.repeat(460));
             partition.close();
@@ -592,14 +592,16 @@ describe('Partition', function() {
             const found = reader.findDocument(98);
             expect(found).to.not.be(null);
             expect(found.headerOut.sequenceNumber).to.be(98);
-            // The reader generator should yield the remaining documents
-            let next = found.reader.next();
+            // Create a readAll reader starting from the next document position
+            const nextPosition = found.headerOut.position + reader.documentWriteSize(found.headerOut.dataSize);
+            const docReader = reader.readAll(nextPosition, found.headerOut);
+            let next = docReader.next();
             expect(next.done).to.be(false);
             expect(found.headerOut.sequenceNumber).to.be(99);
-            next = found.reader.next();
+            next = docReader.next();
             expect(next.done).to.be(false);
             expect(found.headerOut.sequenceNumber).to.be(100);
-            expect(found.reader.next().done).to.be(true);
+            expect(docReader.next().done).to.be(true);
         });
 
     });

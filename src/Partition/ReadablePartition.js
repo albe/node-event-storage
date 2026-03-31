@@ -415,8 +415,7 @@ class ReadablePartition extends events.EventEmitter {
             return null;
         }
         headerOut.position = startPosition;
-        const reader = this.readAll(startPosition + this.documentWriteSize(headerOut.dataSize), headerOut);
-        return { reader, headerOut, data };
+        return { headerOut, data };
     }
 
     /**
