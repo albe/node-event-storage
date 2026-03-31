@@ -418,6 +418,130 @@ describe('Partition', function() {
 
     });
 
+    describe('findDocument', function() {
+
+        // Below the binary-search threshold (partition smaller than readBufferSize * 8)
+        it('returns null for an empty partition', function() {
+            partition.open();
+            expect(partition.findDocument(1)).to.be(null);
+        });
+
+        it('returns null when sequence number is beyond the last document', function() {
+            partition.open();
+            fillPartition(5);
+            expect(partition.findDocument(6)).to.be(null);
+        });
+
+        it('finds the first document by sequence number (linear path)', function() {
+            partition.open();
+            fillPartition(5, i => 'doc-' + i);
+            const found = partition.findDocument(1);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(1);
+            expect(found.data).to.be('doc-1');
+        });
+
+        it('finds a middle document by sequence number (linear path)', function() {
+            partition.open();
+            fillPartition(5, i => 'doc-' + i);
+            const found = partition.findDocument(3);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(3);
+            expect(found.data).to.be('doc-3');
+        });
+
+        it('finds the last document by sequence number (linear path)', function() {
+            partition.open();
+            fillPartition(5, i => 'doc-' + i);
+            const found = partition.findDocument(5);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(5);
+            expect(found.data).to.be('doc-5');
+        });
+
+        // Above the binary-search threshold.
+        // readBufferSize: 4 KiB — well above a single ~484-byte document so
+        // findDocumentPositionBefore() never operates on a stale buffer, yet
+        // small enough that 100 × 484-byte docs (≈ 48 kB) exceed the threshold
+        // of readBufferSize × BINARY_SEARCH_THRESHOLD = 4096 × 8 = 32 768 bytes.
+        function createBinarySearchReader() {
+            return createReader({ readBufferSize: 4 * 1024 });
+        }
+
+        it('finds document near start via binary search', function() {
+            partition.open();
+            fillPartition(100, () => 'x'.repeat(460));
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            const found = reader.findDocument(2);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(2);
+        });
+
+        it('finds document near center via binary search', function() {
+            partition.open();
+            fillPartition(100, () => 'x'.repeat(460));
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            const found = reader.findDocument(50);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(50);
+        });
+
+        it('finds document near end via binary search', function() {
+            partition.open();
+            fillPartition(100, () => 'x'.repeat(460));
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            const found = reader.findDocument(99);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(99);
+        });
+
+        it('returns the lowest sequence number >= search value when exact match is absent', function() {
+            // Write docs 1-49 then 51-100 (seqNum 50 is deliberately missing).
+            partition.open();
+            for (let i = 1; i <= 49; i++) partition.write('x'.repeat(460), i);
+            for (let i = 51; i <= 100; i++) partition.write('x'.repeat(460), i);
+            partition.flush();
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            // Searching for the missing seqNum 50 must return seqNum 51.
+            const found = reader.findDocument(50);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(51);
+        });
+
+        it('returns all subsequent documents from the returned reader', function() {
+            partition.open();
+            fillPartition(100, () => 'x'.repeat(460));
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            const found = reader.findDocument(98);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(98);
+            // The reader generator should yield the remaining documents
+            let next = found.reader.next();
+            expect(next.done).to.be(false);
+            expect(found.headerOut.sequenceNumber).to.be(99);
+            next = found.reader.next();
+            expect(next.done).to.be(false);
+            expect(found.headerOut.sequenceNumber).to.be(100);
+            expect(found.reader.next().done).to.be(true);
+        });
+
+    });
+
     describe('readLast', function() {
 
         it('returns null for an empty partition', function() {

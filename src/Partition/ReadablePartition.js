@@ -8,6 +8,7 @@ const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
 const DOCUMENT_SEPARATOR = "\x00\x00\x1E\n";
 const DOCUMENT_FOOTER_SIZE = 4 /* additional data size footer */ + DOCUMENT_SEPARATOR.length;
+const BINARY_SEARCH_THRESHOLD = 8;
 
 // node-event-store partition V03
 const HEADER_MAGIC = "nesprt03";
@@ -240,7 +241,7 @@ class ReadablePartition extends events.EventEmitter {
             return ({ buffer: null, cursor: 0, length: 0 });
         }
         let bufferCursor = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE)) {
+        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE) || bufferCursor > this.readBufferLength) {
             this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
             bufferCursor = position - this.readBufferPos;
         }
@@ -356,6 +357,9 @@ class ReadablePartition extends events.EventEmitter {
     /**
      * Find the first document whose sequenceNumber is >= the given value.
      * Uses readLast() to short-circuit when the partition contains no such document.
+     * When the partition is larger than readBufferSize * BINARY_SEARCH_THRESHOLD, uses a
+     * binary search over file positions via findDocumentPositionBefore() to narrow the
+     * start position before falling back to a linear scan over the remaining range.
      *
      * @api
      * @param {number} sequenceNumber The 0-based sequence number to search for.
@@ -367,8 +371,32 @@ class ReadablePartition extends events.EventEmitter {
         if (!last || last.header.sequenceNumber < sequenceNumber) {
             return null;
         }
+
+        let startPosition = 0;
+        if (this.size > this.readBufferSize * BINARY_SEARCH_THRESHOLD) {
+            let low = 0;
+            let high = last.position;
+
+            while (high - low > this.readBufferSize) {
+                const mid = low + Math.floor((high - low) / 2);
+                const pos = this.findDocumentPositionBefore(mid);
+                if (pos === false || pos < 0) {
+                    break;
+                }
+                const reader = this.prepareReadBuffer(pos);
+                if (!reader.buffer) break;
+                const { dataSize, sequenceNumber: docSeqNum } = this.readDocumentHeader(reader.buffer, reader.cursor, pos);
+                if (docSeqNum < sequenceNumber) {
+                    low = pos + this.documentWriteSize(dataSize);
+                } else {
+                    high = pos;
+                }
+            }
+            startPosition = low;
+        }
+
         const headerOut = {};
-        const reader = this.readAll(0, headerOut);
+        const reader = this.readAll(startPosition, headerOut);
         let result = reader.next();
         while (!result.done && headerOut.sequenceNumber < sequenceNumber) {
             result = reader.next();
