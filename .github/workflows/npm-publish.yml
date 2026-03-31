@@ -1,0 +1,89 @@
+name: npm publish
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.x'
+      - run: npm ci
+
+      - name: Pack
+        run: npm pack
+
+      - name: Verify pack contents
+        run: |
+          TARBALL=$(ls event-storage-*.tgz)
+          FILES=$(tar tzf "$TARBALL")
+          echo "$FILES"
+
+          # Required files must be present
+          REQUIRED=(
+            "package/index.js"
+            "package/src/EventStore.js"
+            "package/src/Storage.js"
+            "package/src/Partition.js"
+            "package/src/Index.js"
+            "package/src/metadataUtil.js"
+          )
+          for f in "${REQUIRED[@]}"; do
+            echo "$FILES" | grep -qF "$f" || { echo "ERROR: required file '$f' is missing from the package"; exit 1; }
+          done
+
+          # Sensitive / unwanted files must not be present
+          FORBIDDEN=(
+            "\.env"
+            "node_modules/"
+            "/data/"
+          )
+          for pattern in "${FORBIDDEN[@]}"; do
+            if echo "$FILES" | grep -qE "$pattern"; then
+              echo "ERROR: package contains files matching forbidden pattern '$pattern'"
+              exit 1
+            fi
+          done
+
+          echo "Package contents verified successfully."
+
+      - name: Install pack into bench and run smoke test
+        run: |
+          TARBALL="$(pwd)/$(ls event-storage-*.tgz)"
+          cd bench
+          npm ci
+          npm install --no-save "$TARBALL"
+          npm run bench
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
