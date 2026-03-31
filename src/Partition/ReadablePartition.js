@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const events = require('events');
-const { assert, alignTo, hash } = require('../util');
+const { assert, alignTo, hash, binarySearch } = require('../util');
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
@@ -374,25 +374,24 @@ class ReadablePartition extends events.EventEmitter {
 
         let startPosition = 0;
         if (this.size > this.readBufferSize * BINARY_SEARCH_THRESHOLD) {
-            let low = 0;
-            let high = last.position;
-
-            while (high - low > this.readBufferSize) {
-                const mid = low + Math.floor((high - low) / 2);
-                const pos = this.findDocumentPositionBefore(mid);
-                if (pos === false || pos < 0) {
-                    break;
-                }
-                const reader = this.prepareReadBuffer(pos);
-                if (!reader.buffer) break;
-                const { dataSize, sequenceNumber: docSeqNum } = this.readDocumentHeader(reader.buffer, reader.cursor, pos);
-                if (docSeqNum < sequenceNumber) {
-                    low = pos + this.documentWriteSize(dataSize);
-                } else {
-                    high = pos;
-                }
-            }
-            startPosition = low;
+            let lastLow = 0;
+            binarySearch(
+                sequenceNumber,
+                this.size,
+                (pos) => {
+                    const snapped = this.findDocumentPositionBefore(pos);
+                    if (snapped === false || snapped < 0) return sequenceNumber;
+                    const reader = this.prepareReadBuffer(snapped);
+                    if (!reader.buffer) return sequenceNumber;
+                    const { dataSize, sequenceNumber: docSeqNum } = this.readDocumentHeader(reader.buffer, reader.cursor, snapped);
+                    if (docSeqNum < sequenceNumber) {
+                        lastLow = snapped + this.documentWriteSize(dataSize);
+                    }
+                    return docSeqNum;
+                },
+                (low, high) => high - low > this.readBufferSize
+            );
+            startPosition = lastLow;
         }
 
         const headerOut = {};
