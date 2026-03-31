@@ -336,6 +336,32 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Find the document that starts immediately before `position`, fill the read buffer
+     * centered around that document's start, and return its file position and parsed header.
+     * The buffer is centered by calling `prepareReadBufferBackwards` with a position
+     * half a buffer-length ahead of the document start, clamped to file size, so the
+     * document start lands near the middle of the buffer.
+     *
+     * @private
+     * @param {number} position The file position to search before.
+     * @returns {{ header: {dataSize: number, sequenceNumber: number, time64: number}, position: number }|null}
+     *   The document header and file position, or null if no document could be found.
+     */
+    readDocumentBefore(position) {
+        const docPos = this.findDocumentPositionBefore(position);
+        /* istanbul ignore if */
+        if (docPos === false || docPos < 0) return null;
+        const reader = this.prepareReadBufferBackwards(Math.min(docPos + (this.readBuffer.byteLength >> 1), this.size));
+        /* istanbul ignore if */
+        if (!reader.buffer) return null;
+        const cursor = docPos - this.readBufferPos;
+        /* istanbul ignore if */
+        if (cursor < 0 || cursor + DOCUMENT_HEADER_SIZE > reader.length) return null;
+        const header = this.readDocumentHeader(reader.buffer, cursor, docPos);
+        return { header, position: docPos };
+    }
+
+    /**
      * Read the header and file position of the last document in this partition.
      *
      * @api
@@ -344,14 +370,7 @@ class ReadablePartition extends events.EventEmitter {
      */
     readLast() {
         if (this.size === 0) return null;
-        const position = this.findDocumentPositionBefore(this.size);
-        /* istanbul ignore if */
-        if (position === false || position < 0) return null;
-        const reader = this.prepareReadBufferBackwards(this.size);
-        /* istanbul ignore if */
-        if (!reader.buffer) return null;
-        const header = this.readDocumentHeader(reader.buffer, position - this.readBufferPos, position);
-        return { header, position };
+        return this.readDocumentBefore(this.size);
     }
 
     /**
@@ -379,15 +398,12 @@ class ReadablePartition extends events.EventEmitter {
                 sequenceNumber,
                 this.size,
                 (pos) => {
-                    const snapped = this.findDocumentPositionBefore(pos);
-                    if (snapped === false || snapped < 0) return sequenceNumber;
-                    const reader = this.prepareReadBuffer(snapped);
-                    if (!reader.buffer) return sequenceNumber;
-                    const { dataSize, sequenceNumber: docSeqNum } = this.readDocumentHeader(reader.buffer, reader.cursor, snapped);
-                    if (docSeqNum < sequenceNumber) {
-                        lastLow = snapped + this.documentWriteSize(dataSize);
+                    const doc = this.readDocumentBefore(pos);
+                    if (!doc) return sequenceNumber;
+                    if (doc.header.sequenceNumber < sequenceNumber) {
+                        lastLow = doc.position + this.documentWriteSize(doc.header.dataSize);
                     }
-                    return docSeqNum;
+                    return doc.header.sequenceNumber;
                 },
                 (low, high) => high - low > this.readBufferSize
             );
