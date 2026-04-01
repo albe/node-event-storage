@@ -11,3 +11,5 @@ node_modules
 /stress-test/stress-data
 /stress-test/writer-stats.json
 /site
+/data
+*.tgz

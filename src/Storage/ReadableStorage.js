@@ -3,7 +3,8 @@ import path from 'path';
 import events from 'events';
 import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
-import { assert, createHmac, matches, wrapAndCheck, buildMetadataForMatcher } from '../util.js';
+import { assert, wrapAndCheck, kWayMerge } from '../util.js';
+import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
@@ -299,7 +300,7 @@ class ReadableStorage extends events.EventEmitter {
         if (index === false) {
             // Explicitly disabled index: iterate all partitions and merge by sequenceNumber.
             // Document header sequenceNumber is 0-based; from/until are 1-based index positions.
-            for (const entry of this.iteratePartitionsBySequenceNumber(from - 1, until - 1)) {
+            for (const entry of this.iterateDocumentsNoIndex(from - 1, until - 1)) {
                 yield entry.document;
             }
             return;
@@ -310,62 +311,6 @@ class ReadableStorage extends events.EventEmitter {
         for (let entry of entries) {
             const document = this.readFrom(entry.partition, entry.position, entry.size);
             yield document;
-        }
-    }
-
-    /**
-     * Iterate documents across all partitions in sequenceNumber order using a k-way merge.
-     * SequenceNumbers stored in document headers are 0-based.
-     * Each yielded entry includes the deserialized document, its sequenceNumber, the partition name,
-     * the byte position within the partition, the data size, and the partition id —
-     * allowing callers to rebuild index entries.
-     * @api
-     * @param {number} fromSeq The 0-based sequenceNumber to start from (inclusive).
-     * @param {number} untilSeq The 0-based sequenceNumber to read until (inclusive).
-     * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partitionId: number}>}
-     */
-    *iteratePartitionsBySequenceNumber(fromSeq, untilSeq) {
-        const partitions = [];
-
-        for (const partition of Object.values(this.partitions)) {
-            if (!partition.isOpen()) {
-                partition.open();
-            }
-            const headerOut = {};
-            const reader = partition.readAll(0, headerOut);
-
-            // Advance to the first document with sequenceNumber >= fromSeq.
-            let result = reader.next();
-            while (!result.done && headerOut.sequenceNumber < fromSeq) {
-                result = reader.next();
-            }
-
-            if (!result.done && headerOut.sequenceNumber <= untilSeq) {
-                partitions.push({ reader, headerOut, data: result.value, sequenceNumber: headerOut.sequenceNumber, position: headerOut.position, size: headerOut.dataSize, partitionId: partition.id, partitionName: partition.name });
-            }
-        }
-
-        // K-way merge: at each step, yield the document with the smallest sequenceNumber
-        while (partitions.length > 0) {
-            let minIdx = 0;
-            for (let i = 1; i < partitions.length; i++) {
-                if (partitions[i].sequenceNumber < partitions[minIdx].sequenceNumber) {
-                    minIdx = i;
-                }
-            }
-
-            const { data, sequenceNumber, partitionName, position, size, partitionId } = partitions[minIdx];
-            yield { document: this.serializer.deserialize(data), sequenceNumber, partitionName, position, size, partitionId };
-
-            const next = partitions[minIdx].reader.next();
-            if (!next.done && partitions[minIdx].headerOut.sequenceNumber <= untilSeq) {
-                partitions[minIdx].data = next.value;
-                partitions[minIdx].sequenceNumber = partitions[minIdx].headerOut.sequenceNumber;
-                partitions[minIdx].position = partitions[minIdx].headerOut.position;
-                partitions[minIdx].size = partitions[minIdx].headerOut.dataSize;
-            } else {
-                partitions.splice(minIdx, 1);
-            }
         }
     }
 
@@ -419,14 +364,76 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Helper method to iterate over all documents.
+     * Iterate documents across all partitions in sequenceNumber order using a k-way merge.
+     * Opens any closed partition automatically.
      *
      * @protected
-     * @param {function(object, EntryInterface)} iterationHandler
+     * @param {number} [from=0] The 0-based sequenceNumber to start from (inclusive).
+     * @param {number} [until=Number.MAX_SAFE_INTEGER] The 0-based sequenceNumber to read until (inclusive).
+     * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partition: number}>}
      */
-    forEachDocument(iterationHandler) {
+    *iterateDocumentsNoIndex(from = 0, until = Number.MAX_SAFE_INTEGER) {
+        const streams = [];
+
+        this.forEachPartition(partition => {
+            if (!partition.isOpen()) {
+                partition.open();
+            }
+
+            const found = partition.findDocument(from);
+            if (found && found.headerOut.sequenceNumber <= until) {
+                const nextPosition = found.headerOut.position + partition.documentWriteSize(found.headerOut.dataSize);
+                const reader = partition.readAll(nextPosition, found.headerOut);
+                streams.push({ ...found, reader, partition: partition.id, partitionName: partition.name });
+            }
+        });
+
+        const items = [];
+        kWayMerge(
+            streams,
+            stream => stream.headerOut.sequenceNumber,
+            stream => {
+                const next = stream.reader.next();
+                if (!next.done && stream.headerOut.sequenceNumber <= until) {
+                    stream.data = next.value;
+                    return true;
+                }
+                return false;
+            },
+            stream => items.push({
+                document: this.serializer.deserialize(stream.data),
+                sequenceNumber: stream.headerOut.sequenceNumber,
+                partitionName: stream.partitionName,
+                position: stream.headerOut.position,
+                size: stream.headerOut.dataSize,
+                partition: stream.partition,
+            })
+        );
+
+        yield* items;
+    }
+
+    /**
+     * Helper method to iterate over all documents, invoking a callback for each one.
+     * Pass `noIndex = true` to iterate all partitions directly in sequenceNumber order
+     * (useful when the global index is unavailable or corrupted).
+     * When `noIndex` is false the second callback argument is the raw index `EntryInterface`.
+     * When `noIndex` is true the second callback argument has `{ partition, position, size, sequenceNumber, partitionName }`.
+     *
+     * @protected
+     * @param {function(object, object): void} iterationHandler
+     * @param {boolean} [noIndex=false] When true, bypasses the index and iterates partitions directly.
+     */
+    forEachDocument(iterationHandler, noIndex = false) {
         /* istanbul ignore if  */
         if (typeof iterationHandler !== 'function') {
+            return;
+        }
+
+        if (noIndex) {
+            for (const { document, ...entryInfo } of this.iterateDocumentsNoIndex()) {
+                iterationHandler(document, entryInfo);
+            }
             return;
         }
 

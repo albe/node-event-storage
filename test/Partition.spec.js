@@ -237,6 +237,72 @@ describe('Partition', function() {
             reader.close();
         });
 
+        it('reads all unflushed documents in backwards write order', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: true });
+            partition.open();
+            partition.write('foo-1', 1);
+            partition.write('foo-2', 2);
+            partition.write('foo-3', 3);
+            // do NOT flush - all data is in the write buffer
+            let i = 3;
+            for (let data of partition.readAllBackwards()) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
+        it('reads flushed and unflushed documents in backwards write order', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: true });
+            partition.open();
+            partition.write('foo-1', 1);
+            partition.write('foo-2', 2);
+            partition.flush();
+            partition.write('foo-3', 3);
+            partition.write('foo-4', 4);
+            // foo-3 and foo-4 are still in the write buffer
+            let i = 4;
+            for (let data of partition.readAllBackwards()) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
+        it('does not read unflushed documents in forward order when dirtyReads is disabled', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: false });
+            partition.open();
+            partition.write('foo-1', 1);
+            partition.write('foo-2', 2);
+            partition.flush();
+            partition.write('foo-3', 3);
+            partition.write('foo-4', 4);
+            // foo-3 and foo-4 are still in the write buffer and must not be visible
+            let i = 1;
+            for (let data of partition.readAll()) {
+                expect(data).to.be('foo-' + i.toString());
+                i++;
+            }
+            expect(i).to.be(3);
+        });
+
+        it('does not read unflushed documents in backwards order when dirtyReads is disabled', function() {
+            partition = new Partition('.part', { dataDirectory, dirtyReads: false });
+            partition.open();
+            partition.write('foo-1', 1);
+            partition.write('foo-2', 2);
+            partition.flush();
+            partition.write('foo-3', 3);
+            partition.write('foo-4', 4);
+            // foo-3 and foo-4 are still in the write buffer and must not be visible
+            let i = 2;
+            for (let data of partition.readAllBackwards()) {
+                expect(data).to.be('foo-' + i.toString());
+                i--;
+            }
+            expect(i).to.be(0);
+        });
+
     });
 
     describe('readFrom', function() {
@@ -421,59 +487,130 @@ describe('Partition', function() {
 
     });
 
-    describe('checkTornWrite', function() {
+    describe('findDocument', function() {
 
-        it('returns 0 for an empty partition', function() {
+        it('returns null for an empty partition', function() {
             partition.open();
-            expect(partition.checkTornWrite()).to.be(0);
+            expect(partition.findDocument(1)).to.be(null);
         });
 
-        it('returns positive (lastSeqnum + 1) for a single complete document', function() {
-            partition.open();
-            fillPartition(1);
-            // fillPartition(1) writes seqnum=1; no torn write → result = 1 + 1 = 2
-            expect(partition.checkTornWrite()).to.be(2);
-        });
-
-        it('returns positive (lastSeqnum + 1) for multiple complete documents', function() {
+        it('returns null when sequence number is beyond the last document', function() {
             partition.open();
             fillPartition(5);
-            // fillPartition(5) writes seqnum=5 for last doc; no torn write → result = 5 + 1 = 6
-            expect(partition.checkTornWrite()).to.be(6);
+            expect(partition.findDocument(6)).to.be(null);
         });
 
-        it('returns negative when the only document is torn', function() {
+        it('finds the first document by sequence number', function() {
+            partition.open();
+            fillPartition(5, i => 'doc-' + i);
+            const found = partition.findDocument(1);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(1);
+            expect(found.data).to.be('doc-1');
+        });
+
+        it('finds a middle document by sequence number', function() {
+            partition.open();
+            fillPartition(5, i => 'doc-' + i);
+            const found = partition.findDocument(3);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(3);
+            expect(found.data).to.be('doc-3');
+        });
+
+        it('finds the last document by sequence number', function() {
+            partition.open();
+            fillPartition(5, i => 'doc-' + i);
+            const found = partition.findDocument(5);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(5);
+            expect(found.data).to.be('doc-5');
+        });
+
+        // Use a small readBufferSize so that even a few documents cause many binary search
+        // probes, exercising the full binary search path.
+        function createBinarySearchReader() {
+            return createReader({ readBufferSize: 4 * 1024 });
+        }
+
+        it('finds document near start via binary search', function() {
+            partition.open();
+            fillPartition(100, () => 'x'.repeat(460));
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            const found = reader.findDocument(2);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(2);
+        });
+
+        it('finds document near center via binary search', function() {
+            partition.open();
+            fillPartition(100, () => 'x'.repeat(460));
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            const found = reader.findDocument(50);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(50);
+        });
+
+        it('finds document near end via binary search', function() {
+            partition.open();
+            fillPartition(100, () => 'x'.repeat(460));
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            const found = reader.findDocument(99);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(99);
+        });
+
+        it('returns the lowest sequence number >= search value when exact match is absent', function() {
+            // Write docs 1-49 then 51-100 (seqNum 50 is deliberately missing).
+            partition.open();
+            for (let i = 1; i <= 49; i++) partition.write('x'.repeat(460), i);
+            for (let i = 51; i <= 100; i++) partition.write('x'.repeat(460), i);
+            partition.flush();
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            // Searching for the missing seqNum 50 must return seqNum 51.
+            const found = reader.findDocument(50);
+            expect(found).to.not.be(null);
+            expect(found.headerOut.sequenceNumber).to.be(51);
+        });
+
+    });
+
+    describe('readLast', function() {
+
+        it('returns null for an empty partition', function() {
+            partition.open();
+            expect(partition.readLast()).to.be(null);
+        });
+
+        it('returns the header and position of the only document', function() {
             partition.open();
             fillPartition(1);
-            partition.close();
-
-            // Remove the document footer to simulate a torn write
-            const fd = fs.openSync('test/data/.part', 'r+');
-            const stat = fs.fstatSync(fd);
-            fs.ftruncateSync(fd, stat.size - DOCUMENT_FOOTER_SIZE);
-            fs.closeSync(fd);
-
-            partition.open();
-            // Torn write on seqnum=1 → result = -(1 + 1) = -2
-            expect(partition.checkTornWrite()).to.be(-2);
+            const last = partition.readLast();
+            expect(last).to.not.be(null);
+            expect(last.position).to.be(0);
+            expect(last.header.sequenceNumber).to.be(1);
         });
 
-        it('returns negative (encodes torn seqnum) when last of many documents is torn', function() {
+        it('returns the header and position of the last of multiple documents', function() {
             partition.open();
             fillPartition(5);
-            partition.close();
-
-            // Remove the last document's footer to simulate a torn write on the last document
-            const fd = fs.openSync('test/data/.part', 'r+');
-            const stat = fs.fstatSync(fd);
-            fs.ftruncateSync(fd, stat.size - DOCUMENT_FOOTER_SIZE);
-            fs.closeSync(fd);
-
-            partition.open();
-            // fillPartition(5) passes i as sequence number, so last doc has seqnum=5.
-            // Torn write on seqnum=5 → result = -(5 + 1) = -6
-            // Decoded: tornSeqnum = 5, lastCompleteSeqnum = 4
-            expect(partition.checkTornWrite()).to.be(-6);
+            const last = partition.readLast();
+            expect(last).to.not.be(null);
+            expect(last.header.sequenceNumber).to.be(5);
+            expect(typeof last.position).to.be('number');
+            expect(last.position).to.be.greaterThan(0);
         });
 
     });

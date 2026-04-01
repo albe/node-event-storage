@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import { assert, alignTo } from '../util.js';
+import { assert, alignTo, hash, binarySearch } from '../util.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
@@ -16,30 +16,6 @@ const NES_EPOCH = new Date('2020-01-01T00:00:00');
 
 class CorruptFileError extends Error {}
 class InvalidDataSizeError extends Error {}
-
-/**
- * Method for hashing a string (partition name) to a 32-bit unsigned integer.
- *
- * @param {string} str
- * @returns {number}
- */
-function hash(str) {
-    /* istanbul ignore if */
-    if (str.length === 0) {
-        return 0;
-    }
-    let hash = 5381,
-        i    = str.length;
-
-    while(i) {
-        hash = ((hash << 5) + hash) ^ str.charCodeAt(--i); // jshint ignore:line
-    }
-
-    /* JavaScript does bitwise operations (like XOR, above) on 32-bit signed
-     * integers. Since we want the results to be always positive, convert the
-     * signed int to an unsigned by doing an unsigned bitshift. */
-    return hash >>> 0; // jshint ignore:line
-}
 
 /**
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
@@ -121,35 +97,6 @@ class ReadablePartition extends events.EventEmitter {
         this.size -= this.readMetadata();
 
         return true;
-    }
-
-    /**
-     * Check if the last document in this partition is a torn write, and return the sequence
-     * number of the relevant document, encoded by sign:
-     *  - Returns a positive value `(lastCompleteSeqnum + 1)` when no torn write was found and the
-     *    partition is non-empty; the last complete document's sequence number is `result - 1`.
-     *  - Returns a negative value `-(tornSeqnum + 1)` when a torn write was detected; the torn
-     *    document's sequence number is `-(result) - 1`, and the last *complete* document's
-     *    sequence number (if any) is `-(result) - 2`.
-     *  - Returns `0` when the partition is empty (no documents at all).
-     *
-     * @returns {number}
-     */
-    checkTornWrite() {
-        if (this.size === 0) {
-            return 0;
-        }
-        const reader = this.prepareReadBufferBackwards(this.size);
-        const separator = reader.buffer.toString('ascii', reader.cursor - DOCUMENT_SEPARATOR.length, reader.cursor);
-        const torn = separator !== DOCUMENT_SEPARATOR;
-        const position = this.findDocumentPositionBefore(this.size);
-        /* istanbul ignore if */
-        if (position === false || position < 0) {
-            return 0;
-        }
-        const lastReader = this.prepareReadBuffer(position);
-        const { sequenceNumber } = this.readDocumentHeader(lastReader.buffer, lastReader.cursor, position);
-        return torn ? -(sequenceNumber + 1) : sequenceNumber + 1;
     }
 
     /**
@@ -293,7 +240,7 @@ class ReadablePartition extends events.EventEmitter {
             return ({ buffer: null, cursor: 0, length: 0 });
         }
         let bufferCursor = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE)) {
+        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE) || bufferCursor > this.readBufferLength) {
             this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
             bufferCursor = position - this.readBufferPos;
         }
@@ -388,6 +335,90 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Find the document that starts immediately before `position`, fill the read buffer
+     * centered around that document's start, and return its file position and parsed header.
+     * The buffer is centered by calling `prepareReadBufferBackwards` with a position
+     * half a buffer-length ahead of the document start, clamped to file size, so the
+     * document start lands near the middle of the buffer.
+     *
+     * @private
+     * @param {number} position The file position to search before.
+     * @returns {{ header: {dataSize: number, sequenceNumber: number, time64: number}, position: number }|null}
+     *   The document header and file position, or null if no document could be found.
+     */
+    readDocumentBefore(position) {
+        const docPos = this.findDocumentPositionBefore(position);
+        /* istanbul ignore if */
+        if (docPos === false || docPos < 0) return null;
+        const reader = this.prepareReadBufferBackwards(Math.min(docPos + (this.readBuffer.byteLength >> 1), this.size));
+        /* istanbul ignore if */
+        if (!reader.buffer) return null;
+        const cursor = docPos - this.readBufferPos;
+        /* istanbul ignore if */
+        if (cursor < 0 || cursor + DOCUMENT_HEADER_SIZE > reader.length) return null;
+        const header = this.readDocumentHeader(reader.buffer, cursor, docPos);
+        return { header, position: docPos };
+    }
+
+    /**
+     * Read the header and file position of the last document in this partition.
+     *
+     * @api
+     * @returns {{ header: {dataSize: number, sequenceNumber: number, time64: number}, position: number } | null}
+     *   The last document's header and its file position, or null if the partition is empty or unreadable.
+     */
+    readLast() {
+        if (this.size === 0) return null;
+        return this.readDocumentBefore(this.size);
+    }
+
+    /**
+     * Find the first document whose sequenceNumber is >= the given value.
+     * Uses readLast() to short-circuit when the partition contains no such document.
+     * Uses a binary search over file positions via readDocumentBefore() to locate the
+     * document. The search tracks both the lower bound (position just after the last
+     * confirmed "< sequenceNumber" doc) and the upper bound (minimum position of any
+     * probed doc with sequenceNumber >= target). The upper bound, when available, is
+     * the exact target document, so no further linear scan is needed.
+     *
+     * @api
+     * @param {number} sequenceNumber The 0-based sequence number to search for.
+     * @returns {{ reader: Generator<string>, headerOut: object, data: string }|null}
+     *   The matched document with its reader and shared headerOut, or null if no such document exists.
+     */
+    findDocument(sequenceNumber) {
+        const last = this.readLast();
+        if (!last || last.header.sequenceNumber < sequenceNumber) {
+            return null;
+        }
+
+        let startPosition = this.size;
+        binarySearch(
+            sequenceNumber,
+            this.size,
+            (pos) => {
+                const doc = this.readDocumentBefore(pos);
+                if (!doc) return sequenceNumber;
+                if (doc.header.sequenceNumber < sequenceNumber) {
+                    startPosition = Math.max(startPosition, doc.position + this.documentWriteSize(doc.header.dataSize));
+                } else {
+                    startPosition = Math.min(startPosition, doc.position);
+                }
+                return doc.header.sequenceNumber;
+            }
+        );
+
+        const headerOut = {};
+        const data = this.readFrom(startPosition, 0, headerOut);
+        /* istanbul ignore if */
+        if (data === false) {
+            return null;
+        }
+        headerOut.position = startPosition;
+        return { headerOut, data };
+    }
+
+    /**
      * @api
      * @param {number} [after] The document position to start reading from.
      * @param {object|null} [headerOut] Optional object to populate with document header fields
@@ -397,13 +428,14 @@ class ReadablePartition extends events.EventEmitter {
      */
     *readAll(after = 0, headerOut = null) {
         let position = after < 0 ? this.size + after + 1 : after;
+        const internalHeader = headerOut !== null ? headerOut : {};
         let data;
-        while ((data = this.readFrom(position, 0, headerOut)) !== false) {
+        while ((data = this.readFrom(position, 0, internalHeader)) !== false) {
             if (headerOut !== null) {
                 headerOut.position = position;
             }
             yield data;
-            position += this.documentWriteSize(headerOut !== null ? headerOut.dataSize : Buffer.byteLength(data, 'utf8'));
+            position += this.documentWriteSize(internalHeader.dataSize);
         }
     }
 

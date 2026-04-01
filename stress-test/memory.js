@@ -9,7 +9,16 @@
  * before initialisation, inside the 'ready' callback and after iterating all
  * previously written events.
  *
- * After both phases a consumption-growth table is printed.  The test then
+ * Phase 3 (Open/Close Leak Detection): Runs 100 open/close cycles for each
+ * of the following components and asserts that heap growth (heapUsed) stays
+ * within acceptable bounds, confirming that no objects are silently retained:
+ *   - Index   : direct ReadOnlyIndex open/close cycles
+ *   - Partition: direct ReadOnlyPartition open/close cycles
+ *   - Stream  : EventStore write + closeEventStream (make stream read-only)
+ *   - EventStore (writable): open/close the full store lifecycle
+ *   - EventStore (read-only): open/close the full store lifecycle with ReadOnlyIndex
+ *
+ * After phases 1 and 2 a consumption-growth table is printed.  The test then
  * asserts that memory growth is not super-linear: doubling the number of
  * events should not more than double the memory growth that was observed at
  * the 1 000-event milestone.
@@ -24,13 +33,15 @@
  *           Defaults to a temporary directory that is removed on exit.
  */
 
-'use strict';
 
-const path = require('path');
-const fs   = require('fs');
-const os   = require('os');
 
-const EventStore = require('../index');
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+
+import EventStore from '../index.js';
+import Index, { ReadOnly as ReadOnlyIndex } from '../src/Index.js';
+import Partition, { ReadOnly as ReadOnlyPartition } from '../src/Partition.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -276,6 +287,214 @@ function assertNotSuperLinearGrowth(samples) {
 }
 
 // ---------------------------------------------------------------------------
+// Open/Close Leak Detection – configuration
+// ---------------------------------------------------------------------------
+
+// Number of open/close cycles per scenario.
+const LEAK_CYCLES = 100;
+
+// Maximum acceptable heap growth (heapUsed) per open/close cycle.
+// With GC exposed a well-behaved implementation shows near-zero growth;
+// without GC the allocator may retain a page or two temporarily.
+const LEAK_BYTES_PER_CYCLE_LIMIT = 10 * 1024; // 10 KiB
+
+// ---------------------------------------------------------------------------
+// Leak-phase helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a synchronous scenario for LEAK_CYCLES iterations, bracketing
+ * the loop with GC + memory samples.
+ *
+ * @param {function(number)} fn Called once per cycle with the cycle index.
+ * @returns {{ before: object, after: object }}
+ */
+function runSyncCycles(fn) {
+    const before = sample('');
+    for (let i = 0; i < LEAK_CYCLES; i++) fn(i);
+    return { before, after: sample('') };
+}
+
+/**
+ * Run an async scenario for LEAK_CYCLES iterations, bracketing the loop
+ * with GC + memory samples.
+ *
+ * @param {function(number, function)} fn Called once per cycle with (index, done).
+ * @param {function({ before: object, after: object })} callback
+ */
+function runAsyncCycles(fn, callback) {
+    const before = sample('');
+    let i = 0;
+    function next() {
+        if (i >= LEAK_CYCLES) return callback({ before, after: sample('') });
+        fn(i++, next);
+    }
+    next();
+}
+
+/**
+ * Log result and set exit code to 1 if heap growth-per-cycle exceeds the limit.
+ *
+ * Asserts on `heapUsed` (live JavaScript objects) rather than RSS, because
+ * V8 retains OS memory pages even after objects are collected, which causes
+ * RSS to grow independently of actual object leaks.
+ *
+ * @param {string} label
+ * @param {object} before
+ * @param {object} after
+ */
+function assertNoLeak(label, before, after) {
+    const rssGrowth  = after.rss      - before.rss;
+    const heapGrowth = after.heapUsed - before.heapUsed;
+    const perCycle   = heapGrowth / LEAK_CYCLES;
+    const mbRss  = (rssGrowth  / 1024 / 1024).toFixed(2);
+    const mbHeap = (heapGrowth / 1024 / 1024).toFixed(2);
+    const kbPer  = (perCycle   / 1024).toFixed(2);
+    const COL = 50;
+    console.log(
+        `  ${label.padEnd(COL)} heap: ${mbHeap.padStart(7)} MiB  rss: ${mbRss.padStart(7)} MiB  per-cycle: ${kbPer.padStart(8)} KiB`
+    );
+    if (perCycle > LEAK_BYTES_PER_CYCLE_LIMIT) {
+        console.error(
+            `\nFAIL: Memory leak detected in "${label}"! ` +
+            `Heap grew ${mbHeap} MiB over ${LEAK_CYCLES} cycles ` +
+            `(${kbPer} KiB/cycle, limit: ${LEAK_BYTES_PER_CYCLE_LIMIT / 1024} KiB/cycle).`
+        );
+        process.exitCode = 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 – Open/Close Leak Detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the open/close leak-detection phase.
+ *
+ * Tests that repeated open/close cycles for Indexes, Partitions, Streams
+ * (making them read-only via closeEventStream) and the whole EventStore do
+ * not continuously grow RSS.
+ *
+ * Data produced by Phase 1 (write phase) in DATA_DIR is used as the source
+ * for the Index and Partition sub-tests.  The stream and EventStore sub-tests
+ * create their own temporary data per cycle so no state accumulates across
+ * cycles.
+ *
+ * @param {function} callback
+ */
+function runLeakPhase(callback) {
+    const STREAMS_DIR    = path.join(DATA_DIR, 'streams');
+    // Primary index stored in the streams subdirectory, prefixed with store name.
+    const INDEX_FILE     = 'memory-test.stream-' + STREAM_NAME + '.index';
+    // Partition file stored in the data directory, prefixed with store name.
+    const PARTITION_FILE = 'memory-test.' + STREAM_NAME;
+
+    console.log('\nPhase 3 – Open/Close Leak Detection');
+    console.log(`  Cycles per scenario : ${LEAK_CYCLES}`);
+    console.log(`  Leak limit          : ${LEAK_BYTES_PER_CYCLE_LIMIT / 1024} KiB/cycle`);
+    const HR = '-'.repeat(80);
+    console.log('\n' + HR);
+    console.log('  Scenario' + ' '.repeat(44) + 'Heap growth    RSS growth    Per-cycle');
+    console.log(HR);
+
+    // -----------------------------------------------------------------------
+    // 3a. Index open/close
+    // Each cycle opens a ReadOnlyIndex on the existing stream index file and
+    // immediately closes it again.
+    // -----------------------------------------------------------------------
+    const idxResult = runSyncCycles(() => {
+        const idx = new Index.ReadOnly(INDEX_FILE, { dataDirectory: STREAMS_DIR });
+        idx.close();
+    });
+    assertNoLeak('Index open/close', idxResult.before, idxResult.after);
+
+    // -----------------------------------------------------------------------
+    // 3b. Partition open/close
+    // Each cycle opens a ReadOnlyPartition on the existing partition file and
+    // immediately closes it again.
+    // -----------------------------------------------------------------------
+    const partResult = runSyncCycles(() => {
+        const part = new Partition.ReadOnly(PARTITION_FILE, { dataDirectory: DATA_DIR });
+        part.open();
+        part.close();
+    });
+    assertNoLeak('Partition open/close', partResult.before, partResult.after);
+
+    // -----------------------------------------------------------------------
+    // 3c. Stream open/close – make stream read-only via closeEventStream()
+    // Each cycle uses its own temporary data directory so state does not
+    // accumulate across cycles.  The cycle writes one event to a stream,
+    // closes the stream (making it read-only), then closes the EventStore.
+    // -----------------------------------------------------------------------
+    runAsyncCycles((i, done) => {
+        const cycleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'es-strm-lk-'));
+        const store = new EventStore('s', { storageDirectory: cycleDir });
+        store.on('ready', () => {
+            store.commit('leak-stream', [{ type: 'LeakTest', i }], () => {
+                store.closeEventStream('leak-stream');
+                store.close();
+                try { fs.rmSync(cycleDir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+                done();
+            });
+        });
+        store.on('error', (err) => {
+            console.error('[memory] EventStore error (leak/stream-close):', err);
+            process.exit(1);
+        });
+    }, ({ before: sBefore, after: sAfter }) => {
+        assertNoLeak('Stream closeEventStream (make read-only)', sBefore, sAfter);
+
+        // -------------------------------------------------------------------
+        // 3d. EventStore open/close (writable)
+        // Each cycle opens the EventStore in writable mode against the
+        // existing data directory and closes it without writing new data.
+        // This exercises the full storage open/close lifecycle including
+        // lock acquisition and index flushing.
+        // -------------------------------------------------------------------
+        runAsyncCycles((i, done) => {
+            const store = new EventStore('memory-test', { storageDirectory: DATA_DIR });
+            store.on('ready', () => {
+                store.close();
+                done();
+            });
+            store.on('error', (err) => {
+                console.error('[memory] EventStore error (leak/writable):', err);
+                process.exit(1);
+            });
+        }, ({ before: wBefore, after: wAfter }) => {
+            assertNoLeak('EventStore open/close (writable)', wBefore, wAfter);
+
+            // ---------------------------------------------------------------
+            // 3e. EventStore open/close (read-only)
+            // Each cycle opens the EventStore in read-only mode; the existing
+            // stream index is scanned and opened as a ReadOnlyIndex.  The
+            // cycle closes immediately without reading events, mirroring 3d
+            // so that both tests measure the open/close lifecycle cost.
+            // (Event reading is already covered in Phase 2.)
+            // ---------------------------------------------------------------
+            runAsyncCycles((i, done) => {
+                const store = new EventStore('memory-test', {
+                    storageDirectory: DATA_DIR,
+                    readOnly: true,
+                });
+                store.on('ready', () => {
+                    store.close();
+                    done();
+                });
+                store.on('error', (err) => {
+                    console.error('[memory] EventStore error (leak/read-only):', err);
+                    process.exit(1);
+                });
+            }, ({ before: rBefore, after: rAfter }) => {
+                assertNoLeak('EventStore open/close (read-only)', rBefore, rAfter);
+                console.log(HR);
+                callback();
+            });
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -303,15 +522,17 @@ runWritePhase((writeSamples) => {
             process.exitCode = 1;
         }
 
-        if (!process.exitCode) {
-            console.log('\nPASS: Memory stress test completed successfully.');
-        }
+        runLeakPhase(() => {
+            if (!process.exitCode) {
+                console.log('\nPASS: Memory stress test completed successfully.');
+            }
 
-        // Clean up temporary data directory if we created it.
-        if (CLEANUP_DIR) {
-            try {
-                fs.rmSync(DATA_DIR, { recursive: true, force: true });
-            } catch (_) { /* best-effort */ }
-        }
+            // Clean up temporary data directory if we created it.
+            if (CLEANUP_DIR) {
+                try {
+                    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+                } catch (_) { /* best-effort */ }
+            }
+        });
     });
 });

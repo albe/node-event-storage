@@ -156,8 +156,9 @@ class WritableIndex extends ReadableIndex {
         }
 
         this.writeBufferCursor = 0;
-        this.flushCallbacks.forEach(callback => callback());
+        const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
+        for (let i = 0; i < callbacks.length; i += 2) callbacks[i](callbacks[i + 1]);
         return true;
     }
 
@@ -172,7 +173,7 @@ class WritableIndex extends ReadableIndex {
         if (typeof callback !== 'function') {
             return;
         }
-        this.flushCallbacks.push(() => callback(position));
+        this.flushCallbacks.push(callback, position);
     }
 
     /**
@@ -187,15 +188,15 @@ class WritableIndex extends ReadableIndex {
         assertEqual(entry.constructor.name, this.EntryClass.name, `Wrong entry object.`);
         assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size.`);
 
-        const lastEntry = this.lastEntry;
-        if (lastEntry !== false && lastEntry.number >= entry.number) {
+        const dataLen = this.data.length;
+        if (dataLen > 0 && this.data[dataLen - 1].number >= entry.number) {
             throw new Error('Consistency error. Tried to add an index that should come before existing last entry.');
         }
 
-        if (this.readUntil === this.data.length - 1) {
+        if (this.readUntil === dataLen - 1) {
             this.readUntil++;
         }
-        this.data[this.data.length] = entry;
+        this.data[dataLen] = entry;
 
         if (this.writeBufferCursor === 0) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);

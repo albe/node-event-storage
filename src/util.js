@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import fs from 'fs';
 import { mkdirpSync } from 'mkdirp';
 
@@ -40,74 +39,27 @@ function alignTo(value, alignment) {
 }
 
 /**
- * @param {string} secret The secret to use for calculating further HMACs
- * @returns {function(string)} A function that calculates the HMAC for a given string
+ * Method for hashing a string (e.g. a partition name) to a 32-bit unsigned integer.
+ *
+ * @param {string} str
+ * @returns {number}
  */
-const createHmac = secret => string => {
-        const hmac = crypto.createHmac('sha256', secret);
-        hmac.update(string);
-        return hmac.digest('hex');
-    };
-
-/**
- * @typedef {object|function(object):boolean} Matcher
- */
-
-/**
- * @param {object} document The document to check against the matcher.
- * @param {Matcher} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
- * @returns {boolean} True if the document matches the matcher or false otherwise.
- */
-function matches(document, matcher) {
-    if (typeof document === 'undefined') return false;
-    if (typeof matcher === 'undefined') return true;
-
-    if (typeof matcher === 'function') return matcher(document);
-
-    for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (typeof matcher[prop] === 'object') {
-            if (!matches(document[prop], matcher[prop])) {
-                return false;
-            }
-        } else if (typeof matcher[prop] !== 'undefined' && document[prop] !== matcher[prop]) {
-            return false;
-        }
+function hash(str) {
+    /* istanbul ignore if */
+    if (str.length === 0) {
+        return 0;
     }
-    return true;
-}
+    let hash = 5381,
+        i    = str.length;
 
-/**
- * @param {Matcher} matcher The matcher object or function that should be serialized.
- * @param {function(string)} hmac A function that calculates a HMAC of the given string.
- * @returns {{matcher: string|object, hmac?: string}}
- */
-function buildMetadataForMatcher(matcher, hmac) {
-    if (!matcher) {
-        return undefined;
+    while(i) {
+        hash = ((hash << 5) + hash) ^ str.charCodeAt(--i); // jshint ignore:line
     }
-    if (typeof matcher === 'object') {
-        return { matcher };
-    }
-    const matcherString = matcher.toString();
-    return { matcher: matcherString, hmac: hmac(matcherString) };
-}
 
-/**
- * @param {{matcher: string|object, hmac: string}} matcherMetadata The serialized matcher and it's HMAC
- * @param {function(string)} hmac A function that calculates a HMAC of the given string.
- * @returns {Matcher} The matcher object or function.
- */
-function buildMatcherFromMetadata(matcherMetadata, hmac) {
-    let matcher;
-    if (typeof matcherMetadata.matcher === 'object') {
-        matcher = matcherMetadata.matcher;
-    } else {
-        if (matcherMetadata.hmac !== hmac(matcherMetadata.matcher)) {
-            throw new Error('Invalid HMAC for matcher.');
-        }
-        matcher = eval('(' + matcherMetadata.matcher + ')').bind({}); // jshint ignore:line
-    }
-    return matcher;
+    /* JavaScript does bitwise operations (like XOR, above) on 32-bit signed
+     * integers. Since we want the results to be always positive, convert the
+     * signed int to an unsigned by doing an unsigned bitshift. */
+    return hash >>> 0; // jshint ignore:line
 }
 
 /**
@@ -201,17 +153,66 @@ function ensureDirectory(dirName) {
     return true;
 }
 
+/**
+ * Perform a k-way merge over multiple streams, invoking a callback for each item in ascending key order.
+ * Each stream object is mutated in place by the `advance` function.
+ *
+ * @param {object[]} streams Array of stream state objects; entries are removed when exhausted.
+ * @param {function(object): number} getKey Returns the current sort key for a stream state.
+ * @param {function(object): boolean} advance Advances the stream to its next item.
+ *   Returns true if the stream has more items within range, false if exhausted.
+ * @param {function(object): void} visit Called for each stream state in merged order.
+ */
+function kWayMerge(streams, getKey, advance, visit) {
+    while (streams.length > 0) {
+        let minIdx = 0;
+        for (let i = 1; i < streams.length; i++) {
+            if (getKey(streams[i]) < getKey(streams[minIdx])) {
+                minIdx = i;
+            }
+        }
+        visit(streams[minIdx]);
+        if (!advance(streams[minIdx])) {
+            streams.splice(minIdx, 1);
+        }
+    }
+}
+
+/**
+ * Scan a directory for files whose names match a regex pattern, calling a callback for each match.
+ * The `onEach` callback receives the first capturing group of the match (`match[1]`), or the full
+ * match (`match[0]`) when no capturing group is defined in the pattern.
+ *
+ * @param {string} directory The directory to scan.
+ * @param {RegExp} regexPattern The pattern to match file names against.
+ * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching file name.
+ * @param {function(Error?)} onDone Called when the scan is complete, or with an error if one occurred.
+ */
+function scanForFiles(directory, regexPattern, onEach, onDone) {
+    fs.readdir(directory, (err, files) => {
+        if (err) {
+            return onDone(err);
+        }
+        let match;
+        for (let file of files) {
+            if ((match = file.match(regexPattern)) !== null) {
+                onEach(match[1] !== undefined ? match[1] : match[0]);
+            }
+        }
+        onDone(null);
+    });
+}
+
 
 export {
     assert,
     assertEqual,
+    hash,
     wrapAndCheck,
     binarySearch,
-    createHmac,
-    matches,
-    buildMetadataForMatcher,
-    buildMatcherFromMetadata,
     buildMetadataHeader,
     alignTo,
-    ensureDirectory
+    ensureDirectory,
+    scanForFiles,
+    kWayMerge
 };

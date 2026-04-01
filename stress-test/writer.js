@@ -17,10 +17,10 @@
 
 'use strict';
 
-const path = require('path');
-const fs   = require('fs');
+import path from 'path';
+import fs from 'fs';
 
-const EventStore = require('../index');
+import EventStore, { LOCK_RECLAIM } from '../index.js';
 
 // ---------------------------------------------------------------------------
 // CLI args

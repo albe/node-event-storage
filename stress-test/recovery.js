@@ -20,10 +20,10 @@
 
 'use strict';
 
-const path = require('path');
-const fs   = require('fs');
+import path from 'path';
+import fs from 'fs';
 
-const EventStore = require('../index');
+import EventStore, { LOCK_RECLAIM } from '../index.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -53,7 +53,7 @@ console.log('\n[recovery] Opening store with LOCK_RECLAIM ...');
 const store = new EventStore('stress', {
     storageDirectory: dataDir,
     storageConfig: {
-        lock: EventStore.LOCK_RECLAIM,
+        lock: LOCK_RECLAIM,
     },
 });
 
