@@ -91,11 +91,16 @@ jobs:
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
-      - name: Preflight: validate package repository url
+      - name: "Preflight: validate package repository url"
         run: |
           REPO=$(node -p "(() => { const r=require('./package.json').repository; return (typeof r==='string')?r:(r&&r.url)||'' })()")
           echo "package.json repository.url = $REPO"
           test "$REPO" = "git+https://github.com/albe/node-event-storage.git" \
             || { echo "ERROR: repository.url must be git+https://github.com/albe/node-event-storage.git for npm OIDC trusted publishing"; exit 1; }
+      - name: "Preflight: show ref + version"
+        run: |
+          echo "GITHUB_REF=$GITHUB_REF"
+          git describe --tags --always
+          node -p "require('./package.json').version"
       - run: npm ci
       - run: npm publish --provenance --access public
