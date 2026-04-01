@@ -1,4 +1,4 @@
-name: npm publish
+name: npm-publish.yml
 
 on:
   release:
@@ -97,10 +97,12 @@ jobs:
           echo "package.json repository.url = $REPO"
           test "$REPO" = "git+https://github.com/albe/node-event-storage.git" \
             || { echo "ERROR: repository.url must be git+https://github.com/albe/node-event-storage.git for npm OIDC trusted publishing"; exit 1; }
-      - name: "Preflight: show ref + version"
+      - name: "Preflight: validate version"
         run: |
           echo "GITHUB_REF=$GITHUB_REF"
-          git describe --tags --always
-          node -p "require('./package.json').version"
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="${{ inputs.tag || github.event.release.tag_name }}"
+          echo "tag=$TAG version=$VERSION"
+          test "v$VERSION" = "$TAG" || { echo "ERROR: Tag ($TAG) does not match package.json version (v$VERSION)"; exit 1; }
       - run: npm ci
       - run: npm publish --provenance --access public
