@@ -15,7 +15,7 @@
   "homepage": "https://github.com/albe/node-event-storage",
   "repository": {
     "type": "git",
-    "url": "https://github.com/albe/node-event-storage"
+    "url": "git+https://github.com/albe/node-event-storage.git"
   },
   "bugs": {
     "url": "https://github.com/albe/node-event-storage/issues"
@@ -25,19 +25,19 @@
     "coverage": "nyc report --reporter=text-lcov | coveralls"
   },
   "files": [
-    "*/Consumer*.js",
-    "*/EventStore*.js",
-    "*/EventStream*.js",
-    "*/Index*.js",
-    "*/IndexEntry*.js",
-    "*/JoinEventStream*.js",
-    "*/Partition*.js",
-    "*/Storage*.js",
-    "*/Watcher*.js",
-    "*/Clock*.js",
-    "*/Index/*.js",
-    "*/Partition/*.js",
-    "*/Storage/*.js",
+    "src/Consumer*.js",
+    "src/EventStore*.js",
+    "src/EventStream*.js",
+    "src/Index*.js",
+    "src/IndexEntry*.js",
+    "src/JoinEventStream*.js",
+    "src/Partition*.js",
+    "src/Storage*.js",
+    "src/Watcher*.js",
+    "src/Clock*.js",
+    "src/Index/*.js",
+    "src/Partition/*.js",
+    "src/Storage/*.js",
     "src/WatchesFile.js",
     "src/util.js",
     "src/metadataUtil.js",
