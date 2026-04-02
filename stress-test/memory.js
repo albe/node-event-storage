@@ -33,15 +33,15 @@
  *           Defaults to a temporary directory that is removed on exit.
  */
 
-'use strict';
 
-const path = require('path');
-const fs   = require('fs');
-const os   = require('os');
 
-const EventStore = require('../index');
-const Index      = require('../src/Index');
-const Partition  = require('../src/Partition');
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+
+import EventStore from '../index.js';
+import Index from '../src/Index.js';
+import Partition from '../src/Partition.js';
 
 // ---------------------------------------------------------------------------
 // Configuration

@@ -1,11 +1,15 @@
-const expect = require('expect.js');
-const fs = require('fs-extra');
-const path = require('path');
-const Storage = require('../src/Storage');
-const zlib = require('zlib');
-//const lz4 = require('lz4');
+import expect from 'expect.js';
+import fs from 'fs-extra';
+import path from 'path';
+import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM } from '../src/Storage.js';
+import { matches } from '../src/Storage/ReadableStorage.js';
+import Index from '../src/Index.js';
+import zlib from 'zlib';
+//import lz4 from 'lz4';
+import { fileURLToPath } from 'url';
 
-const dataDirectory = __dirname + '/data';
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const dataDirectory = __dirname + 'data';
 
 describe('Storage', function() {
 
@@ -22,7 +26,7 @@ describe('Storage', function() {
     }
 
     function createReader(options = {}) {
-        const newStorage = new Storage.ReadOnly(Object.assign({ dataDirectory }, options));
+        const newStorage = new ReadOnlyStorage(Object.assign({ dataDirectory }, options));
         refs.push(newStorage);
         return newStorage;
     }
@@ -618,7 +622,6 @@ describe('Storage', function() {
             storage.open();
             storage.write({type: 'Foo'});
 
-            const Index = require('../src/Index');
             const originalAdd = Index.prototype.add;
             Index.prototype.add = () => { throw new Error('Failure'); };
             try {
@@ -1111,7 +1114,7 @@ describe('Storage', function() {
 
             // Reopen with LOCK_RECLAIM — detects the orphaned lock, runs checkTornWrites()
             // (which calls reindex()), and then open() emits 'ready'.
-            const repairedStorage = new Storage({ dataDirectory, lock: Storage.LOCK_RECLAIM });
+            const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
             refs.push(repairedStorage);
             let readyFired = false;
             repairedStorage.on('ready', () => {
@@ -1130,8 +1133,6 @@ describe('Storage', function() {
     });
 
     describe('matches', function() {
-
-        const matches = Storage.matches;
 
         it('returns true if no matcher specified', function() {
             expect(matches({ foo: 'bar' })).to.be(true);
@@ -1198,7 +1199,7 @@ describe('Storage', function() {
             expect(() => {
                 storage = createStorage();
                 storage.open();
-            }).to.throwError(e => e instanceof Storage.StorageLockedError);
+            }).to.throwError(e => e instanceof StorageLockedError);
             storage2.close();
         });
 

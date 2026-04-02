@@ -1,10 +1,9 @@
-const fs = require('fs');
-const ReadablePartition = require('./ReadablePartition');
-const { assert, buildMetadataHeader, alignTo, ensureDirectory } = require('../util');
-const Clock = require('../Clock');
+import fs from 'fs';
+import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
+import { assert, buildMetadataHeader, alignTo, ensureDirectory } from '../util.js';
+import Clock from '../Clock.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
-const { DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } = ReadablePartition;
 const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
 
 /**
@@ -111,7 +110,7 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     writeMetadata() {
-        const metadataBuffer = buildMetadataHeader(ReadablePartition.HEADER_MAGIC, this.metadata);
+        const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeFileSync(this.fileName, metadataBuffer);
         this.headerSize = metadataBuffer.byteLength;
     }
@@ -387,7 +386,7 @@ class WritablePartition extends ReadablePartition {
         try {
             this.readFrom(after);
         } catch (e) {
-            if (!(e instanceof ReadablePartition.CorruptFileError)) {
+            if (!(e instanceof CorruptFileError)) {
                 throw new Error('Can only truncate on valid document boundaries.');
             }
         }
@@ -419,5 +418,5 @@ class WritablePartition extends ReadablePartition {
     }
 }
 
-module.exports = WritablePartition;
-module.exports.CorruptFileError = ReadablePartition.CorruptFileError;
+export default WritablePartition;
+export { CorruptFileError };

@@ -1,5 +1,5 @@
-const fs = require('fs');
-const mkdirpSync = require('mkdirp').sync;
+import fs from 'fs';
+import { mkdirpSync } from 'mkdirp';
 
 /**
  * Assert that actual and expected match or throw an Error with the given message appended by information about expected and actual value.
@@ -204,7 +204,7 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
 }
 
 
-module.exports = {
+export {
     assert,
     assertEqual,
     hash,

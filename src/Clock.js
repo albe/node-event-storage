@@ -40,4 +40,4 @@ class Clock {
 
 }
 
-module.exports = Clock;
+export default Clock;

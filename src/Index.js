@@ -1,6 +1,8 @@
-const WritableIndex = require('./Index/WritableIndex');
-const ReadOnlyIndex = require('./Index/ReadOnlyIndex');
+import WritableIndex, { Entry } from './Index/WritableIndex.js';
+import ReadOnlyIndex from './Index/ReadOnlyIndex.js';
 
-module.exports = WritableIndex;
-module.exports.ReadOnly = ReadOnlyIndex;
-module.exports.Entry = WritableIndex.Entry;
+WritableIndex.ReadOnly = ReadOnlyIndex;
+WritableIndex.Entry = Entry;
+
+export default WritableIndex;
+export { ReadOnlyIndex as ReadOnly, Entry };

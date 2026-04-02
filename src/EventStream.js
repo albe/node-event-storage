@@ -1,5 +1,5 @@
-const stream = require('stream');
-const { assert } = require('./util');
+import stream from 'stream';
+import { assert } from './util.js';
 
 /**
  * Calculate the actual version number from a possibly relative (negative) version number.
@@ -272,4 +272,4 @@ class EventStream extends stream.Readable {
 
 }
 
-module.exports = EventStream;
+export default EventStream;

@@ -1,5 +1,8 @@
-const WritablePartition = require('./Partition/WritablePartition');
-const ReadOnlyPartition = require('./Partition/ReadOnlyPartition');
+import WritablePartition, { CorruptFileError } from './Partition/WritablePartition.js';
+import ReadOnlyPartition from './Partition/ReadOnlyPartition.js';
 
-module.exports = WritablePartition;
-module.exports.ReadOnly = ReadOnlyPartition;
+WritablePartition.ReadOnly = ReadOnlyPartition;
+WritablePartition.CorruptFileError = CorruptFileError;
+
+export default WritablePartition;
+export { ReadOnlyPartition as ReadOnly, CorruptFileError };

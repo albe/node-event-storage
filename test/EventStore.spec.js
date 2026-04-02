@@ -1,10 +1,13 @@
-const expect = require('expect.js');
-const fs = require('fs-extra');
-const path = require('path');
-const EventStore = require('../src/EventStore');
-const Consumer = require('../src/Consumer');
+import expect from 'expect.js';
+import fs from 'fs-extra';
+import fsSync from 'fs';
+import path from 'path';
+import EventStore, { ExpectedVersion, OptimisticConcurrencyError, LOCK_RECLAIM } from '../src/EventStore.js';
+import Consumer from '../src/Consumer.js';
+import { fileURLToPath } from 'url';
 
-const storageDirectory = __dirname + '/data';
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const storageDirectory = __dirname + 'data';
 
 describe('EventStore', function() {
 
@@ -51,14 +54,13 @@ describe('EventStore', function() {
     });
 
     it('throws when scanning of stream directory fails', function() {
-        const fs = require('fs');
-        const originalReaddir = fs.readdir;
-        fs.readdir = (dir, callback) => callback(new Error('Something went wrong!'), null);
+        const originalReaddir = fsSync.readdir;
+        fsSync.readdir = (dir, callback) => callback(new Error('Something went wrong!'), null);
 
         expect(() => new EventStore({
             storageDirectory
         })).to.throwError(/Something went wrong!/);
-        fs.readdir = originalReaddir;
+        fsSync.readdir = originalReaddir;
     });
 
     it('repairs unfinished commits', function(done) {
@@ -101,7 +103,7 @@ describe('EventStore', function() {
                 const eventstore2 = new EventStore({
                     storageDirectory,
                     storageConfig: {
-                        lock: EventStore.LOCK_RECLAIM
+                        lock: LOCK_RECLAIM
                     }
                 });
                 eventstore2.on('ready', () => {
@@ -215,7 +217,7 @@ describe('EventStore', function() {
                     const eventstore2 = new EventStore({
                         storageDirectory,
                         storageConfig: {
-                            lock: EventStore.LOCK_RECLAIM
+                            lock: LOCK_RECLAIM
                         }
                     });
                     eventstore2.on('ready', () => {
@@ -341,7 +343,7 @@ describe('EventStore', function() {
                 storageDirectory
             });
 
-            eventstore.commit('foo-bar', [{ foo: 'bar' }], EventStore.ExpectedVersion.EmptyStream, (commit) => {
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], ExpectedVersion.EmptyStream, (commit) => {
                 expect(eventstore.length).to.be(1);
                 expect(commit.streamName).to.be('foo-bar');
                 expect(commit.streamVersion).to.be(0);
@@ -355,7 +357,7 @@ describe('EventStore', function() {
                 storageDirectory
             });
 
-            eventstore.commit('foo-bar', [{ foo: 'bar' }], EventStore.ExpectedVersion.EmptyStream, {}, (commit) => {
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], ExpectedVersion.EmptyStream, {}, (commit) => {
                 expect(eventstore.length).to.be(1);
                 expect(commit.streamName).to.be('foo-bar');
                 expect(commit.streamVersion).to.be(0);
@@ -385,15 +387,15 @@ describe('EventStore', function() {
             });
 
             expect(() => eventstore.commit('foo-bar', { foo: 'bar' }, 1)).to.throwError(
-                e => expect(e).to.be.a(EventStore.OptimisticConcurrencyError)
+                e => expect(e).to.be.a(OptimisticConcurrencyError)
             );
 
             eventstore.commit('foo-bar', { foo: 'bar' }, () => {
-                expect(() => eventstore.commit('foo-bar', { foo: 'baz' }, EventStore.ExpectedVersion.EmptyStream)).to.throwError(
-                    e => expect(e).to.be.a(EventStore.OptimisticConcurrencyError)
+                expect(() => eventstore.commit('foo-bar', { foo: 'baz' }, ExpectedVersion.EmptyStream)).to.throwError(
+                    e => expect(e).to.be.a(OptimisticConcurrencyError)
                 );
                 expect(() => eventstore.commit('foo-bar', { foo: 'baz' }, 2)).to.throwError(
-                    e => expect(e).to.be.a(EventStore.OptimisticConcurrencyError)
+                    e => expect(e).to.be.a(OptimisticConcurrencyError)
                 );
                 done();
             });
@@ -404,11 +406,11 @@ describe('EventStore', function() {
                 storageDirectory
             });
 
-            expect(() => eventstore.commit('foo-bar', { foo: 'bar' }, EventStore.ExpectedVersion.EmptyStream)).to.not.throwError();
+            expect(() => eventstore.commit('foo-bar', { foo: 'bar' }, ExpectedVersion.EmptyStream)).to.not.throwError();
 
             eventstore.commit('foo-bar', { foo: 'bar' }, () => {
                 expect(() => eventstore.commit('foo-bar', {foo: 'baz'}, 2)).to.not.throwError();
-                expect(() => eventstore.commit('foo-bar', {foo: 'baz'}, EventStore.ExpectedVersion.Any)).to.not.throwError();
+                expect(() => eventstore.commit('foo-bar', {foo: 'baz'}, ExpectedVersion.Any)).to.not.throwError();
                 done();
             });
         });

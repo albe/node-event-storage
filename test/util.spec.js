@@ -1,8 +1,10 @@
-const expect = require('expect.js');
-const fs = require('fs-extra');
-const path = require('path');
-const { scanForFiles } = require('../src/util');
+import expect from 'expect.js';
+import fs from 'fs-extra';
+import path from 'path';
+import { scanForFiles } from '../src/util.js';
+import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const testDir = path.join(__dirname, 'data', 'util-scan-test');
 
 describe('util', function() {

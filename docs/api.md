@@ -14,9 +14,7 @@ This page lists all constructors and public methods of the three main classes.
 `EventStore` is the main entry point of the library.
 
 ```javascript
-const EventStore = require('event-storage');
-// or
-const { EventStore } = require('event-storage');
+import { EventStore } from 'event-storage';
 ```
 
 `EventStore` extends Node's `EventEmitter`.  After construction it emits a
@@ -290,7 +288,7 @@ Asynchronously scan all consumer state files and return their identifiers.
 `EventStream` is returned by `EventStore.getEventStream()` and related methods.
 
 ```javascript
-const { EventStream } = require('event-storage');
+import { EventStream } from 'event-storage';
 ```
 
 `EventStream` extends Node's `stream.Readable` (in `objectMode`).
@@ -496,10 +494,10 @@ Return the next event object from the iterator, or `false` when the stream is ex
 
 ## Storage
 
-`Storage` (exported as `require('event-storage').Storage`) is the low-level append-only document store used internally by `EventStore`.  It can be used directly for advanced use cases.
+`Storage` is the low-level append-only document store used internally by `EventStore`.  It can be used directly for advanced use cases.
 
 ```javascript
-const { Storage } = require('event-storage');
+import { Storage } from 'event-storage';
 
 // Writable storage (default export)
 const store = new Storage('mystore', { dataDirectory: './data' });

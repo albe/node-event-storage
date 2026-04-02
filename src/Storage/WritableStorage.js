@@ -1,10 +1,10 @@
-const fs = require('fs');
-const path = require('path');
-const WritablePartition = require('../Partition/WritablePartition');
-const WritableIndex = require('../Index/WritableIndex');
-const ReadableStorage = require('./ReadableStorage');
-const { assert, ensureDirectory } = require('../util');
-const { matches, buildMetadataForMatcher, buildMatcherFromMetadata } = require('../metadataUtil');
+import fs from 'fs';
+import path from 'path';
+import WritablePartition from '../Partition/WritablePartition.js';
+import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableIndex.js';
+import ReadableStorage from './ReadableStorage.js';
+import { assert, ensureDirectory } from '../util.js';
+import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../metadataUtil.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
@@ -196,7 +196,7 @@ class WritableStorage extends ReadableStorage {
         // Scan partitions in sequence-number order and rebuild index entries.
         // iterateDocumentsNoIndex opens any closed partitions automatically.
         for (const { document, partition, position, size } of this.iterateDocumentsNoIndex(fromSequenceNumber, Number.MAX_SAFE_INTEGER)) {
-            const newEntry = new WritableIndex.Entry(this.index.length + 1, position, size, partition);
+            const newEntry = new WritableIndexEntry(this.index.length + 1, position, size, partition);
             this.index.add(newEntry);
 
             this.forEachWritableSecondaryIndex((secIndex) => {
@@ -276,7 +276,7 @@ class WritableStorage extends ReadableStorage {
          throw new Error('Corrupted index, needs to be rebuilt!');
          }*/
 
-        const entry = new WritableIndex.Entry(this.index.length + 1, position, size, partitionId);
+        const entry = new WritableIndexEntry(this.index.length + 1, position, size, partitionId);
         this.index.add(entry, (indexPosition) => {
             this.emit('wrote', document, entry, indexPosition);
             /* istanbul ignore if  */
@@ -540,8 +540,5 @@ class WritableStorage extends ReadableStorage {
 
 }
 
-module.exports = WritableStorage;
-module.exports.StorageLockedError = StorageLockedError;
-module.exports.CorruptFileError = ReadableStorage.CorruptFileError;
-module.exports.LOCK_THROW = LOCK_THROW;
-module.exports.LOCK_RECLAIM = LOCK_RECLAIM;
+export default WritableStorage;
+export { StorageLockedError, LOCK_THROW, LOCK_RECLAIM };

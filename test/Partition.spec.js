@@ -1,8 +1,11 @@
-const expect = require('expect.js');
-const fs = require('fs-extra');
-const Partition = require('../src/Partition');
+import expect from 'expect.js';
+import fs from 'fs-extra';
+import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
+import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from '../src/Partition/ReadablePartition.js';
+import { fileURLToPath } from 'url';
 
-const dataDirectory = __dirname + '/data';
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const dataDirectory = __dirname + 'data';
 
 describe('Partition', function() {
 
@@ -27,7 +30,7 @@ describe('Partition', function() {
      * @returns {ReadOnlyPartition}
      */
     function createReader(options = {}) {
-        const reader = new Partition.ReadOnly(partition.name, { ...options, dataDirectory });
+        const reader = new ReadOnlyPartition(partition.name, { ...options, dataDirectory });
         readers[readers.length] = reader;
         return reader;
     }
@@ -335,7 +338,7 @@ describe('Partition', function() {
 
             expect(partition.readFrom(0, 6)).to.be('foobar');
             expect(() => partition.readFrom(0, 4)).to.throwError((e) => {
-                expect(e).to.be.a(Partition.InvalidDataSizeError);
+                expect(e).to.be.a(InvalidDataSizeError);
             });
         });
 
@@ -369,7 +372,7 @@ describe('Partition', function() {
             partition.open();
 
             expect(() => partition.readFrom(0)).to.throwError((e) => {
-                expect(e).to.be.a(Partition.CorruptFileError);
+                expect(e).to.be.a(PartitionCorruptFileError);
             });
         });
 
@@ -473,7 +476,7 @@ describe('Partition', function() {
             partition.close();
 
             let fd = fs.openSync('test/data/.part', 'r+');
-            fs.ftruncateSync(fd, partition.headerSize + position + Partition.DOCUMENT_HEADER_SIZE + 4);
+            fs.ftruncateSync(fd, partition.headerSize + position + DOCUMENT_HEADER_SIZE + 4);
             fs.closeSync(fd);
 
             partition.open();

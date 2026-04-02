@@ -1,7 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const events = require('events');
-const { assert } = require('./util');
+import fs from 'fs';
+import path from 'path';
+import events from 'events';
+import { assert } from './util.js';
 
 /** @type {Map<string, DirectoryWatcher>} */
 const directoryWatchers = new Map();
@@ -147,4 +147,4 @@ class Watcher {
 
 }
 
-module.exports = Watcher;
+export default Watcher;

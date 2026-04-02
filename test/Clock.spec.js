@@ -1,5 +1,5 @@
-const expect = require('expect.js');
-const Clock = require('../src/Clock');
+import expect from 'expect.js';
+import Clock from '../src/Clock.js';
 
 describe('Clock', function() {
 

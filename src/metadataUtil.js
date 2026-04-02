@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+import crypto from 'crypto';
 
 /**
  * @param {string} secret The secret to use for calculating further HMACs
@@ -71,7 +71,7 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
     return matcher;
 }
 
-module.exports = {
+export {
     createHmac,
     matches,
     buildMetadataForMatcher,

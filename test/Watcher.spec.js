@@ -1,9 +1,11 @@
-const expect = require('expect.js');
-const fs = require('fs-extra');
-const path = require('path');
-const Watcher = require('../src/Watcher');
+import expect from 'expect.js';
+import fs from 'fs-extra';
+import path from 'path';
+import Watcher from '../src/Watcher.js';
+import { fileURLToPath } from 'url';
 
-const dataDirectory = __dirname + '/data';
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const dataDirectory = __dirname + 'data';
 
 describe('Watcher', function() {
 

@@ -1,10 +1,10 @@
-const fs = require('fs');
-const path = require('path');
-const events = require('events');
-const Partition = require('../Partition');
-const Index = require('../Index');
-const { assert, wrapAndCheck, kWayMerge } = require('../util');
-const { createHmac, matches, buildMetadataForMatcher } = require('../metadataUtil');
+import fs from 'fs';
+import path from 'path';
+import events from 'events';
+import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
+import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
+import { assert, wrapAndCheck, kWayMerge } from '../util.js';
+import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
@@ -79,7 +79,7 @@ class ReadableStorage extends events.EventEmitter {
      */
     createIndex(name, options = {}) {
         /** @type ReadableIndex */
-        const index = new Index.ReadOnly(name, options);
+        const index = new ReadOnlyIndex(name, options);
         return { index };
     }
 
@@ -90,7 +90,7 @@ class ReadableStorage extends events.EventEmitter {
      * @returns {ReadablePartition}
      */
     createPartition(name, options = {}) {
-        return new Partition.ReadOnly(name, options);
+        return new ReadOnlyPartition(name, options);
     }
 
     /**
@@ -484,6 +484,5 @@ class ReadableStorage extends events.EventEmitter {
 
 }
 
-module.exports = ReadableStorage;
-module.exports.matches = matches;
-module.exports.CorruptFileError = Partition.CorruptFileError;
+export default ReadableStorage;
+export { matches };

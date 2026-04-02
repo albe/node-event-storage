@@ -1,5 +1,10 @@
-const WritableStorage = require('./Storage/WritableStorage');
-const ReadOnlyStorage = require('./Storage/ReadOnlyStorage');
+import WritableStorage, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM } from './Storage/WritableStorage.js';
+import ReadOnlyStorage from './Storage/ReadOnlyStorage.js';
 
-module.exports = WritableStorage;
-module.exports.ReadOnly = ReadOnlyStorage;
+WritableStorage.ReadOnly = ReadOnlyStorage;
+WritableStorage.StorageLockedError = StorageLockedError;
+WritableStorage.LOCK_THROW = LOCK_THROW;
+WritableStorage.LOCK_RECLAIM = LOCK_RECLAIM;
+
+export default WritableStorage;
+export { ReadOnlyStorage as ReadOnly, StorageLockedError, LOCK_THROW, LOCK_RECLAIM };

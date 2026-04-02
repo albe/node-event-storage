@@ -167,11 +167,11 @@ The test exits with code `0` if data loss is within bounds and code `1` otherwis
 To have the store self-repair on the next open, use `LOCK_RECLAIM`:
 
 ```javascript
-const EventStore = require('event-storage');
+import { EventStore, LOCK_RECLAIM } from 'event-storage';
 
 const eventstore = new EventStore('my-event-store', {
     storageDirectory: './data',
-    storageConfig: { lock: EventStore.LOCK_RECLAIM }
+    storageConfig: { lock: LOCK_RECLAIM }
 });
 
 eventstore.on('ready', () => {
@@ -184,7 +184,7 @@ For strict durability (no data loss at the cost of write throughput), combine th
 ```javascript
 const eventstore = new EventStore('my-event-store', {
     storageConfig: {
-        lock: EventStore.LOCK_RECLAIM,
+        lock: LOCK_RECLAIM,
         syncOnFlush: true
     }
 });
@@ -225,7 +225,7 @@ const eventstore = new EventStore('my-event-store', {
 Replace the default JSON serializer with any `serialize`/`deserialize` pair:
 
 ```javascript
-const { encode, decode } = require('@msgpack/msgpack');
+import { encode, decode } from '@msgpack/msgpack';
 
 const eventstore = new EventStore('my-event-store', {
     storageConfig: {
@@ -249,7 +249,7 @@ Use the `serializer` option to wrap events in a compression codec.
 ### LZ4 Example
 
 ```javascript
-const lz4 = require('lz4');
+import lz4 from 'lz4';
 
 const eventstore = new EventStore('my-event-store', {
     storageConfig: {
@@ -307,7 +307,7 @@ Both hooks run synchronously on every operation. Keep handler logic cheap — av
 ### EventStore Level
 
 ```javascript
-const EventStore = require('event-storage');
+import { EventStore } from 'event-storage';
 
 const globalContext = { authorizedRoles: ['user'] };
 
@@ -347,7 +347,7 @@ Use `eventstore.preCommit(handler)` / `eventstore.preRead(handler)` as convenien
 If you use the `Storage` class directly:
 
 ```javascript
-const Storage = require('event-storage').Storage;
+import { Storage } from 'event-storage';
 
 const storage = new Storage('events', {
     partitioner: (doc) => doc.stream,

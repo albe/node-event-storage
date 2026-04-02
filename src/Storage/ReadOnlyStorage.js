@@ -1,6 +1,6 @@
-const ReadableStorage = require('./ReadableStorage');
-const ReadablePartition = require('../Partition/ReadablePartition');
-const Watcher = require('../Watcher');
+import ReadableStorage from './ReadableStorage.js';
+import ReadablePartition from '../Partition/ReadablePartition.js';
+import Watcher from '../Watcher.js';
 
 /**
  * An append-only storage with highly performant positional range scans.
@@ -113,4 +113,4 @@ class ReadOnlyStorage extends ReadableStorage {
     }
 }
 
-module.exports = ReadOnlyStorage;
+export default ReadOnlyStorage;
