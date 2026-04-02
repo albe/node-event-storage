@@ -1,15 +1,14 @@
-const Benchmark = require('benchmark');
-const benchmarks = require('beautify-benchmark');
-const fs = require('fs-extra');
+import Benchmark from 'benchmark';
+import benchmarks from 'beautify-benchmark';
+import fs from 'fs-extra';
+import Stable from 'event-storage';
+import { Storage as LatestStorage } from '../index.js';
 
 const Suite = new Benchmark.Suite('storage');
 Suite.on('start', () => fs.emptyDirSync('data'));
 Suite.on('cycle', (event) => benchmarks.add(event.target));
 Suite.on('complete', () => benchmarks.log());
 Suite.on('error', (e) => console.log(e.target.error));
-
-const Stable = require('event-storage');
-const Latest = require('../index');
 
 const WRITES = 1000;
 
@@ -36,7 +35,7 @@ Suite.add('storage [stable]', function() {
 });
 
 Suite.add('storage [latest]', function() {
-	bench(new Latest.Storage('storage-' + this.cycles, { dataDirectory: 'data/latest' }));
+	bench(new LatestStorage('storage-' + this.cycles, { dataDirectory: 'data/latest' }));
 });
 
 Suite.run();
