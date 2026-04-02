@@ -1,14 +1,13 @@
-const Benchmark = require('benchmark');
-const benchmarks = require('beautify-benchmark');
-const fs = require('fs-extra');
+import Benchmark from 'benchmark';
+import benchmarks from 'beautify-benchmark';
+import fs from 'fs-extra';
+import Stable from 'event-storage';
+import { EventStore as Latest } from '../index.js';
 
 const Suite = new Benchmark.Suite('read-scenarios');
 Suite.on('cycle', (event) => benchmarks.add(event.target));
 Suite.on('complete', () => { benchmarks.log(); process.exit(0); });
 Suite.on('error', (e) => console.log(e.target.error));
-
-const Stable = require('event-storage');
-const Latest = require('../index');
 
 const EVENTS = 10000;
 const STREAM_1 = 'stream-1';
