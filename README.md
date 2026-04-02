@@ -32,7 +32,9 @@ There is currently only a single other embedded event store for node/javascript:
 npm install event-storage
 ```
 
-## Quick Start
+> **CommonJS / `require()` users:** version 1.0 is ESM-only. If your project uses `require()` and migrating to ESM is not an option, install the 0.x series (`npm install event-storage@0`) which is functionally equivalent and retains full CJS support.
+
+
 
 ```javascript
 import { EventStore } from 'event-storage';

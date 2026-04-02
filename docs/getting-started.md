@@ -8,7 +8,14 @@ Install the package from npm:
 npm install event-storage
 ```
 
-## Quick Start
+!!! note "CommonJS users"
+    Version 1.0 is ESM-only (`import` syntax). If your project uses `require()` and migrating to ESM is not currently an option, the **0.x series** is functionally equivalent and retains full CJS support:
+
+    ```bash
+    npm install event-storage@0
+    ```
+
+
 
 ```javascript
 import { EventStore } from 'event-storage';
