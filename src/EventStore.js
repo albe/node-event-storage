@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
+import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert, scanForFiles } from './util.js';
 
@@ -588,6 +589,9 @@ class EventStore extends events.EventEmitter {
         });
     }
 }
+
+EventStore.Storage = Storage;
+EventStore.Index = Index;
 
 export default EventStore;
 export { ExpectedVersion, OptimisticConcurrencyError, LOCK_THROW, LOCK_RECLAIM };
