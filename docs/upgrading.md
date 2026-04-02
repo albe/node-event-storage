@@ -42,7 +42,7 @@ import { EventStore } from 'event-storage';
 
 ### Named exports that were previously properties
 
-In 0.x, constants and sub-classes were attached as properties on the default export. They are now individual named exports:
+In 0.x, constants and sub-classes were attached as properties on the default export. Constants are now individual named exports, while sub-classes remain accessible as properties of the parent class:
 
 | 0.x | 1.0 |
 |-----|-----|
@@ -51,8 +51,10 @@ In 0.x, constants and sub-classes were attached as properties on the default exp
 | `EventStore.LOCK_THROW` | `import { LOCK_THROW } from 'event-storage'` |
 | `EventStore.LOCK_RECLAIM` | `import { LOCK_RECLAIM } from 'event-storage'` |
 | `require('event-storage').Storage` | `import { Storage } from 'event-storage'` |
-| `Storage.ReadOnly` | `import { ReadOnlyStorage } from 'event-storage'` |
+| `Storage.ReadOnly` | `Storage.ReadOnly` (unchanged — still a property of `Storage`) |
 | `Storage.StorageLockedError` | `import { StorageLockedError } from 'event-storage'` |
+| `Index.ReadOnly` | `Index.ReadOnly` (unchanged — still a property of `Index`) |
+| `Index.Entry` | `Index.Entry` (unchanged — still a property of `Index`) |
 
 ### Full import surface
 
@@ -62,8 +64,8 @@ All public exports from the package entry point:
 import {
   EventStore, ExpectedVersion, OptimisticConcurrencyError,
   EventStream,
-  Storage, ReadOnlyStorage, StorageLockedError,
-  Index, ReadOnlyIndex, IndexEntry,
+  Storage, StorageLockedError,
+  Index,
   Consumer,
   LOCK_THROW, LOCK_RECLAIM
 } from 'event-storage';
@@ -121,9 +123,11 @@ const eventstore = new EventStore('my-store', {
 // Before
 const Storage = require('event-storage').Storage;
 const ReadOnlyStorage = Storage.ReadOnly;
+const store = new ReadOnlyStorage('mystore', { dataDirectory: './data' });
 
 // After
-import { Storage, ReadOnlyStorage } from 'event-storage';
+import { Storage } from 'event-storage';
+const store = new Storage.ReadOnly('mystore', { dataDirectory: './data' });
 ```
 
 ### Custom serialization / compression

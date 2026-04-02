@@ -40,8 +40,8 @@ import fs from 'fs';
 import os from 'os';
 
 import EventStore from '../index.js';
-import Index, { ReadOnly as ReadOnlyIndex } from '../src/Index.js';
-import Partition, { ReadOnly as ReadOnlyPartition } from '../src/Partition.js';
+import Index from '../src/Index.js';
+import Partition from '../src/Partition.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
