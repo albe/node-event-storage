@@ -108,8 +108,10 @@ const WRITE_SAMPLE_OPS   = 100;
 const READ_SAMPLE_OPS    = 100;
 
 // Pad the data field so the serialised JSON document is roughly 150 bytes.
+// Documents use a `stream` property so they align with the default `matcherProperties`
+// config (['stream', 'payload.type']) and exercise the fast discriminant lookup path.
 const DATA_PAD = 'benchmarkpayload_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
-const APPROX_DOC_SIZE = JSON.stringify({ type: 0, partitionId: 0, data: DATA_PAD, ts: 0 }).length;
+const APPROX_DOC_SIZE = JSON.stringify({ stream: 'x', partitionId: 0, data: DATA_PAD, ts: 0 }).length;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Scenario definitions
@@ -143,6 +145,9 @@ function makeStorageConfig(dataDir, partitioner) {
         syncOnFlush:             false,
         dirtyReads:              true,
         lock:                    LOCK_RECLAIM,
+        // matcherProperties and maxOpenPartitions use their defaults:
+        //   matcherProperties: ['stream', 'payload.type']
+        //   maxOpenPartitions: 1024
     };
 }
 
@@ -162,6 +167,10 @@ function estimateFds(numPartitions, numIndexes) {
  *      metadata, no historical entries) so that startup and write benchmarks
  *      see a realistic file-count overhead without quadratic setup time.
  *
+ * Documents use `stream` as the discriminant property (matching the default
+ * `matcherProperties` config), so each index's object matcher { stream: i }
+ * is placed into the O(1) lookup table rather than the unclassified fallback.
+ *
  * @param {string} dataDir
  * @param {number} numPartitions
  * @param {number} numIndexes
@@ -177,14 +186,14 @@ function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition) {
     for (let seq = 0; seq < totalDocs; seq++) {
         const p      = seq % numPartitions;
         const typeId = numIndexes > 0 ? seq % numIndexes : 0;
-        storage.write({ type: typeId, partitionId: p, data: DATA_PAD, ts: Date.now() });
+        storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
     }
     storage.flush();
 
     // Create empty secondary index files (reindex=false → no doc scanning).
     // This registers the file on disk so it can be opened in the benchmark.
     for (let i = 0; i < numIndexes; i++) {
-        storage.ensureIndex(`idx-${i}`, { type: i }, false);
+        storage.ensureIndex(`idx-${i}`, { stream: String(i) }, false);
     }
     storage.flush();
     storage.close();
@@ -214,8 +223,8 @@ function measureStartup(dataDir, numIndexes) {
  * Measure write performance after all secondary indexes are registered.
  *
  * Setup (opening indexes) is outside the timed region.
- * Each write() call checks all N secondary-index matchers to find the
- * matching one — this O(N) loop is the dominant cost for large N.
+ * With the discriminant lookup table, each write() resolves the matching index
+ * via an O(1) Map lookup on the `stream` property instead of iterating all N matchers.
  *
  * @returns {number} Average ms per write() call.
  */
@@ -233,7 +242,7 @@ function measureWrite(dataDir, numPartitions, numIndexes) {
     for (let i = 0; i < WRITE_SAMPLE_OPS; i++) {
         const p      = i % numPartitions;
         const typeId = numIndexes > 0 ? i % numIndexes : 0;
-        storage.write({ type: typeId, partitionId: p, data: DATA_PAD, ts: Date.now() });
+        storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
     }
     storage.flush();
     const ms = elapsed(t0);

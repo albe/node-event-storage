@@ -9,6 +9,38 @@ import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
 /**
+ * Default ordered list of document property paths used as discriminant keys when classifying
+ * object matchers into the fast-lookup table. Each path may use dot-notation for nested access
+ * (e.g. `'payload.type'` matches `{ payload: { type: … } }`). The first path that resolves to
+ * a scalar value in a given matcher wins; remaining paths are not examined for that matcher.
+ */
+const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
+
+/**
+ * Default maximum number of partition file descriptors kept open simultaneously.
+ * Partitions beyond this limit are evicted using LRU order. 0 disables the limit.
+ */
+const DEFAULT_MAX_OPEN_PARTITIONS = 1024;
+
+/**
+ * Read a scalar value at a dot-notation path from an object.
+ * Returns `undefined` if any path segment is absent or the intermediate value is not an object.
+ *
+ * @param {object} obj
+ * @param {string} path  Dot-separated property path, e.g. `'payload.type'`.
+ * @returns {*}
+ */
+function getPropAtPath(obj, path) {
+    let current = obj;
+    const parts = path.split('.');
+    for (const part of parts) {
+        if (current == null || typeof current !== 'object') return undefined;
+        current = current[part];
+    }
+    return current;
+}
+
+/**
  * Reverses the items of an iterable
  * @param {Generator|Iterable} iterator
  * @returns {Generator<*>}
@@ -43,6 +75,13 @@ class ReadableStorage extends events.EventEmitter {
      * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
      * @param {object} [config.metadata] A metadata object to be stored in all partitions belonging to this storage.
+     * @param {string[]} [config.matcherProperties] Ordered list of document property paths (dot-notation) used as
+     *   discriminant keys for the fast secondary-index lookup table. Only the first property that resolves to a scalar
+     *   value inside a given object matcher is used; the rest are checked via the full `matches()` fallback.
+     *   Default: `['stream', 'payload.type']`.
+     * @param {number} [config.maxOpenPartitions] Maximum number of partition file descriptors kept open at one time.
+     *   When the limit is reached the least-recently-used partition is closed to make room. 0 disables the limit.
+     *   Default: 1024.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -58,7 +97,9 @@ class ReadableStorage extends events.EventEmitter {
             indexFile: this.storageFile + '.index',
             indexOptions: {},
             hmacSecret: '',
-            metadata: {}
+            metadata: {},
+            matcherProperties: DEFAULT_MATCHER_PROPERTIES,
+            maxOpenPartitions: DEFAULT_MAX_OPEN_PARTITIONS
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
@@ -66,6 +107,11 @@ class ReadableStorage extends events.EventEmitter {
         this.hmac = createHmac(config.hmacSecret);
 
         this.dataDirectory = path.resolve(config.dataDirectory);
+
+        this.matcherProperties = config.matcherProperties;
+        this.maxOpenPartitions = config.maxOpenPartitions;
+        /** @private Map<id, true> in LRU order (oldest entry first). */
+        this._openPartitionLru = new Map();
 
         this.scanPartitions(config);
         this.initializeIndexes(config);
@@ -111,6 +157,21 @@ class ReadableStorage extends events.EventEmitter {
         this.index = index;
         this.secondaryIndexes = {};
         this.readonlyIndexes = {};
+
+        /**
+         * Fast discriminant lookup table.
+         * Map<propPath: string, Map<discriminantValue: string, Set<indexName: string>>>
+         * Only populated for object matchers that contain at least one of this.matcherProperties.
+         * @private
+         */
+        this._matcherIndex = new Map();
+        /** @private Set<indexName> for function matchers (always evaluated in full). */
+        this._functionMatcherIndexes = new Set();
+        /**
+         * @private Set<indexName> for object matchers that contain none of this.matcherProperties,
+         * and for matchers that are null/undefined (match everything).
+         */
+        this._unclassifiedObjectIndexes = new Set();
     }
 
     /**
@@ -194,8 +255,32 @@ class ReadableStorage extends events.EventEmitter {
     getPartition(partitionIdentifier) {
         assert(partitionIdentifier in this.partitions, `Partition #${partitionIdentifier} does not exist.`);
 
-        this.partitions[partitionIdentifier].open();
-        return this.partitions[partitionIdentifier];
+        const partition = this.partitions[partitionIdentifier];
+
+        if (this.maxOpenPartitions > 0) {
+            if (!partition.isOpen()) {
+                // Partition needs to be opened. Evict the LRU open partition if at capacity.
+                if (this._openPartitionLru.size >= this.maxOpenPartitions) {
+                    for (const [lruId] of this._openPartitionLru) {
+                        this._openPartitionLru.delete(lruId);
+                        const lruPartition = this.partitions[lruId];
+                        if (lruPartition && lruPartition.isOpen()) {
+                            lruPartition.close();
+                            break;
+                        }
+                        // Stale LRU entry (partition was closed externally) — keep looking.
+                    }
+                }
+                this._openPartitionLru.set(partitionIdentifier, true);
+            } else {
+                // Already open: move to tail (most-recently-used end).
+                this._openPartitionLru.delete(partitionIdentifier);
+                this._openPartitionLru.set(partitionIdentifier, true);
+            }
+        }
+
+        partition.open();
+        return partition;
     }
 
     /**
@@ -359,8 +444,112 @@ class ReadableStorage extends events.EventEmitter {
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
         let { index } = this.secondaryIndexes[name] = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
 
+        // Register the actual stored matcher (may have been reconstructed from metadata by WritableStorage.createIndex).
+        this._registerIndexMatcher(name, this.secondaryIndexes[name].matcher);
+
         index.open();
         return index;
+    }
+
+    /**
+     * Remove a secondary index from the write path and the fast matcher lookup table.
+     *
+     * @api
+     * @param {string} name The secondary index name to remove.
+     */
+    removeSecondaryIndex(name) {
+        const entry = this.secondaryIndexes[name];
+        if (entry) {
+            this._unregisterIndexMatcher(name, entry.matcher);
+            delete this.secondaryIndexes[name];
+        }
+    }
+
+    /**
+     * Find the first discriminant property for an object matcher.
+     * Returns `{ propPath, value }` for the first entry in `this.matcherProperties` that resolves
+     * to a non-null, non-object scalar inside the matcher, or `null` if none is found.
+     *
+     * @private
+     * @param {object} matcher
+     * @returns {{ propPath: string, value: string }|null}
+     */
+    _findDiscriminant(matcher) {
+        for (const propPath of this.matcherProperties) {
+            const value = getPropAtPath(matcher, propPath);
+            if (value !== undefined && value !== null && typeof value !== 'object') {
+                return { propPath, value: String(value) };
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Register an index name in the fast discriminant lookup structures.
+     *
+     * - Function matchers go into `_functionMatcherIndexes`.
+     * - Object matchers with a recognisable discriminant property go into `_matcherIndex`.
+     * - Everything else (null/undefined matcher or object with no discriminant property) goes
+     *   into `_unclassifiedObjectIndexes`.
+     *
+     * @private
+     * @param {string} indexName
+     * @param {Matcher} matcher
+     */
+    _registerIndexMatcher(indexName, matcher) {
+        if (typeof matcher === 'function') {
+            this._functionMatcherIndexes.add(indexName);
+            return;
+        }
+        if (matcher && typeof matcher === 'object') {
+            const discriminant = this._findDiscriminant(matcher);
+            if (discriminant) {
+                let propMap = this._matcherIndex.get(discriminant.propPath);
+                if (!propMap) {
+                    propMap = new Map();
+                    this._matcherIndex.set(discriminant.propPath, propMap);
+                }
+                let indexSet = propMap.get(discriminant.value);
+                if (!indexSet) {
+                    indexSet = new Set();
+                    propMap.set(discriminant.value, indexSet);
+                }
+                indexSet.add(indexName);
+                return;
+            }
+        }
+        // null/undefined matcher or object with no discriminant property.
+        this._unclassifiedObjectIndexes.add(indexName);
+    }
+
+    /**
+     * Remove an index name from the fast discriminant lookup structures.
+     *
+     * @private
+     * @param {string} indexName
+     * @param {Matcher} matcher
+     */
+    _unregisterIndexMatcher(indexName, matcher) {
+        if (typeof matcher === 'function') {
+            this._functionMatcherIndexes.delete(indexName);
+            return;
+        }
+        if (matcher && typeof matcher === 'object') {
+            const discriminant = this._findDiscriminant(matcher);
+            if (discriminant) {
+                const propMap = this._matcherIndex.get(discriminant.propPath);
+                if (propMap) {
+                    const indexSet = propMap.get(discriminant.value);
+                    if (indexSet) {
+                        indexSet.delete(indexName);
+                        if (indexSet.size === 0) propMap.delete(discriminant.value);
+                    }
+                    if (propMap.size === 0) this._matcherIndex.delete(discriminant.propPath);
+                }
+                return;
+            }
+        }
+        this._unclassifiedObjectIndexes.delete(indexName);
     }
 
     /**
@@ -448,6 +637,18 @@ class ReadableStorage extends events.EventEmitter {
     /**
      * Helper method to iterate over all secondary indexes.
      *
+     * When `matchDocument` is provided and `this.matcherProperties` is non-empty, a fast O(1)
+     * lookup via the discriminant table is used instead of evaluating every matcher:
+     *
+     *   1. For each configured property path, the document's value is looked up in
+     *      `_matcherIndex` to retrieve the small candidate set of indexes registered under
+     *      that discriminant value.
+     *   2. `_unclassifiedObjectIndexes` (object matchers with no discriminant property) and
+     *      `_functionMatcherIndexes` (arbitrary function matchers) are always included as
+     *      candidates and evaluated via the full `matches()` check.
+     *   3. Each candidate's full matcher is still verified with `matches()` to handle
+     *      multi-property matchers where only the first property was used as discriminant.
+     *
      * @protected
      * @param {function(ReadableIndex, string)} iterationHandler
      * @param {object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
@@ -458,9 +659,40 @@ class ReadableStorage extends events.EventEmitter {
             return;
         }
 
-        for (let indexName of Object.keys(this.secondaryIndexes)) {
-            if (!matchDocument || matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
-                iterationHandler(this.secondaryIndexes[indexName].index, indexName);
+        if (!matchDocument || this.matcherProperties.length === 0) {
+            // No document filter, or discriminant lookup is disabled: iterate all.
+            for (let indexName of Object.keys(this.secondaryIndexes)) {
+                if (!matchDocument || matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
+                    iterationHandler(this.secondaryIndexes[indexName].index, indexName);
+                }
+            }
+            return;
+        }
+
+        // Fast path: build a candidate set using the discriminant table.
+        const candidates = new Set();
+
+        for (const propPath of this.matcherProperties) {
+            const docValue = getPropAtPath(matchDocument, propPath);
+            if (docValue !== undefined && docValue !== null && typeof docValue !== 'object') {
+                const propMap = this._matcherIndex.get(propPath);
+                if (propMap) {
+                    const indexSet = propMap.get(String(docValue));
+                    if (indexSet) {
+                        for (const name of indexSet) candidates.add(name);
+                    }
+                }
+            }
+        }
+
+        // Unclassified object indexes and function matchers always need evaluation.
+        for (const name of this._unclassifiedObjectIndexes) candidates.add(name);
+        for (const name of this._functionMatcherIndexes) candidates.add(name);
+
+        for (const indexName of candidates) {
+            const entry = this.secondaryIndexes[indexName];
+            if (entry && matches(matchDocument, entry.matcher)) {
+                iterationHandler(entry.index, indexName);
             }
         }
     }

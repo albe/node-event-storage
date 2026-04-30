@@ -170,6 +170,8 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.forEachPartition(partition => partition.close());
+        // Partitions were closed directly (bypassing getPartition), so reset the LRU map.
+        this._openPartitionLru.clear();
     }
 
     /**
@@ -305,6 +307,8 @@ class WritableStorage extends ReadableStorage {
      * If a partition with the given name does not exist, a new one will be created.
      * If a partition with the given id does not exist, an error is thrown.
      *
+     * Partition opening and LRU tracking are delegated to `super.getPartition()`.
+     *
      * @protected
      * @param {string|number} partitionIdentifier The partition name or the partition Id
      * @returns {ReadablePartition}
@@ -322,8 +326,6 @@ class WritableStorage extends ReadableStorage {
                 this.partitions[partitionIdentifier] = this.createPartition(partitionName, partitionConfig);
                 this.emit('partition-created', partitionIdentifier);
             }
-            this.partitions[partitionIdentifier].open();
-            return this.partitions[partitionIdentifier];
         }
         return super.getPartition(partitionIdentifier);
     }
@@ -401,6 +403,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.secondaryIndexes[name] = { index, matcher };
+        this._registerIndexMatcher(name, matcher);
         this.emit('index-created', name);
         return index;
     }

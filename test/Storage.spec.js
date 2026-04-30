@@ -1573,4 +1573,169 @@ describe('Storage', function() {
         });
 
     });
+
+    describe('matcherProperties (fast discriminant lookup)', function() {
+
+        it('indexes documents into the correct secondary index using the fast path', function() {
+            storage = createStorage({ matcherProperties: ['stream'] });
+            storage.open();
+            const ordersIndex = storage.ensureIndex('orders', { stream: 'orders' });
+            const usersIndex  = storage.ensureIndex('users',  { stream: 'users'  });
+
+            for (let i = 1; i <= 4; i++) {
+                storage.write({ stream: 'orders', foo: i });
+            }
+            for (let i = 1; i <= 2; i++) {
+                storage.write({ stream: 'users', foo: i });
+            }
+
+            expect(ordersIndex.length).to.be(4);
+            expect(usersIndex.length).to.be(2);
+        });
+
+        it('does not index a document into an index whose stream value does not match', function() {
+            storage = createStorage({ matcherProperties: ['stream'] });
+            storage.open();
+            const ordersIndex = storage.ensureIndex('orders', { stream: 'orders' });
+
+            storage.write({ stream: 'users', foo: 1 });
+
+            expect(ordersIndex.length).to.be(0);
+        });
+
+        it('fast path correctly post-filters multi-property matchers', function() {
+            storage = createStorage({ matcherProperties: ['stream'] });
+            storage.open();
+            // Registered under stream='orders' (first discriminant), but also requires type='PlaceOrder'
+            const placeOrderIndex = storage.ensureIndex('place-orders', { stream: 'orders', type: 'PlaceOrder' });
+
+            storage.write({ stream: 'orders', type: 'PlaceOrder', foo: 1 });
+            storage.write({ stream: 'orders', type: 'CancelOrder', foo: 2 });
+            storage.write({ stream: 'users',  type: 'PlaceOrder', foo: 3 });
+
+            expect(placeOrderIndex.length).to.be(1);
+        });
+
+        it('supports dot-notation paths for nested properties', function() {
+            storage = createStorage({ matcherProperties: ['payload.type'] });
+            storage.open();
+            const createdIndex = storage.ensureIndex('created', { payload: { type: 'Created' } });
+
+            storage.write({ payload: { type: 'Created' }, foo: 1 });
+            storage.write({ payload: { type: 'Updated' }, foo: 2 });
+
+            expect(createdIndex.length).to.be(1);
+        });
+
+        it('falls back to full scan when matcherProperties is empty', function() {
+            storage = createStorage({ matcherProperties: [] });
+            storage.open();
+            const fooIndex = storage.ensureIndex('foo', { type: 'Foo' });
+
+            storage.write({ type: 'Foo', foo: 1 });
+            storage.write({ type: 'Bar', foo: 2 });
+
+            expect(fooIndex.length).to.be(1);
+        });
+
+        it('handles function matchers via the fallback path', function() {
+            storage = createStorage({ matcherProperties: ['stream'] });
+            storage.open();
+            const evenIndex = storage.ensureIndex('even', (doc) => doc.foo % 2 === 0);
+
+            for (let i = 1; i <= 6; i++) {
+                storage.write({ stream: 'orders', foo: i });
+            }
+
+            expect(evenIndex.length).to.be(3);
+        });
+
+        it('handles object matchers without a discriminant property via unclassified path', function() {
+            // 'type' is not in matcherProperties here, so it goes into unclassified bucket
+            storage = createStorage({ matcherProperties: ['stream'] });
+            storage.open();
+            const fooIndex = storage.ensureIndex('foo', { type: 'Foo' });
+
+            storage.write({ stream: 'orders', type: 'Foo', foo: 1 });
+            storage.write({ stream: 'orders', type: 'Bar', foo: 2 });
+
+            expect(fooIndex.length).to.be(1);
+        });
+
+        it('removeSecondaryIndex removes index from write path and lookup table', function() {
+            storage = createStorage({ matcherProperties: ['stream'] });
+            storage.open();
+            storage.ensureIndex('orders', { stream: 'orders' });
+
+            storage.write({ stream: 'orders', foo: 1 });
+            expect(storage.secondaryIndexes['orders'].index.length).to.be(1);
+
+            storage.removeSecondaryIndex('orders');
+            expect(storage.secondaryIndexes['orders']).to.be(undefined);
+            // Lookup table for 'stream' should have been cleaned up
+            expect(storage._matcherIndex.get('stream')).to.be(undefined);
+        });
+
+        it('removeSecondaryIndex is a no-op for unknown index names', function() {
+            storage = createStorage();
+            storage.open();
+            expect(() => storage.removeSecondaryIndex('nonexistent')).to.not.throwError();
+        });
+
+    });
+
+    describe('maxOpenPartitions (LRU partition pool)', function() {
+
+        it('closes the LRU partition when the limit is reached', function() {
+            // 3 partitions but cap to 2 simultaneous fds
+            storage = createStorage({
+                partitioner: (doc) => 'p' + doc.p,
+                maxOpenPartitions: 2
+            });
+            storage.open();
+
+            storage.write({ p: 0, foo: 1 });
+            storage.write({ p: 1, foo: 2 });
+            storage.write({ p: 2, foo: 3 });
+
+            // After 3 writes the LRU pool held at most 2 simultaneous fds.
+            const openCount = Object.values(storage.partitions)
+                .filter(part => part.isOpen()).length;
+            expect(openCount).to.be(2);
+        });
+
+        it('can still read from an evicted (closed) partition', function() {
+            storage = createStorage({
+                partitioner: (doc) => 'p' + doc.p,
+                maxOpenPartitions: 1
+            });
+            storage.open();
+
+            storage.write({ p: 0, foo: 'a' });
+            storage.write({ p: 1, foo: 'b' });
+            storage.flush();
+
+            // With maxOpenPartitions=1, reading p0 should reopen it (evicting p1 first)
+            expect(storage.read(1)).to.eql({ p: 0, foo: 'a' });
+            expect(storage.read(2)).to.eql({ p: 1, foo: 'b' });
+        });
+
+        it('setting maxOpenPartitions to 0 disables the limit', function() {
+            storage = createStorage({
+                partitioner: (doc) => 'p' + doc.p,
+                maxOpenPartitions: 0
+            });
+            storage.open();
+
+            for (let i = 0; i < 5; i++) {
+                storage.write({ p: i, foo: i });
+            }
+
+            const openCount = Object.values(storage.partitions)
+                .filter(part => part.isOpen()).length;
+            expect(openCount).to.be(5);
+        });
+
+    });
+
 });
