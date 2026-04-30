@@ -136,16 +136,27 @@ class ReadableStorage extends events.EventEmitter {
         this.partitionConfig = Object.assign(defaults, config);
         this.partitions = Object.create(null);
 
-        const files = fs.readdirSync(this.dataDirectory);
-        for (let file of files) {
-            if (file.substr(-6) === '.index') continue;
-            if (file.substr(-7) === '.branch') continue;
-            if (file.substr(-5) === '.lock') continue;
-            if (file.substr(0, this.storageFile.length) !== this.storageFile) continue;
+        const scanDir = (dir, relativePrefix) => {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (let entry of entries) {
+                if (entry.isDirectory()) {
+                    if (entry.name.startsWith(this.storageFile + '.')) {
+                        scanDir(path.join(dir, entry.name), relativePrefix + entry.name + '/');
+                    }
+                    continue;
+                }
+                const file = relativePrefix + entry.name;
+                if (file.substr(-6) === '.index') continue;
+                if (file.substr(-7) === '.branch') continue;
+                if (file.substr(-5) === '.lock') continue;
+                if (file.substr(0, this.storageFile.length) !== this.storageFile) continue;
 
-            const partition = this.createPartition(file, this.partitionConfig);
-            this.partitions[partition.id] = partition;
-        }
+                const partition = this.createPartition(file, this.partitionConfig);
+                this.partitions[partition.id] = partition;
+            }
+        };
+
+        scanDir(this.dataDirectory, '');
     }
 
     /**

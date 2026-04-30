@@ -6,7 +6,7 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
-import { assert, scanForFiles } from './util.js';
+import { assert, ensureDirectory, scanForFiles } from './util.js';
 
 const ExpectedVersion = {
     Any: -1,
@@ -444,11 +444,12 @@ class EventStore extends events.EventEmitter {
 
     /**
      * Get a stream for a category of streams. This will effectively return a joined stream of all streams that start
-     * with the given `categoryName` followed by a dash.
+     * with the given `categoryName` followed by a dash (flat layout, e.g. `users-123`) or a slash (hierarchical
+     * layout, e.g. `users/123`).
      * If you frequently use this for a category consisting of a lot of streams (e.g. `users`), consider creating a
      * dedicated physical stream for the category:
      *
-     *    `eventstore.createEventStream('users', e => e.stream.startsWith('users-'))`
+     *    `eventstore.createEventStream('users', e => e.stream.startsWith('users-') || e.stream.startsWith('users/'))`
      *
      * @api
      * @param {string} categoryName The name of the category to get a stream for. A category is a stream name prefix.
@@ -461,7 +462,10 @@ class EventStore extends events.EventEmitter {
         if (categoryName in this.streams) {
             return this.getEventStream(categoryName, minRevision, maxRevision);
         }
-        const categoryStreams = Object.keys(this.streams).filter(streamName => streamName.startsWith(categoryName + '-'));
+        const categoryStreams = Object.keys(this.streams).filter(streamName =>
+            streamName.startsWith(categoryName + '-') ||
+            streamName.startsWith(categoryName + '/')
+        );
 
         if (categoryStreams.length === 0) {
             throw new Error(`No streams for category '${categoryName}' exist.`);
@@ -484,6 +488,10 @@ class EventStore extends events.EventEmitter {
         assert(!(streamName in this.streams), 'Can not recreate stream!');
 
         const streamIndexName = 'stream-' + streamName;
+        if (streamName.includes('/')) {
+            const subDir = path.join(this.streamsDirectory, this.storeName + '.stream-' + path.dirname(streamName));
+            ensureDirectory(subDir);
+        }
         const index = this.storage.ensureIndex(streamIndexName, matcher);
         assert(index !== null, `Error creating stream index ${streamName}.`);
 

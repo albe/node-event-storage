@@ -55,7 +55,10 @@ describe('EventStore', function() {
 
     it('throws when scanning of stream directory fails', function() {
         const originalReaddir = fsSync.readdir;
-        fsSync.readdir = (dir, callback) => callback(new Error('Something went wrong!'), null);
+        fsSync.readdir = (dir, optionsOrCallback, maybeCallback) => {
+            const callback = typeof maybeCallback === 'function' ? maybeCallback : optionsOrCallback;
+            callback(new Error('Something went wrong!'), null);
+        };
 
         expect(() => new EventStore({
             storageDirectory
@@ -775,6 +778,136 @@ describe('EventStore', function() {
                 expect(event).to.eql({ key: i++ });
             }
             expect(i).to.be(21);
+        });
+
+        it('iterates events for all streams with a slash-separated (hierarchical) category prefix', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            for (let i=1; i<=10; i++) {
+                eventstore.commit('foo/' + i, [{key: i}]);
+            }
+
+            let categoryStream = eventstore.getEventStreamForCategory('foo');
+            let keys = [];
+            for (let event of categoryStream) {
+                keys.push(event.key);
+            }
+            expect(keys.sort((a, b) => a - b)).to.eql([1,2,3,4,5,6,7,8,9,10]);
+        });
+
+        it('unions dash-separated and slash-separated streams for the same category', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-1', [{key: 1}]);
+            eventstore.commit('foo/2', [{key: 2}]);
+            eventstore.commit('foo-3', [{key: 3}]);
+            eventstore.commit('foo/4', [{key: 4}]);
+
+            let categoryStream = eventstore.getEventStreamForCategory('foo');
+            let keys = [];
+            for (let event of categoryStream) {
+                keys.push(event.key);
+            }
+            expect(keys.sort((a, b) => a - b)).to.eql([1, 2, 3, 4]);
+        });
+
+        it('includes all descendant streams for the category, not just direct children', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo/direct', [{key: 1}]);
+            eventstore.commit('foo/sub/nested', [{key: 2}]);
+
+            let categoryStream = eventstore.getEventStreamForCategory('foo');
+            let keys = [];
+            for (let event of categoryStream) {
+                keys.push(event.key);
+            }
+            expect(keys.sort((a, b) => a - b)).to.eql([1, 2]);
+        });
+
+        it('can narrow down to a sub-category using slash prefix', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo/direct', [{key: 1}]);
+            eventstore.commit('foo/sub/nested', [{key: 2}]);
+            eventstore.commit('foo/sub/other', [{key: 3}]);
+
+            let categoryStream = eventstore.getEventStreamForCategory('foo/sub');
+            let keys = [];
+            for (let event of categoryStream) {
+                keys.push(event.key);
+            }
+            expect(keys.sort((a, b) => a - b)).to.eql([2, 3]);
+        });
+
+    });
+
+    describe('hierarchical (slash-separated) streams', function() {
+
+        it('commits and reads events from a slash-separated stream', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            let events = [{foo: 'bar'}, {foo: 'baz'}];
+            eventstore.commit('category/123', events);
+
+            const stream = eventstore.getEventStream('category/123');
+            let result = [];
+            for (let event of stream) {
+                result.push(event);
+            }
+            expect(result).to.eql(events);
+        });
+
+        it('persists slash-separated streams across store re-open', function (done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            let events = [{foo: 'bar'}, {foo: 'baz'}];
+            eventstore.on('ready', () => {
+                eventstore.commit('cat/456', events, () => {
+                    eventstore.close();
+                    eventstore = new EventStore({ storageDirectory });
+                    eventstore.on('ready', () => {
+                        const stream = eventstore.getEventStream('cat/456');
+                        let result = [];
+                        for (let event of stream) {
+                            result.push(event);
+                        }
+                        expect(result).to.eql(events);
+                        done();
+                    });
+                });
+            });
+        });
+
+        it('supports deeply nested slash-separated stream names', function () {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('a/b/c', [{val: 1}]);
+            eventstore.commit('a/b/d', [{val: 2}]);
+
+            expect(eventstore.getEventStream('a/b/c')[Symbol.iterator]().next().value).to.eql({val: 1});
+            expect(eventstore.getEventStream('a/b/d')[Symbol.iterator]().next().value).to.eql({val: 2});
+
+            let categoryStream = eventstore.getEventStreamForCategory('a/b');
+            let vals = [];
+            for (let event of categoryStream) {
+                vals.push(event.val);
+            }
+            expect(vals.sort()).to.eql([1, 2]);
         });
 
     });

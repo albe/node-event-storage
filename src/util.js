@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { mkdirpSync } from 'mkdirp';
 
 /**
@@ -179,28 +180,52 @@ function kWayMerge(streams, getKey, advance, visit) {
 }
 
 /**
- * Scan a directory for files whose names match a regex pattern, calling a callback for each match.
+ * Scan a directory (and its subdirectories) for files whose relative paths match a regex pattern,
+ * calling a callback for each match.
+ *
+ * The regex is matched against the **relative path from `directory`** (e.g. `eventstore.stream-x/foo.index`),
+ * so patterns that capture a path prefix work transparently for both flat and nested layouts.
+ *
  * The `onEach` callback receives the first capturing group of the match (`match[1]`), or the full
  * match (`match[0]`) when no capturing group is defined in the pattern.
  *
- * @param {string} directory The directory to scan.
- * @param {RegExp} regexPattern The pattern to match file names against.
- * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching file name.
+ * @param {string} directory The root directory to scan.
+ * @param {RegExp} regexPattern The pattern to match relative file paths against.
+ * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching path.
  * @param {function(Error?)} onDone Called when the scan is complete, or with an error if one occurred.
  */
 function scanForFiles(directory, regexPattern, onEach, onDone) {
-    fs.readdir(directory, (err, files) => {
-        if (err) {
-            return onDone(err);
-        }
-        let match;
-        for (let file of files) {
-            if ((match = file.match(regexPattern)) !== null) {
-                onEach(match[1] !== undefined ? match[1] : match[0]);
+    function scan(dir, relativePrefix, done) {
+        fs.readdir(dir, { withFileTypes: true }, (err, entries) => {
+            if (err) {
+                return done(err);
             }
-        }
-        onDone(null);
-    });
+            let pending = 1;
+            let firstError = null;
+
+            function checkDone(err) {
+                if (err && !firstError) firstError = err;
+                if (--pending === 0) done(firstError);
+            }
+
+            for (let entry of entries) {
+                if (entry.isDirectory()) {
+                    pending++;
+                    scan(path.join(dir, entry.name), relativePrefix + entry.name + '/', checkDone);
+                } else {
+                    const relativePath = relativePrefix + entry.name;
+                    const match = relativePath.match(regexPattern);
+                    if (match !== null) {
+                        onEach(match[1] !== undefined ? match[1] : match[0]);
+                    }
+                }
+            }
+
+            checkDone(null);
+        });
+    }
+
+    scan(directory, '', onDone);
 }
 
 
