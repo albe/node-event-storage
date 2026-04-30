@@ -366,10 +366,11 @@ class WritableStorage extends ReadableStorage {
      * @api
      * @param {string} name The index name.
      * @param {Matcher} [matcher] An object that describes the document properties that need to match to add it this index or a function that receives a document and returns true if the document should be indexed.
+     * @param {boolean} [reindex=true] Whether to scan existing documents and populate the new index. Set to false when it is known that no existing documents can match the matcher.
      * @returns {ReadableIndex} The index containing all documents that match the query.
      * @throws {Error} if the index doesn't exist yet and no matcher was specified.
      */
-    ensureIndex(name, matcher) {
+    ensureIndex(name, matcher, reindex = true) {
         if (name === '_all') {
             return this.index;
         }
@@ -386,15 +387,17 @@ class WritableStorage extends ReadableStorage {
 
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
         const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
-        try {
-            this.forEachDocument((document, indexEntry) => {
-                if (matches(document, matcher)) {
-                    index.add(indexEntry);
-                }
-            });
-        } catch (e) {
-            index.destroy();
-            throw e;
+        if (reindex) {
+            try {
+                this.forEachDocument((document, indexEntry) => {
+                    if (matches(document, matcher)) {
+                        index.add(indexEntry);
+                    }
+                });
+            } catch (e) {
+                index.destroy();
+                throw e;
+            }
         }
 
         this.secondaryIndexes[name] = { index, matcher };

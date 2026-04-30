@@ -338,6 +338,30 @@ describe('EventStore', function() {
             });
         });
 
+        it('does not reindex existing events when committing to a new stream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            // Commit an event to an existing stream first
+            eventstore.commit('other-stream', [{ type: 'other' }], () => {
+                let reindexCalled = false;
+                // Spy on forEachDocument to detect reindexing
+                const originalForEachDocument = eventstore.storage.forEachDocument.bind(eventstore.storage);
+                eventstore.storage.forEachDocument = (...args) => {
+                    reindexCalled = true;
+                    return originalForEachDocument(...args);
+                };
+
+                // Committing to a brand-new stream should not trigger a reindex scan
+                eventstore.commit('new-stream', [{ type: 'new' }], () => {
+                    expect(reindexCalled).to.be(false);
+                    expect(eventstore.getStreamVersion('new-stream')).to.be(1);
+                    done();
+                });
+            });
+        });
+
         it('invokes callback when finished with optimistic concurrency check', function(done) {
             eventstore = new EventStore({
                 storageDirectory

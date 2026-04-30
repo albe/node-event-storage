@@ -344,7 +344,7 @@ class EventStore extends events.EventEmitter {
         ({ events, expectedVersion, metadata, callback } = EventStore.fixArgumentTypes(events, expectedVersion, metadata, callback));
 
         if (!(streamName in this.streams)) {
-            this.createEventStream(streamName, { stream: streamName });
+            this.createEventStream(streamName, { stream: streamName }, false);
         }
         assert(!this.streams[streamName].closed, `Stream "${streamName}" is closed and cannot be written to.`);
         let streamVersion = this.streams[streamName].index.length;
@@ -475,16 +475,17 @@ class EventStore extends events.EventEmitter {
      * @api
      * @param {string} streamName The name of the stream to create.
      * @param {object|function(event)} matcher A matcher object, denoting the properties that need to match on an event a function that takes the event and returns true if the event should be added.
+     * @param {boolean} [reindex=true] Whether to scan existing documents and populate the new index. Set to false when it is known that no existing documents can match the matcher (e.g. when creating a brand-new write stream).
      * @returns {EventStream} The EventStream with all existing events matching the matcher.
      * @throws {Error} If a stream with that name already exists.
      * @throws {Error} If the stream could not be created.
      */
-    createEventStream(streamName, matcher) {
+    createEventStream(streamName, matcher, reindex = true) {
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not create new stream on it.');
         assert(!(streamName in this.streams), 'Can not recreate stream!');
 
         const streamIndexName = 'stream-' + streamName;
-        const index = this.storage.ensureIndex(streamIndexName, matcher);
+        const index = this.storage.ensureIndex(streamIndexName, matcher, reindex);
         assert(index !== null, `Error creating stream index ${streamName}.`);
 
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
