@@ -1717,7 +1717,16 @@ describe('Storage', function() {
 
             // With maxOpenPartitions=1, reading p0 should reopen it (evicting p1 first)
             expect(storage.read(1)).to.eql({ p: 0, foo: 'a' });
+            // After reading p0 the LRU pool should hold exactly 1 entry (p0)
+            expect(storage._openPartitionLru.size).to.be(1);
+            const openAfterP0 = Object.values(storage.partitions).filter(p => p.isOpen());
+            expect(openAfterP0.length).to.be(1);
+
             expect(storage.read(2)).to.eql({ p: 1, foo: 'b' });
+            // After reading p1, p1 is now MRU and only p1 should be open
+            expect(storage._openPartitionLru.size).to.be(1);
+            const openAfterP1 = Object.values(storage.partitions).filter(p => p.isOpen());
+            expect(openAfterP1.length).to.be(1);
         });
 
         it('setting maxOpenPartitions to 0 disables the limit', function() {

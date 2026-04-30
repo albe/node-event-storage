@@ -110,7 +110,7 @@ class ReadableStorage extends events.EventEmitter {
 
         this.matcherProperties = config.matcherProperties;
         this.maxOpenPartitions = config.maxOpenPartitions;
-        /** @private Map<id, true> in LRU order (oldest entry first). */
+        /** @private Map<id, true> in LRU order (oldest entry first). The value is always `true`; only the key ordering matters. */
         this._openPartitionLru = new Map();
 
         this.scanPartitions(config);
@@ -268,7 +268,11 @@ class ReadableStorage extends events.EventEmitter {
                             lruPartition.close();
                             break;
                         }
-                        // Stale LRU entry (partition was closed externally) — keep looking.
+                        // Stale LRU entry (partition was closed externally, e.g. by checkTornWrites or
+                        // forEachPartition) — remove it and continue to the next. If all entries are
+                        // stale the loop exits without closing anything; the pool size stays inflated
+                        // temporarily (bounded by the number of external closes since the last
+                        // getPartition call) but no data is lost and correctness is preserved.
                     }
                 }
                 this._openPartitionLru.set(partitionIdentifier, true);
