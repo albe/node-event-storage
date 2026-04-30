@@ -910,6 +910,34 @@ describe('EventStore', function() {
             expect(vals.sort()).to.eql([1, 2]);
         });
 
+        it('persists deeply nested slash-separated streams across store re-open', function (done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.on('ready', () => {
+                eventstore.commit('a/b/c', [{val: 1}]);
+                eventstore.commit('a/b/d', [{val: 2}], () => {
+                    eventstore.close();
+                    eventstore = new EventStore({ storageDirectory });
+                    eventstore.on('ready', () => {
+                        const streamC = eventstore.getEventStream('a/b/c');
+                        expect([...streamC]).to.eql([{val: 1}]);
+                        const streamD = eventstore.getEventStream('a/b/d');
+                        expect([...streamD]).to.eql([{val: 2}]);
+
+                        let categoryStream = eventstore.getEventStreamForCategory('a/b');
+                        let vals = [];
+                        for (let event of categoryStream) {
+                            vals.push(event.val);
+                        }
+                        expect(vals.sort()).to.eql([1, 2]);
+                        done();
+                    });
+                });
+            });
+        });
+
     });
 
     describe('createEventStream', function() {

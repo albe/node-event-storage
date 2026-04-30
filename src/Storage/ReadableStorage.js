@@ -140,7 +140,12 @@ class ReadableStorage extends events.EventEmitter {
             const entries = fs.readdirSync(dir, { withFileTypes: true });
             for (let entry of entries) {
                 if (entry.isDirectory()) {
-                    if (entry.name.startsWith(this.storageFile + '.')) {
+                    // At the top level only descend into directories that carry the storageFile
+                    // prefix (i.e. a hierarchical partition or index sub-tree).  Once we are
+                    // already inside such a sub-tree (relativePrefix is non-empty) we descend
+                    // into every directory because path segments below the first one are plain
+                    // names (e.g. 'b' inside 'eventstore.a/').
+                    if (relativePrefix !== '' || entry.name.startsWith(this.storageFile + '.')) {
                         scanDir(path.join(dir, entry.name), relativePrefix + entry.name + '/');
                     }
                     continue;
