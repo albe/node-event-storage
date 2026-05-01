@@ -26,7 +26,11 @@ function matches(document, matcher) {
     if (typeof matcher === 'function') return matcher(document);
 
     for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (typeof matcher[prop] === 'object') {
+        if (Array.isArray(matcher[prop])) {
+            if (!matcher[prop].includes(document[prop])) {
+                return false;
+            }
+        } else if (typeof matcher[prop] === 'object') {
             if (!matches(document[prop], matcher[prop])) {
                 return false;
             }

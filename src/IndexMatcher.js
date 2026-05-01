@@ -65,12 +65,14 @@ class IndexMatcher {
                     propMap = new Map();
                     this.table.set(discriminant.propPath, propMap);
                 }
-                let indexSet = propMap.get(discriminant.value);
-                if (!indexSet) {
-                    indexSet = new Set();
-                    propMap.set(discriminant.value, indexSet);
+                for (const v of discriminant.values) {
+                    let indexSet = propMap.get(v);
+                    if (!indexSet) {
+                        indexSet = new Set();
+                        propMap.set(v, indexSet);
+                    }
+                    indexSet.add(indexName);
                 }
-                indexSet.add(indexName);
                 return;
             }
         }
@@ -98,7 +100,9 @@ class IndexMatcher {
         if (matcher && typeof matcher === 'object') {
             const discriminant = this.findDiscriminant(matcher);
             if (discriminant) {
-                this.table.get(discriminant.propPath)?.get(discriminant.value)?.delete(indexName);
+                for (const v of discriminant.values) {
+                    this.table.get(discriminant.propPath)?.get(v)?.delete(indexName);
+                }
                 return;
             }
         }
@@ -159,17 +163,27 @@ class IndexMatcher {
 
     /**
      * Find the first usable discriminant for an object matcher.
-     * Returns `{ propPath, value }` for the first entry in `this.properties` that
-     * resolves to a non-null, non-object scalar inside `matcher`, or `null` if none.
+     * Returns `{ propPath, values }` for the first entry in `this.properties` that
+     * resolves to a non-null, non-object scalar (or a non-empty array of scalars) inside
+     * `matcher`, or `null` if none.
+     *
+     * For a scalar discriminant `values` contains exactly one element.
+     * For an array-valued discriminant `values` contains all elements of the array.
      *
      * @param {object} matcher
-     * @returns {{ propPath: string, value: string }|null}
+     * @returns {{ propPath: string, values: string[] }|null}
      */
     findDiscriminant(matcher) {
         for (const propPath of this.properties) {
             const value = getPropertyAtPath(matcher, propPath);
-            if (value !== undefined && value !== null && typeof value !== 'object') {
-                return { propPath, value: String(value) };
+            if (value !== undefined && value !== null) {
+                if (typeof value !== 'object') {
+                    return { propPath, values: [String(value)] };
+                }
+                if (Array.isArray(value) && value.length > 0 &&
+                    value.every(v => v !== null && v !== undefined && typeof v !== 'object')) {
+                    return { propPath, values: value.map(String) };
+                }
             }
         }
         return null;

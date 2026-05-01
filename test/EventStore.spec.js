@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import fsSync from 'fs';
 import path from 'path';
-import EventStore, { ExpectedVersion, OptimisticConcurrencyError, LOCK_RECLAIM } from '../src/EventStore.js';
+import EventStore, { ExpectedVersion, OptimisticConcurrencyError, ConsistencyToken, LOCK_RECLAIM } from '../src/EventStore.js';
 import Consumer from '../src/Consumer.js';
 import { fileURLToPath } from 'url';
 
@@ -1459,6 +1459,303 @@ describe('EventStore', function() {
             eventstore.on('ready', handler);
             eventstore.removeListener('ready', handler);
             // No assertion needed — just must not throw
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // Multi-value object matchers (Option 1)
+    // -------------------------------------------------------------------------
+    describe('multi-value object matchers', function() {
+
+        it('matches a document when its property equals any value in an array', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+
+            // Create a persistent stream that matches two event types using an array value.
+            eventstore.createEventStream('orders', {
+                payload: { type: ['OrderPlaced', 'OrderShipped'] }
+            });
+
+            eventstore.commit('order-1', [{ type: 'OrderPlaced',  orderId: 1 }], () => {
+                eventstore.commit('order-2', [{ type: 'OrderShipped', orderId: 2 }], () => {
+                    eventstore.commit('order-3', [{ type: 'OrderPaid', orderId: 3 }], () => {
+                        const stream = eventstore.getEventStream('orders');
+                        expect(stream.events.length).to.be(2);
+                        expect(stream.events[0].type).to.be('OrderPlaced');
+                        expect(stream.events[1].type).to.be('OrderShipped');
+                        done();
+                    });
+                });
+            });
+        });
+
+        it('uses the discriminant optimisation so the stream index is updated in O(1)', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            eventstore.createEventStream('typed', {
+                payload: { type: ['A', 'B'] }
+            });
+
+            let scanCount = 0;
+            const orig = eventstore.storage.forEachDocument.bind(eventstore.storage);
+            eventstore.storage.forEachDocument = (...args) => { scanCount++; return orig(...args); };
+
+            eventstore.commit('s', [{ type: 'A' }, { type: 'B' }, { type: 'C' }]);
+
+            // No full-store scan should have occurred for routing writes to the index.
+            expect(scanCount).to.be(0);
+            expect(eventstore.getStreamVersion('typed')).to.be(2);
+        });
+
+        it('does not match when the property value is not in the array', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.createEventStream('ab', { payload: { type: ['A', 'B'] } });
+            eventstore.commit('s', [{ type: 'C' }]);
+            expect(eventstore.getStreamVersion('ab')).to.be(0);
+        });
+
+        it('reindexes correctly when building from existing events', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('s', [{ type: 'A' }, { type: 'B' }, { type: 'C' }], () => {
+                const stream = eventstore.createEventStream('ab', { payload: { type: ['A', 'B'] } });
+                expect(stream.events.length).to.be(2);
+                done();
+            });
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // getConsistencyToken (standard mode)
+    // -------------------------------------------------------------------------
+    describe('getConsistencyToken', function() {
+
+        it('throws when types is empty', function() {
+            eventstore = new EventStore({ storageDirectory });
+            expect(() => eventstore.getConsistencyToken([])).to.throwError();
+        });
+
+        it('throws when types is not an array', function() {
+            eventstore = new EventStore({ storageDirectory });
+            expect(() => eventstore.getConsistencyToken('OrderPlaced')).to.throwError();
+        });
+
+        it('returns a token and a stream', function() {
+            eventstore = new EventStore({ storageDirectory });
+            const { token, stream } = eventstore.getConsistencyToken(['OrderPlaced']);
+            expect(token).to.be.a(ConsistencyToken);
+            expect(token.types).to.eql(['OrderPlaced']);
+            expect(token.versions).to.eql({ OrderPlaced: 0 });
+            expect(stream).not.to.be(false);
+        });
+
+        it('captures the current version of each type stream', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                const { token } = eventstore.getConsistencyToken(['OrderPlaced', 'OrderShipped']);
+                expect(token.versions['OrderPlaced']).to.be(1);
+                expect(token.versions['OrderShipped']).to.be(0);
+                done();
+            });
+        });
+
+        it('returns a joined stream over multiple types', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('s', [{ type: 'A', n: 1 }], () => {
+                eventstore.commit('s', [{ type: 'B', n: 2 }], () => {
+                    const { stream } = eventstore.getConsistencyToken(['A', 'B']);
+                    expect(stream.events.length).to.be(2);
+                    done();
+                });
+            });
+        });
+
+        it('the stream for a single type is a plain EventStream', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('s', [{ type: 'A', n: 1 }], () => {
+                const { stream } = eventstore.getConsistencyToken(['A']);
+                const evs = stream.events;
+                expect(evs.length).to.be(1);
+                expect(evs[0].n).to.be(1);
+                done();
+            });
+        });
+
+        it('stores the matcher in the token', function() {
+            eventstore = new EventStore({ storageDirectory });
+            const m = (e) => e.payload.orderId === 'x';
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced'], m);
+            expect(token.matcher).to.be(m);
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // commit() with ConsistencyToken
+    // -------------------------------------------------------------------------
+    describe('commit with ConsistencyToken', function() {
+
+        it('commits successfully when no events appeared since the token', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                const { token } = eventstore.getConsistencyToken(['OrderPlaced']);
+                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', id: 2 }], token)).to.not.throwError();
+                done();
+            });
+        });
+
+        it('throws when a new event of the type appeared since the token (no matcher)', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced']);
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', id: 2 }], token))
+                    .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
+                done();
+            });
+        });
+
+        it('does not throw when new events do not match the token matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            const matcher = (e) => e.payload.orderId === 'xyz';
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced'], matcher);
+            // Commit an OrderPlaced for a DIFFERENT order — should not conflict.
+            eventstore.commit('order-other', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
+                expect(() => eventstore.commit('order-xyz', [{ type: 'OrderShipped', orderId: 'xyz' }], token))
+                    .to.not.throwError();
+                done();
+            });
+        });
+
+        it('throws when a new event matches the token matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            const matcher = (e) => e.payload.orderId === 'xyz';
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced'], matcher);
+            // Commit an OrderPlaced for the SAME order — should conflict.
+            eventstore.commit('order-xyz', [{ type: 'OrderPlaced', orderId: 'xyz' }], () => {
+                expect(() => eventstore.commit('order-xyz', [{ type: 'OrderShipped', orderId: 'xyz' }], token))
+                    .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
+                done();
+            });
+        });
+
+        it('accepts a token together with a callback', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced']);
+            eventstore.commit('s', [{ type: 'OrderShipped' }], token, (commit) => {
+                expect(commit.streamName).to.be('s');
+                done();
+            });
+        });
+
+        it('accepts a token together with metadata and a callback', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced']);
+            eventstore.commit('s', [{ type: 'OrderShipped' }], token, { extra: 'meta' }, (commit) => {
+                expect(commit.extra).to.be('meta');
+                done();
+            });
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // DCB mode
+    // -------------------------------------------------------------------------
+    describe('DCB mode', function() {
+
+        it('partitions events by payload.type', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                // The physical partition file should be named after the type.
+                const partition = eventstore.storage.getPartition('OrderPlaced');
+                expect(partition).not.to.be(undefined);
+                done();
+            });
+        });
+
+        it('auto-creates a type stream on first commit', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                done();
+            });
+        });
+
+        it('getConsistencyToken works without a prior full-store scan', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                let scanCount = 0;
+                const orig = eventstore.storage.forEachDocument.bind(eventstore.storage);
+                eventstore.storage.forEachDocument = (...args) => { scanCount++; return orig(...args); };
+
+                const { token } = eventstore.getConsistencyToken(['OrderPlaced', 'OrderShipped']);
+                expect(scanCount).to.be(0);
+                expect(token.versions['OrderPlaced']).to.be(1);
+                expect(token.versions['OrderShipped']).to.be(0);
+                done();
+            });
+        });
+
+        it('commit with token detects conflicts in DCB mode', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced']);
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', id: 2 }], token))
+                    .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
+                done();
+            });
+        });
+
+        it('commit with token succeeds when no conflicting events appeared', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced']);
+            eventstore.commit('order-1', [{ type: 'OrderShipped', id: 1 }], () => {
+                expect(() => eventstore.commit('order-2', [{ type: 'OrderPaid', id: 2 }], token))
+                    .to.not.throwError();
+                done();
+            });
+        });
+
+        it('commit with token and matcher ignores non-matching new events', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            const matcher = (e) => e.payload.orderId === 'xyz';
+            const { token } = eventstore.getConsistencyToken(['OrderPlaced'], matcher);
+            eventstore.commit('order-abc', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
+                expect(() => eventstore.commit('order-xyz', [{ type: 'OrderShipped', orderId: 'xyz' }], token))
+                    .to.not.throwError();
+                done();
+            });
+        });
+
+        it('can still commit to arbitrary (entity-based) stream names', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            eventstore.commit('order-42', [{ type: 'OrderPlaced', orderId: 42 }], () => {
+                expect(eventstore.getStreamVersion('order-42')).to.be(1);
+                done();
+            });
+        });
+
+        it('type stream and entity stream both capture the same event', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            eventstore.commit('order-42', [{ type: 'OrderPlaced', orderId: 42 }], () => {
+                expect(eventstore.getStreamVersion('order-42')).to.be(1);
+                expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                done();
+            });
+        });
+
+        it('the read stream from getConsistencyToken returns events in insertion order', function(done) {
+            eventstore = new EventStore({ storageDirectory, dcbMode: true });
+            eventstore.commit('s', [{ type: 'A', n: 1 }], () => {
+                eventstore.commit('s', [{ type: 'B', n: 2 }], () => {
+                    eventstore.commit('s', [{ type: 'A', n: 3 }], () => {
+                        const { stream } = eventstore.getConsistencyToken(['A', 'B']);
+                        const payloads = stream.events;
+                        expect(payloads.map(e => e.n)).to.eql([1, 2, 3]);
+                        done();
+                    });
+                });
+            });
         });
 
     });
