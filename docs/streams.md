@@ -292,9 +292,8 @@ const allUsersStream = eventstore.getEventStreamForCategory('user');
 |------------------------|-------------------|--------------------------|
 | Up to ~100 k           | 1 level (`type/XX/id`) | ~390 |
 | Up to ~25 M            | 2 levels (`type/XX/YY/id`) | ~1 526 |
-| Up to ~6 B             | 3 levels (`type/XX/YY/ZZ/id`) | ~6 |
 
-Two hex characters per level gives 256 shards per level. Adjust by using more or fewer hex characters (e.g. 3 chars = 4 096 shards/level) to match the expected entity population.
+Two hex characters per level gives 256 shards per level. Adjust by using more or fewer hex characters (e.g. 3 chars = 4 096 shards/level) to match the expected entity population. Additional nesting levels are structurally supported but have not been benchmarked at very large entity counts.
 
 #### UUID-keyed entities
 
