@@ -195,9 +195,13 @@ function kWayMerge(streams, getKey, advance, visit) {
  * @param {function(Error?)} onDone Called when the scan is complete, or with an error if one occurred.
  */
 function scanForFiles(directory, regexPattern, onEach, onDone) {
-    function scan(dir, relativePrefix, done) {
+    function scan(dir, relativePrefix, isRoot, done) {
         fs.readdir(dir, { withFileTypes: true }, (err, entries) => {
             if (err) {
+                // For non-root subdirectories, silently skip if they have disappeared
+                // (e.g. a transient lock directory that was removed while scanning).
+                /* istanbul ignore next */
+                if (!isRoot && err.code === 'ENOENT') return done(null);
                 return done(err);
             }
             const subdirs = [];
@@ -216,7 +220,7 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
             function next() {
                 if (i >= subdirs.length) return done(null);
                 const name = subdirs[i++];
-                scan(path.join(dir, name), relativePrefix + name + '/', (err) => {
+                scan(path.join(dir, name), relativePrefix + name + '/', false, (err) => {
                     if (err) return done(err);
                     next();
                 });
@@ -225,7 +229,7 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
         });
     }
 
-    scan(directory, '', onDone);
+    scan(directory, '', true, onDone);
 }
 
 

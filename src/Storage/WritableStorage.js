@@ -76,9 +76,7 @@ class WritableStorage extends ReadableStorage {
         if (!this.lock()) {
             return true;
         }
-        const result = super.open();
-        this.emit('ready');
-        return result;
+        return super.open();
     }
 
     /**
@@ -240,11 +238,28 @@ class WritableStorage extends ReadableStorage {
     unlock() {
         if (fs.existsSync(this.lockFile)) {
             if (!this.locked) {
-                this.checkTornWrites();
+                // An orphaned lock from a previously crashed writer was found.
+                // Defer the torn-write check until the async partition scan completes
+                // and open() has been called, just before 'ready' is emitted.
+                this._needsRepair = true;
             }
             fs.rmdirSync(this.lockFile);
         }
         this.locked = false;
+    }
+
+    /**
+     * @inheritDoc
+     * Runs checkTornWrites() before emitting 'ready' when an orphaned lock was reclaimed.
+     * @private
+     */
+    _emitReadyIfConditionsMet() {
+        if (!this._scanDone || !this._opened) return;
+        if (this._needsRepair) {
+            this._needsRepair = false;
+            this.checkTornWrites();
+        }
+        this.emit('ready');
     }
 
     /**

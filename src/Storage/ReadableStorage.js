@@ -3,7 +3,7 @@ import path from 'path';
 import events from 'events';
 import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
-import { assert, wrapAndCheck, kWayMerge, scanForFilesSync } from '../util.js';
+import { assert, wrapAndCheck, kWayMerge, scanForFiles } from '../util.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
 import IndexMatcher from '../IndexMatcher.js';
 import PartitionPool from '../PartitionPool.js';
@@ -93,6 +93,8 @@ class ReadableStorage extends events.EventEmitter {
 
         this.dataDirectory = path.resolve(config.dataDirectory);
 
+        this._scanDone = false;
+        this._opened = false;
         this.scanPartitions(config);
         this.initializeIndexes(config);
     }
@@ -167,16 +169,33 @@ class ReadableStorage extends events.EventEmitter {
 
         const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const pattern = new RegExp(`^(${escaped}.*)$`);
-        scanForFilesSync(this.dataDirectory, pattern, (file) => {
+        scanForFiles(this.dataDirectory, pattern, (file) => {
             if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
             const partition = this.createPartition(file, this.partitionConfig);
             this.partitions.add(partition.id, partition);
+        }, (err) => {
+            /* istanbul ignore if */
+            if (err) throw err;
+            this._scanDone = true;
+            this._emitReadyIfConditionsMet();
         });
     }
 
     /**
+     * Emit the 'ready' event if both the async partition scan has completed and the storage
+     * has been opened (indexes are open).  Called from both the scan callback and open().
+     * @private
+     */
+    _emitReadyIfConditionsMet() {
+        if (this._scanDone && this._opened) {
+            this.emit('ready');
+        }
+    }
+
+    /**
      * Open the storage and indexes and create read and write buffers eagerly.
-     * Will emit an 'opened' event if finished.
+     * Will emit an 'opened' event if finished, and a 'ready' event once the async partition
+     * scan has also completed (or immediately if it has already finished).
      *
      * @api
      * @returns {boolean}
@@ -186,6 +205,8 @@ class ReadableStorage extends events.EventEmitter {
 
         this.forEachSecondaryIndex(index => index.open());
 
+        this._opened = true;
+        this._emitReadyIfConditionsMet();
         this.emit('opened');
         return true;
     }
@@ -204,6 +225,7 @@ class ReadableStorage extends events.EventEmitter {
             index.close();
         }
         this.forEachPartition(partition => partition.close());
+        this._opened = false;
         this.emit('closed');
     }
 

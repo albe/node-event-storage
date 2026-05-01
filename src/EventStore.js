@@ -75,18 +75,20 @@ class EventStore extends events.EventEmitter {
         this.storage = (storageConfig.readOnly === true) ?
                         new ReadOnlyStorage(storeName, storageConfig)
                         : new Storage(storeName, storageConfig);
-        this.storage.open();
         this.streams = Object.create(null);
         this.streams._all = { index: this.storage.index };
 
-        this.scanStreams((err) => {
-            if (err) {
-                this.storage.close();
-                throw err;
-            }
-            this.checkUnfinishedCommits();
-            this.emit('ready');
+        this.storage.on('ready', () => {
+            this.scanStreams((err) => {
+                if (err) {
+                    this.storage.close();
+                    throw err;
+                }
+                this.checkUnfinishedCommits();
+                this.emit('ready');
+            });
         });
+        this.storage.open();
     }
 
     /**

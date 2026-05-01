@@ -186,7 +186,7 @@ describe('Storage', function() {
             expect(storage.read(5)).to.eql({ foo: 5 });
         });
 
-        it('can read back from partitioned storage', function() {
+        it('can read back from partitioned storage', function(done) {
             storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number-1) % 4) });
             storage.open();
 
@@ -207,11 +207,13 @@ describe('Storage', function() {
 
             storage.close();
             storage = createStorage();
+            storage.on('ready', () => {
+                for (let i = 1; i <= 8; i++) {
+                    expect(storage.read(i)).to.eql({ foo: i });
+                }
+                done();
+            });
             storage.open();
-
-            for (let i = 1; i <= 8; i++) {
-                expect(storage.read(i)).to.eql({ foo: i });
-            }
         });
 
         it('can read with using secondary index', function() {
@@ -244,7 +246,7 @@ describe('Storage', function() {
             expect(index.isOpen()).to.be(true);
         });
 
-        it('works with arbitrarily sized documents', function() {
+        it('works with arbitrarily sized documents', function(done) {
             storage = createStorage({ writeBufferSize: 1024 });
             storage.open();
 
@@ -254,11 +256,13 @@ describe('Storage', function() {
 
             storage.close();
             storage = createStorage();
+            storage.on('ready', () => {
+                for (let i = 1; i <= 8; i++) {
+                    expect(storage.read(i).foo).to.eql(i);
+                }
+                done();
+            });
             storage.open();
-
-            for (let i = 1; i <= 8; i++) {
-                expect(storage.read(i).foo).to.eql(i);
-            }
         });
 
     });
@@ -880,7 +884,7 @@ describe('Storage', function() {
             expect(storage.index.length).to.be(lengthBefore);
         });
 
-        it('does not reindex when torn write is present and index is up to date', function() {
+        it('does not reindex when torn write is present and index is up to date', function(done) {
             storage = createStorage();
             storage.open();
 
@@ -898,15 +902,17 @@ describe('Storage', function() {
             fs.closeSync(fd);
 
             storage = createStorage();
+            storage.on('ready', () => {
+                storage.checkTornWrites();
+
+                // Doc5 was torn and removed; index should now have exactly 4 entries.
+                expect(storage.index.length).to.be(4);
+                done();
+            });
             storage.open();
-
-            storage.checkTornWrites();
-
-            // Doc5 was torn and removed; index should now have exactly 4 entries.
-            expect(storage.index.length).to.be(4);
         });
 
-        it('auto-repairs primary index when both torn write and index lag are present', function() {
+        it('auto-repairs primary index when both torn write and index lag are present', function(done) {
             storage = createStorage();
             storage.open();
 
@@ -925,22 +931,26 @@ describe('Storage', function() {
 
             // Re-open and truncate index to 3 to simulate index lag
             storage = createStorage();
+            storage.on('ready', () => {
+                storage.index.truncate(3);
+                storage.index.flush();
+                storage.close();
+
+                storage = createStorage();
+                storage.on('ready', () => {
+                    storage.checkTornWrites();
+
+                    // After torn write removal: doc5 is gone. Auto-repair rebuilds the missing entry
+                    // for doc4, leaving the index with 4 entries for docs 1-4.
+                    expect(storage.index.length).to.be(4);
+                    for (let i = 1; i <= 4; i++) {
+                        expect(storage.read(i)).to.eql({ foo: i });
+                    }
+                    done();
+                });
+                storage.open();
+            });
             storage.open();
-            storage.index.truncate(3);
-            storage.index.flush();
-            storage.close();
-
-            storage = createStorage();
-            storage.open();
-
-            storage.checkTornWrites();
-
-            // After torn write removal: doc5 is gone. Auto-repair rebuilds the missing entry
-            // for doc4, leaving the index with 4 entries for docs 1-4.
-            expect(storage.index.length).to.be(4);
-            for (let i = 1; i <= 4; i++) {
-                expect(storage.read(i)).to.eql({ foo: i });
-            }
         });
 
     });
@@ -1060,7 +1070,7 @@ describe('Storage', function() {
             expect(secIndex.length).to.be(3); // foo=1, foo=3, foo=5
         });
 
-        it('opens partitions that are not yet open when called directly after open()', function() {
+        it('opens partitions that are not yet open when called directly after open()', function(done) {
             // Session 1: write data and corrupt the index
             storage = createStorage();
             storage.open();
@@ -1075,14 +1085,16 @@ describe('Storage', function() {
             // Session 2: open without writing — partitions are lazily opened, so they are
             // NOT open yet when reindex() is called directly after open()
             storage = createStorage();
+            storage.on('ready', () => {
+                storage.reindex(3);
+
+                expect(storage.index.length).to.be(5);
+                for (let i = 1; i <= 5; i++) {
+                    expect(storage.read(i)).to.eql({ foo: i });
+                }
+                done();
+            });
             storage.open();
-
-            storage.reindex(3);
-
-            expect(storage.index.length).to.be(5);
-            for (let i = 1; i <= 5; i++) {
-                expect(storage.read(i)).to.eql({ foo: i });
-            }
         });
 
     });
@@ -1112,20 +1124,16 @@ describe('Storage', function() {
             crashedStorage.forEachPartition(partition => partition.close());
             // (crashedStorage.locked remains true; lock file on disk is NOT removed)
 
-            // Reopen with LOCK_RECLAIM — detects the orphaned lock, runs checkTornWrites()
-            // (which calls reindex()), and then open() emits 'ready'.
+            // Reopen with LOCK_RECLAIM — detects the orphaned lock, defers checkTornWrites()
+            // until the async partition scan completes, then emits 'ready' after repair.
             const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
             refs.push(repairedStorage);
-            let readyFired = false;
             repairedStorage.on('ready', () => {
-                readyFired = true;
                 // Index should be fully repaired by the time 'ready' fires
                 expect(repairedStorage.index.length).to.be(5);
                 done();
             });
             repairedStorage.open();
-            // Note: 'ready' is emitted synchronously inside open(), so readyFired is already true
-            expect(readyFired).to.be(true);
             // Prevent afterEach from trying to remove the now-gone lock file
             crashedStorage.locked = false;
         });
