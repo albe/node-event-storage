@@ -3,7 +3,7 @@ import path from 'path';
 import events from 'events';
 import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
-import { assert, wrapAndCheck, kWayMerge } from '../util.js';
+import { assert, wrapAndCheck, kWayMerge, scanForFilesSync } from '../util.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
@@ -136,32 +136,13 @@ class ReadableStorage extends events.EventEmitter {
         this.partitionConfig = Object.assign(defaults, config);
         this.partitions = Object.create(null);
 
-        const scanDir = (dir, relativePrefix) => {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (let entry of entries) {
-                if (entry.isDirectory()) {
-                    // At the top level only descend into directories that carry the storageFile
-                    // prefix (i.e. a hierarchical partition or index sub-tree).  Once we are
-                    // already inside such a sub-tree (relativePrefix is non-empty) we descend
-                    // into every directory because path segments below the first one are plain
-                    // names (e.g. 'b' inside 'eventstore.a/').
-                    if (relativePrefix !== '' || entry.name.startsWith(this.storageFile + '.')) {
-                        scanDir(path.join(dir, entry.name), relativePrefix + entry.name + '/');
-                    }
-                    continue;
-                }
-                const file = relativePrefix + entry.name;
-                if (file.substr(-6) === '.index') continue;
-                if (file.substr(-7) === '.branch') continue;
-                if (file.substr(-5) === '.lock') continue;
-                if (file.substr(0, this.storageFile.length) !== this.storageFile) continue;
-
-                const partition = this.createPartition(file, this.partitionConfig);
-                this.partitions[partition.id] = partition;
-            }
-        };
-
-        scanDir(this.dataDirectory, '');
+        const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(`^(${escaped}.*)$`);
+        scanForFilesSync(this.dataDirectory, pattern, (file) => {
+            if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
+            const partition = this.createPartition(file, this.partitionConfig);
+            this.partitions[partition.id] = partition;
+        });
     }
 
     /**
