@@ -215,13 +215,20 @@ streams/
     …
 ```
 
-Category queries work exactly the same way — just pass the prefix before the first `/`:
+Category queries work the same way — pass any prefix up to (but not including) the last separator. The query returns every stream whose name starts with that prefix followed by either `-` or `/`:
 
 ```javascript
+// All user streams, regardless of depth
 const allUsersStream = eventstore.getEventStreamForCategory('user');
+
+// Narrowed to a sub-category (streams starting with 'user/a3/')
+const shardStream = eventstore.getEventStreamForCategory('user/a3');
+
+// Narrowed further to a two-level sub-category (streams starting with 'user/a3/f7/')
+const leafStream = eventstore.getEventStreamForCategory('user/a3/f7');
 ```
 
-`getEventStreamForCategory` unions **both layouts**: it returns events from all streams whose name starts with `user-` *or* `user/`, in global insertion order.
+`getEventStreamForCategory` unions **both layouts**: it returns events from all matching streams in global insertion order, regardless of whether they use the dash or slash convention.
 
 #### Hash-based sharding for very large entity populations
 
@@ -266,17 +273,16 @@ To read a specific user's stream you compose the same name:
 const userStream = eventstore.getEventStream(streamName('user', user.id));
 ```
 
-To query all events for a sub-category (e.g. all users whose ID hashes to shard `a3`) pass the shared prefix to `getEventStreamForCategory`:
+Sub-category queries work at any depth — pass the shared prefix to scope the result set:
 
 ```javascript
-// All users in shard a3 (second-level fan-out still unified)
+// All users whose ID hashes to shard a3/f7
+const leafStream = eventstore.getEventStreamForCategory('user/a3/f7');
+
+// All users in the a3 top-level shard
 const shardStream = eventstore.getEventStreamForCategory('user/a3');
-```
 
-To query **all** users regardless of shard, use the top-level category:
-
-```javascript
-// All user events, from every shard, in global insertion order
+// All user events across every shard
 const allUsersStream = eventstore.getEventStreamForCategory('user');
 ```
 
