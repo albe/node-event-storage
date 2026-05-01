@@ -260,6 +260,24 @@ function scanForFilesSync(directory, regexPattern, onEach) {
 }
 
 
+/**
+ * Read a scalar value at a dot-notation path from an object.
+ * Returns `undefined` if any path segment is absent or an intermediate value is not an object.
+ *
+ * @param {object} obj
+ * @param {string} dotPath Dot-separated property path, e.g. `'payload.type'`.
+ * @returns {*}
+ */
+function getPropertyAtPath(obj, dotPath) {
+    let current = obj;
+    const parts = dotPath.split('.');
+    for (const part of parts) {
+        if (current == null || typeof current !== 'object') return undefined;
+        current = current[part];
+    }
+    return current;
+}
+
 export {
     assert,
     assertEqual,
@@ -271,5 +289,6 @@ export {
     ensureDirectory,
     scanForFiles,
     scanForFilesSync,
-    kWayMerge
+    kWayMerge,
+    getPropertyAtPath
 };

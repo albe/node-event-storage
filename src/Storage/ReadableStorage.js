@@ -5,8 +5,25 @@ import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
 import { assert, wrapAndCheck, kWayMerge, scanForFilesSync } from '../util.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
+import IndexMatcher from '../IndexMatcher.js';
+import PartitionPool from '../PartitionPool.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
+
+/**
+ * Default ordered list of document property paths used as discriminant keys when
+ * classifying object matchers into the fast-lookup table.  Each path may use
+ * dot-notation for nested access (e.g. `'payload.type'`).  The first path that
+ * resolves to a scalar value in a given matcher wins; remaining paths are not
+ * examined for that matcher.
+ */
+const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
+
+/**
+ * Default maximum number of partition file descriptors kept open simultaneously.
+ * Partitions beyond this limit are evicted using LRU order. 0 disables the limit.
+ */
+const DEFAULT_MAX_OPEN_PARTITIONS = 1024;
 
 /**
  * Reverses the items of an iterable
@@ -43,6 +60,13 @@ class ReadableStorage extends events.EventEmitter {
      * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
      * @param {object} [config.metadata] A metadata object to be stored in all partitions belonging to this storage.
+     * @param {string[]} [config.matcherProperties] Ordered list of document property paths (dot-notation) used as
+     *   discriminant keys for the fast secondary-index lookup table. Only the first property that resolves to a scalar
+     *   value inside a given object matcher is used; the rest are checked via the full `matches()` fallback.
+     *   Default: `['stream', 'payload.type']`.
+     * @param {number} [config.maxOpenPartitions] Maximum number of partition file descriptors kept open at one time.
+     *   When the limit is reached the least-recently-used partition is closed to make room. 0 disables the limit.
+     *   Default: 1024.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -58,7 +82,9 @@ class ReadableStorage extends events.EventEmitter {
             indexFile: this.storageFile + '.index',
             indexOptions: {},
             hmacSecret: '',
-            metadata: {}
+            metadata: {},
+            matcherProperties: DEFAULT_MATCHER_PROPERTIES,
+            maxOpenPartitions: DEFAULT_MAX_OPEN_PARTITIONS
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
@@ -111,6 +137,9 @@ class ReadableStorage extends events.EventEmitter {
         this.index = index;
         this.secondaryIndexes = {};
         this.readonlyIndexes = {};
+
+        /** Fast secondary-index lookup — classifies matchers for O(1) candidate resolution on write. */
+        this.indexMatcher = new IndexMatcher(config.matcherProperties);
     }
 
     /**
@@ -134,14 +163,14 @@ class ReadableStorage extends events.EventEmitter {
             readBufferSize: DEFAULT_READ_BUFFER_SIZE
         };
         this.partitionConfig = Object.assign(defaults, config);
-        this.partitions = Object.create(null);
+        this.partitions = new PartitionPool(config.maxOpenPartitions);
 
         const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const pattern = new RegExp(`^(${escaped}.*)$`);
         scanForFilesSync(this.dataDirectory, pattern, (file) => {
             if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
             const partition = this.createPartition(file, this.partitionConfig);
-            this.partitions[partition.id] = partition;
+            this.partitions.add(partition.id, partition);
         });
     }
 
@@ -179,20 +208,17 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Get a partition either by name or by id.
-     * If a partition with the given name does not exist, a new one will be created.
+     * Get a partition by its id.
      * If a partition with the given id does not exist, an error is thrown.
      *
      * @protected
-     * @param {string|number} partitionIdentifier The partition name or the partition Id
+     * @param {number|string} partitionIdentifier The partition Id
      * @returns {ReadablePartition}
-     * @throws {Error} If an id is given and no such partition exists.
+     * @throws {Error} If no such partition exists.
      */
     getPartition(partitionIdentifier) {
-        assert(partitionIdentifier in this.partitions, `Partition #${partitionIdentifier} does not exist.`);
-
-        this.partitions[partitionIdentifier].open();
-        return this.partitions[partitionIdentifier];
+        assert(this.partitions.has(partitionIdentifier), `Partition #${partitionIdentifier} does not exist.`);
+        return this.partitions.open(partitionIdentifier);
     }
 
     /**
@@ -356,8 +382,25 @@ class ReadableStorage extends events.EventEmitter {
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
         let { index } = this.secondaryIndexes[name] = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
 
+        // Register the actual stored matcher (may have been reconstructed from metadata by WritableStorage.createIndex).
+        this.indexMatcher.add(name, this.secondaryIndexes[name].matcher);
+
         index.open();
         return index;
+    }
+
+    /**
+     * Remove a secondary index from the write path and the matcher lookup table.
+     *
+     * @api
+     * @param {string} name The secondary index name to remove.
+     */
+    removeSecondaryIndex(name) {
+        const entry = this.secondaryIndexes[name];
+        if (entry) {
+            this.indexMatcher.remove(name);
+            delete this.secondaryIndexes[name];
+        }
     }
 
     /**
@@ -445,6 +488,9 @@ class ReadableStorage extends events.EventEmitter {
     /**
      * Helper method to iterate over all secondary indexes.
      *
+     * When `matchDocument` is provided, `this.indexMatcher.forEachMatch()` is used to
+     * efficiently find only the matching indexes via the discriminant lookup table.
+     *
      * @protected
      * @param {function(ReadableIndex, string)} iterationHandler
      * @param {object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
@@ -455,11 +501,17 @@ class ReadableStorage extends events.EventEmitter {
             return;
         }
 
-        for (let indexName of Object.keys(this.secondaryIndexes)) {
-            if (!matchDocument || matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
+        if (!matchDocument) {
+            // No document filter: iterate all secondary indexes unconditionally.
+            for (const indexName of Object.keys(this.secondaryIndexes)) {
                 iterationHandler(this.secondaryIndexes[indexName].index, indexName);
             }
+            return;
         }
+
+        this.indexMatcher.forEachMatch(matchDocument, indexName => {
+            iterationHandler(this.secondaryIndexes[indexName].index, indexName);
+        });
     }
 
     /**
@@ -474,9 +526,7 @@ class ReadableStorage extends events.EventEmitter {
             return;
         }
 
-        for (let partition of Object.keys(this.partitions)) {
-            iterationHandler(this.partitions[partition]);
-        }
+        this.partitions.forEach(iterationHandler);
     }
 
 }

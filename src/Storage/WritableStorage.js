@@ -170,6 +170,8 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.forEachPartition(partition => partition.close());
+        // Partitions were closed directly (bypassing the pool), so reset the open-handle tracking.
+        this.partitions.clearOpenHandles();
     }
 
     /**
@@ -305,6 +307,8 @@ class WritableStorage extends ReadableStorage {
      * If a partition with the given name does not exist, a new one will be created.
      * If a partition with the given id does not exist, an error is thrown.
      *
+     * Partition opening and LRU tracking are delegated to `super.getPartition()`.
+     *
      * @protected
      * @param {string|number} partitionIdentifier The partition name or the partition Id
      * @returns {ReadablePartition}
@@ -315,18 +319,16 @@ class WritableStorage extends ReadableStorage {
             const partitionShortName = partitionIdentifier;
             const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
             partitionIdentifier = WritablePartition.idFor(partitionName);
-            if (!this.partitions[partitionIdentifier]) {
+            if (!this.partitions.has(partitionIdentifier)) {
                 const partitionConfig = typeof this.partitionConfig.metadata === 'function'
                     ? { ...this.partitionConfig, metadata: this.partitionConfig.metadata(partitionShortName) }
                     : this.partitionConfig;
                 if (partitionName.includes('/')) {
                     ensureDirectory(path.join(this.dataDirectory, path.dirname(partitionName)));
                 }
-                this.partitions[partitionIdentifier] = this.createPartition(partitionName, partitionConfig);
+                this.partitions.add(partitionIdentifier, this.createPartition(partitionName, partitionConfig));
                 this.emit('partition-created', partitionIdentifier);
             }
-            this.partitions[partitionIdentifier].open();
-            return this.partitions[partitionIdentifier];
         }
         return super.getPartition(partitionIdentifier);
     }
@@ -404,6 +406,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.secondaryIndexes[name] = { index, matcher };
+        this.indexMatcher.add(name, matcher);
         this.emit('index-created', name);
         return index;
     }
@@ -429,7 +432,7 @@ class WritableStorage extends ReadableStorage {
      */
     forEachDistinctPartitionOf(entries, iterationHandler) {
         const partitions = [];
-        const numPartitions = Object.keys(this.partitions).length;
+        const numPartitions = this.partitions.count;
         for (let entry of entries) {
             if (partitions.indexOf(entry.partition) >= 0) {
                 continue;

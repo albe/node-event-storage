@@ -54,9 +54,9 @@ class ReadOnlyStorage extends ReadableStorage {
         }
 
         const partitionId = ReadablePartition.idFor(filename);
-        if (!this.partitions[partitionId]) {
+        if (!this.partitions.has(partitionId)) {
             const partition = this.createPartition(filename, this.partitionConfig);
-            this.partitions[partition.id] = partition;
+            this.partitions.add(partition.id, partition);
             this.emit('partition-created', partition.id);
         }
     }

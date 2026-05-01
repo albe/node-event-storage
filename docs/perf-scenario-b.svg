@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 340" width="600" height="340">
+  <rect width="600" height="340" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="300" y="22" text-anchor="middle" font-size="13" font-family="sans-serif" font-weight="bold" fill="#111">Write &amp; Read Latency vs Index Count</text>
+
+  <!-- Horizontal grid lines (y-axis: 0–0.10 ms, scale 2400 px/ms, base y=280) -->
+  <!-- 0.00 → 280 | 0.02 → 232 | 0.04 → 184 | 0.06 → 136 | 0.08 → 88 | 0.10 → 40 -->
+  <line x1="60" y1="280" x2="580" y2="280" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="232" x2="580" y2="232" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="184" x2="580" y2="184" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="136" x2="580" y2="136" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="88"  x2="580" y2="88"  stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="40"  x2="580" y2="40"  stroke="#e5e7eb" stroke-width="1"/>
+
+  <!-- Axes -->
+  <line x1="60" y1="40" x2="60"  y2="280" stroke="#9ca3af" stroke-width="1.5"/>
+  <line x1="60" y1="280" x2="580" y2="280" stroke="#9ca3af" stroke-width="1.5"/>
+
+  <!-- Y-axis labels -->
+  <text x="52" y="284" text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.00</text>
+  <text x="52" y="236" text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.02</text>
+  <text x="52" y="188" text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.04</text>
+  <text x="52" y="140" text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.06</text>
+  <text x="52" y="92"  text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.08</text>
+  <text x="52" y="44"  text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.10</text>
+
+  <!-- Y-axis unit label (rotated) -->
+  <text transform="rotate(-90) translate(-160,14)" font-size="12" font-family="sans-serif" text-anchor="middle" fill="#374151">ms / op</text>
+
+  <!-- X labels: indexes at x = 60, 320, 580 -->
+  <text x="60"  y="296" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">100</text>
+  <text x="320" y="296" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">1 000</text>
+  <text x="580" y="296" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">5 000</text>
+
+  <!-- X-axis label -->
+  <text x="320" y="320" text-anchor="middle" font-size="12" font-family="sans-serif" fill="#374151">Indexes (100 fixed partitions)</text>
+
+  <!-- Write latency line (blue) -->
+  <!-- values: 0.030→208.0, 0.034→198.4, 0.049→162.4 -->
+  <polyline points="60,208.0 320,198.4 580,162.4"
+            fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="60"  cy="208.0" r="4.5" fill="#2563eb"/>
+  <circle cx="320" cy="198.4" r="4.5" fill="#2563eb"/>
+  <circle cx="580" cy="162.4" r="4.5" fill="#2563eb"/>
+
+  <!-- Read latency line (green) -->
+  <!-- values: 0.022→227.2, 0.022→227.2, 0.057→143.2 -->
+  <polyline points="60,227.2 320,227.2 580,143.2"
+            fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="60"  cy="227.2" r="4.5" fill="#16a34a"/>
+  <circle cx="320" cy="227.2" r="4.5" fill="#16a34a"/>
+  <circle cx="580" cy="143.2" r="4.5" fill="#16a34a"/>
+
+  <!-- Legend -->
+  <rect x="330" y="42" width="140" height="52" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="340" y1="58" x2="360" y2="58" stroke="#2563eb" stroke-width="2.5"/>
+  <circle cx="350" cy="58" r="3.5" fill="#2563eb"/>
+  <text x="366" y="62" font-size="11" font-family="sans-serif" fill="#111">write ms/op</text>
+  <line x1="340" y1="76" x2="360" y2="76" stroke="#16a34a" stroke-width="2.5"/>
+  <circle cx="350" cy="76" r="3.5" fill="#16a34a"/>
+  <text x="366" y="80" font-size="11" font-family="sans-serif" fill="#111">read ms/op</text>
+</svg>
