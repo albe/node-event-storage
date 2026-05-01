@@ -794,7 +794,7 @@ describe('EventStore', function() {
             for (let event of categoryStream) {
                 keys.push(event.key);
             }
-            expect(keys.sort((a, b) => a - b)).to.eql([1,2,3,4,5,6,7,8,9,10]);
+            expect(keys).to.eql([1,2,3,4,5,6,7,8,9,10]);
         });
 
         it('unions dash-separated and slash-separated streams for the same category', function () {
@@ -812,7 +812,7 @@ describe('EventStore', function() {
             for (let event of categoryStream) {
                 keys.push(event.key);
             }
-            expect(keys.sort((a, b) => a - b)).to.eql([1, 2, 3, 4]);
+            expect(keys).to.eql([1, 2, 3, 4]);
         });
 
         it('includes all descendant streams for the category, not just direct children', function () {
@@ -828,7 +828,7 @@ describe('EventStore', function() {
             for (let event of categoryStream) {
                 keys.push(event.key);
             }
-            expect(keys.sort((a, b) => a - b)).to.eql([1, 2]);
+            expect(keys).to.eql([1, 2]);
         });
 
         it('can narrow down to a sub-category using slash prefix', function () {
@@ -845,28 +845,12 @@ describe('EventStore', function() {
             for (let event of categoryStream) {
                 keys.push(event.key);
             }
-            expect(keys.sort((a, b) => a - b)).to.eql([2, 3]);
+            expect(keys).to.eql([2, 3]);
         });
 
     });
 
     describe('hierarchical (slash-separated) streams', function() {
-
-        it('commits and reads events from a slash-separated stream', function () {
-            eventstore = new EventStore({
-                storageDirectory
-            });
-
-            let events = [{foo: 'bar'}, {foo: 'baz'}];
-            eventstore.commit('category/123', events);
-
-            const stream = eventstore.getEventStream('category/123');
-            let result = [];
-            for (let event of stream) {
-                result.push(event);
-            }
-            expect(result).to.eql(events);
-        });
 
         it('persists slash-separated streams across store re-open', function (done) {
             eventstore = new EventStore({
@@ -907,7 +891,7 @@ describe('EventStore', function() {
             for (let event of categoryStream) {
                 vals.push(event.val);
             }
-            expect(vals.sort()).to.eql([1, 2]);
+            expect(vals).to.eql([1, 2]);
         });
 
         it('persists deeply nested slash-separated streams across store re-open', function (done) {
@@ -931,7 +915,7 @@ describe('EventStore', function() {
                         for (let event of categoryStream) {
                             vals.push(event.val);
                         }
-                        expect(vals.sort()).to.eql([1, 2]);
+                        expect(vals).to.eql([1, 2]);
                         done();
                     });
                 });

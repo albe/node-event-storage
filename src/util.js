@@ -200,18 +200,10 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
             if (err) {
                 return done(err);
             }
-            let pending = 1;
-            let firstError = null;
-
-            function checkDone(err) {
-                if (err && !firstError) firstError = err;
-                if (--pending === 0) done(firstError);
-            }
-
+            const subdirs = [];
             for (let entry of entries) {
                 if (entry.isDirectory()) {
-                    pending++;
-                    scan(path.join(dir, entry.name), relativePrefix + entry.name + '/', checkDone);
+                    subdirs.push(entry.name);
                 } else {
                     const relativePath = relativePrefix + entry.name;
                     const match = relativePath.match(regexPattern);
@@ -220,8 +212,16 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
                     }
                 }
             }
-
-            checkDone(null);
+            let i = 0;
+            function next() {
+                if (i >= subdirs.length) return done(null);
+                const name = subdirs[i++];
+                scan(path.join(dir, name), relativePrefix + name + '/', (err) => {
+                    if (err) return done(err);
+                    next();
+                });
+            }
+            next();
         });
     }
 
