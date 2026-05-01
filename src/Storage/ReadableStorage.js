@@ -401,7 +401,7 @@ class ReadableStorage extends events.EventEmitter {
     removeSecondaryIndex(name) {
         const entry = this.secondaryIndexes[name];
         if (entry) {
-            this.indexMatcher.remove(name, entry.matcher);
+            this.indexMatcher.remove(name);
             delete this.secondaryIndexes[name];
         }
     }

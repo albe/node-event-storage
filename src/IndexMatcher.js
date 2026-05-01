@@ -1,4 +1,4 @@
-import { getPropAtPath } from './util.js';
+import { getPropertyAtPath } from './util.js';
 import { matches } from './metadataUtil.js';
 
 /**
@@ -80,11 +80,16 @@ class IndexMatcher {
 
     /**
      * Remove an index name from the lookup structures.
+     * The matcher is retrieved from the internal registry, so only the index name
+     * is required.
      *
      * @param {string} indexName
-     * @param {Matcher} matcher
      */
-    remove(indexName, matcher) {
+    remove(indexName) {
+        if (!this.matchers.has(indexName)) {
+            return;
+        }
+        const matcher = this.matchers.get(indexName);
         this.matchers.delete(indexName);
         if (typeof matcher === 'function') {
             this.functionMatchers.delete(indexName);
@@ -133,25 +138,27 @@ class IndexMatcher {
             return;
         }
 
-        const candidates = new Set();
-
         for (const propPath of this.properties) {
-            const docValue = getPropAtPath(document, propPath);
+            const docValue = getPropertyAtPath(document, propPath);
             if (docValue !== undefined && docValue !== null && typeof docValue !== 'object') {
-                const propMap = this.table.get(propPath);
-                if (propMap) {
-                    const indexSet = propMap.get(String(docValue));
-                    if (indexSet) {
-                        for (const name of indexSet) candidates.add(name);
+                const indexSet = this.table.get(propPath)?.get(String(docValue));
+                if (indexSet) {
+                    for (const indexName of indexSet) {
+                        if (matches(document, this.matchers.get(indexName))) {
+                            iterationHandler(indexName);
+                        }
                     }
                 }
             }
         }
 
-        for (const name of this.unclassifiedMatchers) candidates.add(name);
-        for (const name of this.functionMatchers) candidates.add(name);
+        for (const indexName of this.unclassifiedMatchers) {
+            if (matches(document, this.matchers.get(indexName))) {
+                iterationHandler(indexName);
+            }
+        }
 
-        for (const indexName of candidates) {
+        for (const indexName of this.functionMatchers) {
             if (matches(document, this.matchers.get(indexName))) {
                 iterationHandler(indexName);
             }
@@ -168,7 +175,7 @@ class IndexMatcher {
      */
     findDiscriminant(matcher) {
         for (const propPath of this.properties) {
-            const value = getPropAtPath(matcher, propPath);
+            const value = getPropertyAtPath(matcher, propPath);
             if (value !== undefined && value !== null && typeof value !== 'object') {
                 return { propPath, value: String(value) };
             }

@@ -76,23 +76,20 @@ class PartitionPool {
         const partition = this.registry[id];
 
         if (this.maxOpen > 0) {
-            if (!partition.isOpen()) {
-                if (this.handles.size >= this.maxOpen) {
-                    for (const [lruId] of this.handles) {
-                        this.handles.delete(lruId);
-                        const lruPartition = this.registry[lruId];
-                        if (lruPartition && lruPartition.isOpen()) {
-                            lruPartition.close();
-                            break;
-                        }
+            // Remove id first — this may already bring the handle count below the cap.
+            this.handles.delete(id);
+            if (this.handles.size >= this.maxOpen) {
+                for (const [lruId] of this.handles) {
+                    this.handles.delete(lruId);
+                    const lruPartition = this.registry[lruId];
+                    if (lruPartition && lruPartition.isOpen()) {
+                        lruPartition.close();
+                        break;
                     }
                 }
-                this.handles.set(id, true);
-            } else {
-                // Already open: refresh to the MRU end of the map.
-                this.handles.delete(id);
-                this.handles.set(id, true);
             }
+            // (Re-)add id at the MRU end of the map.
+            this.handles.set(id, true);
         }
 
         partition.open();

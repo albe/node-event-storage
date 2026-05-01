@@ -212,7 +212,7 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
  * @param {string} dotPath Dot-separated property path, e.g. `'payload.type'`.
  * @returns {*}
  */
-function getPropAtPath(obj, dotPath) {
+function getPropertyAtPath(obj, dotPath) {
     let current = obj;
     const parts = dotPath.split('.');
     for (const part of parts) {
@@ -233,5 +233,5 @@ export {
     ensureDirectory,
     scanForFiles,
     kWayMerge,
-    getPropAtPath
+    getPropertyAtPath
 };
