@@ -170,8 +170,8 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.forEachPartition(partition => partition.close());
-        // Partitions were closed directly (bypassing getPartition), so reset the LRU map.
-        this._openPartitionLru.clear();
+        // Partitions were closed directly (bypassing the pool), so reset the open-handle tracking.
+        this.partitions.clearOpenHandles();
     }
 
     /**
@@ -319,11 +319,11 @@ class WritableStorage extends ReadableStorage {
             const partitionShortName = partitionIdentifier;
             const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
             partitionIdentifier = WritablePartition.idFor(partitionName);
-            if (!this.partitions[partitionIdentifier]) {
+            if (!this.partitions.has(partitionIdentifier)) {
                 const partitionConfig = typeof this.partitionConfig.metadata === 'function'
                     ? { ...this.partitionConfig, metadata: this.partitionConfig.metadata(partitionShortName) }
                     : this.partitionConfig;
-                this.partitions[partitionIdentifier] = this.createPartition(partitionName, partitionConfig);
+                this.partitions.add(partitionIdentifier, this.createPartition(partitionName, partitionConfig));
                 this.emit('partition-created', partitionIdentifier);
             }
         }
@@ -403,7 +403,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.secondaryIndexes[name] = { index, matcher };
-        this._registerIndexMatcher(name, matcher);
+        this.indexMatcher.add(name, matcher);
         this.emit('index-created', name);
         return index;
     }
@@ -429,7 +429,7 @@ class WritableStorage extends ReadableStorage {
      */
     forEachDistinctPartitionOf(entries, iterationHandler) {
         const partitions = [];
-        const numPartitions = Object.keys(this.partitions).length;
+        const numPartitions = this.partitions.count;
         for (let entry of entries) {
             if (partitions.indexOf(entry.partition) >= 0) {
                 continue;

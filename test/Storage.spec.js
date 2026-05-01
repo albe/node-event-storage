@@ -1673,7 +1673,7 @@ describe('Storage', function() {
             storage.removeSecondaryIndex('orders');
             expect(storage.secondaryIndexes['orders']).to.be(undefined);
             // Lookup table for 'stream' should have been cleaned up
-            expect(storage._matcherIndex.get('stream')).to.be(undefined);
+            expect(storage.indexMatcher.table.get('stream')).to.be(undefined);
         });
 
         it('removeSecondaryIndex is a no-op for unknown index names', function() {
@@ -1699,7 +1699,7 @@ describe('Storage', function() {
             storage.write({ p: 2, foo: 3 });
 
             // After 3 writes the LRU pool held at most 2 simultaneous fds.
-            const openCount = Object.values(storage.partitions)
+            const openCount = Array.from(storage.partitions.values())
                 .filter(part => part.isOpen()).length;
             expect(openCount).to.be(2);
         });
@@ -1718,14 +1718,14 @@ describe('Storage', function() {
             // With maxOpenPartitions=1, reading p0 should reopen it (evicting p1 first)
             expect(storage.read(1)).to.eql({ p: 0, foo: 'a' });
             // After reading p0 the LRU pool should hold exactly 1 entry (p0)
-            expect(storage._openPartitionLru.size).to.be(1);
-            const openAfterP0 = Object.values(storage.partitions).filter(p => p.isOpen());
+            expect(storage.partitions.openCount).to.be(1);
+            const openAfterP0 = Array.from(storage.partitions.values()).filter(p => p.isOpen());
             expect(openAfterP0.length).to.be(1);
 
             expect(storage.read(2)).to.eql({ p: 1, foo: 'b' });
             // After reading p1, p1 is now MRU and only p1 should be open
-            expect(storage._openPartitionLru.size).to.be(1);
-            const openAfterP1 = Object.values(storage.partitions).filter(p => p.isOpen());
+            expect(storage.partitions.openCount).to.be(1);
+            const openAfterP1 = Array.from(storage.partitions.values()).filter(p => p.isOpen());
             expect(openAfterP1.length).to.be(1);
         });
 
@@ -1740,7 +1740,7 @@ describe('Storage', function() {
                 storage.write({ p: i, foo: i });
             }
 
-            const openCount = Object.values(storage.partitions)
+            const openCount = Array.from(storage.partitions.values())
                 .filter(part => part.isOpen()).length;
             expect(openCount).to.be(5);
         });
