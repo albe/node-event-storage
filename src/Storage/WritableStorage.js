@@ -323,6 +323,9 @@ class WritableStorage extends ReadableStorage {
                 const partitionConfig = typeof this.partitionConfig.metadata === 'function'
                     ? { ...this.partitionConfig, metadata: this.partitionConfig.metadata(partitionShortName) }
                     : this.partitionConfig;
+                if (partitionName.includes('/')) {
+                    ensureDirectory(path.join(this.dataDirectory, path.dirname(partitionName)));
+                }
                 this.partitions.add(partitionIdentifier, this.createPartition(partitionName, partitionConfig));
                 this.emit('partition-created', partitionIdentifier);
             }
