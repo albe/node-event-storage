@@ -491,10 +491,8 @@ class ReadableStorage extends events.EventEmitter {
     /**
      * Helper method to iterate over all secondary indexes.
      *
-     * When `matchDocument` is provided, `this.indexMatcher.getCandidates()` is called
-     * to obtain the candidate index set in O(1) via the discriminant lookup table.
-     * If the fast path is disabled (empty `matcherProperties`), `getCandidates()` returns
-     * `null` and the method falls back to a full O(N) scan with `matches()`.
+     * When `matchDocument` is provided, `this.indexMatcher.forEachMatch()` is used to
+     * efficiently find only the matching indexes via the discriminant lookup table.
      *
      * @protected
      * @param {function(ReadableIndex, string)} iterationHandler
@@ -514,26 +512,9 @@ class ReadableStorage extends events.EventEmitter {
             return;
         }
 
-        const candidates = this.indexMatcher.getCandidates(matchDocument);
-
-        if (candidates === null) {
-            // Fast path disabled: full O(N) scan with match check.
-            for (const indexName of Object.keys(this.secondaryIndexes)) {
-                if (matches(matchDocument, this.secondaryIndexes[indexName].matcher)) {
-                    iterationHandler(this.secondaryIndexes[indexName].index, indexName);
-                }
-            }
-            return;
-        }
-
-        // Fast path: only visit candidates, then confirm each with a full match check
-        // to handle multi-property matchers whose discriminant was only partially used.
-        for (const indexName of candidates) {
-            const entry = this.secondaryIndexes[indexName];
-            if (entry && matches(matchDocument, entry.matcher)) {
-                iterationHandler(entry.index, indexName);
-            }
-        }
+        this.indexMatcher.forEachMatch(matchDocument, indexName => {
+            iterationHandler(this.secondaryIndexes[indexName].index, indexName);
+        });
     }
 
     /**

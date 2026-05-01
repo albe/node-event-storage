@@ -1,4 +1,5 @@
 import { getPropAtPath } from './util.js';
+import { matches } from './metadataUtil.js';
 
 /**
  * @typedef {object|function(object):boolean} Matcher
@@ -15,8 +16,8 @@ import { getPropAtPath } from './util.js';
  * and object matchers whose discriminant properties all resolve to undefined/object
  * are kept in separate fallback sets and are always evaluated in full.
  *
- * When the discriminant property list is empty, `getCandidates()` returns `null`
- * to signal that the caller should fall back to a full O(N) scan.
+ * When the discriminant property list is empty, `forEachMatch()` falls back to a
+ * full O(N) scan over all registered indexes.
  */
 class IndexMatcher {
 
@@ -28,6 +29,8 @@ class IndexMatcher {
      */
     constructor(properties = []) {
         this.properties = properties;
+        /** Map<indexName, Matcher> — stores every registered matcher for full match verification. */
+        this.matchers = new Map();
         /**
          * Nested lookup table: Map<propPath, Map<discriminantValue, Set<indexName>>>.
          * Populated only for object matchers that contain at least one discriminant property.
@@ -49,6 +52,7 @@ class IndexMatcher {
      * @param {Matcher} matcher
      */
     add(indexName, matcher) {
+        this.matchers.set(indexName, matcher);
         if (typeof matcher === 'function') {
             this.functionMatchers.add(indexName);
             return;
@@ -81,6 +85,7 @@ class IndexMatcher {
      * @param {Matcher} matcher
      */
     remove(indexName, matcher) {
+        this.matchers.delete(indexName);
         if (typeof matcher === 'function') {
             this.functionMatchers.delete(indexName);
             return;
@@ -104,21 +109,28 @@ class IndexMatcher {
     }
 
     /**
-     * Return the set of candidate index names for the given document.
+     * Iterate over every registered index whose matcher matches `document`, calling
+     * `iterationHandler` with the index name for each match.
      *
-     * When `this.properties` is non-empty, performs an O(1) lookup for each
-     * configured property path and unions the resulting candidate sets, then
-     * adds all unclassified and function-matcher index names.
+     * When `this.properties` is non-empty, an O(1) discriminant lookup narrows the
+     * candidate set before the full `matches()` check is applied.  Each candidate's
+     * matcher is still verified with `matches()` to handle multi-property matchers
+     * where only the first property was used as the discriminant.
      *
-     * Returns `null` when `this.properties` is empty, signalling that the caller
-     * should fall back to iterating all registered secondary indexes.
+     * When `this.properties` is empty the method falls back to a full O(N) scan.
      *
      * @param {object} document
-     * @returns {Set<string>|null}
+     * @param {function(string): void} iterationHandler Called with the index name for each match.
      */
-    getCandidates(document) {
+    forEachMatch(document, iterationHandler) {
         if (this.properties.length === 0) {
-            return null;
+            // Fast path disabled: full O(N) scan.
+            for (const [indexName, matcher] of this.matchers) {
+                if (matches(document, matcher)) {
+                    iterationHandler(indexName);
+                }
+            }
+            return;
         }
 
         const candidates = new Set();
@@ -139,7 +151,11 @@ class IndexMatcher {
         for (const name of this.unclassifiedMatchers) candidates.add(name);
         for (const name of this.functionMatchers) candidates.add(name);
 
-        return candidates;
+        for (const indexName of candidates) {
+            if (matches(document, this.matchers.get(indexName))) {
+                iterationHandler(indexName);
+            }
+        }
     }
 
     /**
