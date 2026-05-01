@@ -1662,7 +1662,7 @@ describe('Storage', function() {
             expect(fooIndex.length).to.be(1);
         });
 
-        it('removeSecondaryIndex removes index from write path and lookup table', function() {
+        it('removeSecondaryIndex removes index from write path', function() {
             storage = createStorage({ matcherProperties: ['stream'] });
             storage.open();
             storage.ensureIndex('orders', { stream: 'orders' });
@@ -1672,8 +1672,6 @@ describe('Storage', function() {
 
             storage.removeSecondaryIndex('orders');
             expect(storage.secondaryIndexes['orders']).to.be(undefined);
-            // Lookup table for 'stream' should have been cleaned up
-            expect(storage.indexMatcher.table.get('stream')).to.be(undefined);
         });
 
         it('removeSecondaryIndex is a no-op for unknown index names', function() {

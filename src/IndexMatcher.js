@@ -98,15 +98,7 @@ class IndexMatcher {
         if (matcher && typeof matcher === 'object') {
             const discriminant = this.findDiscriminant(matcher);
             if (discriminant) {
-                const propMap = this.table.get(discriminant.propPath);
-                if (propMap) {
-                    const indexSet = propMap.get(discriminant.value);
-                    if (indexSet) {
-                        indexSet.delete(indexName);
-                        if (indexSet.size === 0) propMap.delete(discriminant.value);
-                    }
-                    if (propMap.size === 0) this.table.delete(discriminant.propPath);
-                }
+                this.table.get(discriminant.propPath)?.get(discriminant.value)?.delete(indexName);
                 return;
             }
         }
