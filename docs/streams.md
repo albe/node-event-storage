@@ -157,6 +157,8 @@ The result is not persisted and cannot be used with consumers. For frequently-ne
 
 ## Stream Categories
 
+### Flat category streams (`category-id`)
+
 Name your streams as `<category>-<identity>` (e.g. `user-123`, `user-456`) to take advantage of category-level queries:
 
 ```javascript
@@ -170,6 +172,134 @@ for (const event of allUsersStream) {
 ```
 
 If you already created a dedicated stream for the category (e.g. via `createStream`), that stream is returned directly.
+
+This layout stores every stream as a flat file in the data directory:
+
+```
+data/
+  eventstore.user-1
+  eventstore.user-2
+  eventstore.user-42
+  …
+streams/
+  eventstore.stream-user-1.index
+  eventstore.stream-user-2.index
+  eventstore.stream-user-42.index
+  …
+```
+
+This works well for small-to-medium numbers of entity instances. When the number of streams grows into the hundreds of thousands or millions (think users on a large platform), the flat layout can degrade directory-listing performance, because most operating systems slow down significantly when a single directory contains very large numbers of files.
+
+### Hierarchical category streams (`category/id`)
+
+For large-scale deployments, use a **slash-separated stream name** to organize streams into a directory hierarchy on disk:
+
+```javascript
+eventstore.commit('user/' + user.id, [new UserRegistered(user.id, user.email)]);
+```
+
+This maps to:
+
+```
+data/
+  eventstore.user/
+    1
+    2
+    42
+    …
+streams/
+  eventstore.stream-user/
+    1.index
+    2.index
+    42.index
+    …
+```
+
+Category queries work exactly the same way — just pass the prefix before the first `/`:
+
+```javascript
+const allUsersStream = eventstore.getEventStreamForCategory('user');
+```
+
+`getEventStreamForCategory` unions **both layouts**: it returns events from all streams whose name starts with `user-` *or* `user/`, in global insertion order.
+
+#### Hash-based sharding for very large entity populations
+
+When millions of entity instances exist (e.g., users on a large platform), even a single subdirectory can become oversized. A two-level hash prefix distributes streams across thousands of small, balanced directories:
+
+```javascript
+function streamName(entityType, id) {
+    // Two hex chars → 256 × 256 = 65 536 shards maximum
+    const hex = id.toString(16).padStart(8, '0');
+    const shard1 = hex.slice(0, 2);  // e.g. "a3"
+    const shard2 = hex.slice(2, 4);  // e.g. "f7"
+    return `${entityType}/${shard1}/${shard2}/${id}`;
+}
+
+// Stream for user 12345678 → "user/00/bc/614e" (actually padded hex of 12345678)
+eventstore.commit(streamName('user', user.id), [
+    new UserRegistered(user.id, user.email)
+]);
+```
+
+On disk this looks like:
+
+```
+data/
+  eventstore.user/
+    00/
+      00/
+        1
+        2
+      01/
+        257
+      …
+    a3/
+      f7/
+        12345678
+      …
+```
+
+To read a specific user's stream you compose the same name:
+
+```javascript
+const userStream = eventstore.getEventStream(streamName('user', user.id));
+```
+
+To query all events for a sub-category (e.g. all users whose ID hashes to shard `a3`) pass the shared prefix to `getEventStreamForCategory`:
+
+```javascript
+// All users in shard a3 (second-level fan-out still unified)
+const shardStream = eventstore.getEventStreamForCategory('user/a3');
+```
+
+To query **all** users regardless of shard, use the top-level category:
+
+```javascript
+// All user events, from every shard, in global insertion order
+const allUsersStream = eventstore.getEventStreamForCategory('user');
+```
+
+#### Choosing a hash depth
+
+| Estimated entity count | Recommended depth | Max streams per leaf dir |
+|------------------------|-------------------|--------------------------|
+| Up to ~100 k           | 1 level (`type/XX/id`) | ~390 |
+| Up to ~25 M            | 2 levels (`type/XX/YY/id`) | ~1 526 |
+| Up to ~6 B             | 3 levels (`type/XX/YY/ZZ/id`) | ~6 |
+
+Two hex characters per level gives 256 shards per level. Adjust by using more or fewer hex characters (e.g. 3 chars = 4 096 shards/level) to match the expected entity population.
+
+#### UUID-keyed entities
+
+For entities identified by UUID v4, the first characters already have high entropy and can serve directly as the shard prefix:
+
+```javascript
+function userStream(uuid) {
+    // "a3f7c2d1-…" → "user/a3/f7/a3f7c2d1-…"
+    return `user/${uuid.slice(0, 2)}/${uuid.slice(2, 4)}/${uuid}`;
+}
+```
 
 ## Event Metadata
 
