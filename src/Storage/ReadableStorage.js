@@ -205,8 +205,10 @@ class ReadableStorage extends events.EventEmitter {
 
         this.forEachSecondaryIndex(index => index.open());
 
-        this._opened = true;
-        this._emitReadyIfConditionsMet();
+        if (!this._opened) {
+            this._opened = true;
+            this._emitReadyIfConditionsMet();
+        }
         this.emit('opened');
         return true;
     }
