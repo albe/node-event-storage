@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 340" width="600" height="340">
+  <rect width="600" height="340" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="300" y="22" text-anchor="middle" font-size="13" font-family="sans-serif" font-weight="bold" fill="#111">Write &amp; Read Latency vs Partition Count</text>
+
+  <!-- Horizontal grid lines (y-axis: 0–0.5 ms, scale 480 px/ms, base y=280) -->
+  <!-- 0.0 → 280 | 0.1 → 232 | 0.2 → 184 | 0.3 → 136 | 0.4 → 88 | 0.5 → 40 -->
+  <line x1="60" y1="280" x2="580" y2="280" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="232" x2="580" y2="232" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="184" x2="580" y2="184" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="136" x2="580" y2="136" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="88"  x2="580" y2="88"  stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="60" y1="40"  x2="580" y2="40"  stroke="#e5e7eb" stroke-width="1"/>
+
+  <!-- Axes -->
+  <line x1="60" y1="40" x2="60"  y2="280" stroke="#9ca3af" stroke-width="1.5"/>
+  <line x1="60" y1="280" x2="580" y2="280" stroke="#9ca3af" stroke-width="1.5"/>
+
+  <!-- Y-axis labels -->
+  <text x="52" y="284" text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.0</text>
+  <text x="52" y="236" text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.1</text>
+  <text x="52" y="188" text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.2</text>
+  <text x="52" y="140" text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.3</text>
+  <text x="52" y="92"  text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.4</text>
+  <text x="52" y="44"  text-anchor="end" font-size="11" font-family="sans-serif" fill="#374151">0.5</text>
+
+  <!-- Y-axis unit label (rotated) -->
+  <text transform="rotate(-90) translate(-160,14)" font-size="12" font-family="sans-serif" text-anchor="middle" fill="#374151">ms / op</text>
+
+  <!-- X labels: partitions at x = 60, 190, 320, 450, 580 -->
+  <text x="60"  y="296" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">100</text>
+  <text x="190" y="296" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">1 000</text>
+  <text x="320" y="296" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">5 000</text>
+  <text x="450" y="296" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">10 000</text>
+  <text x="580" y="296" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">20 000</text>
+
+  <!-- X-axis label -->
+  <text x="320" y="320" text-anchor="middle" font-size="12" font-family="sans-serif" fill="#374151">Partitions (= Indexes)</text>
+
+  <!-- Write latency line (blue) -->
+  <!-- values: 0.076→243.5, 0.059→251.7, 0.087→238.2, 0.404→86.1, 0.352→111.0 -->
+  <polyline points="60,243.5 190,251.7 320,238.2 450,86.1 580,111.0"
+            fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="60"  cy="243.5" r="4.5" fill="#2563eb"/>
+  <circle cx="190" cy="251.7" r="4.5" fill="#2563eb"/>
+  <circle cx="320" cy="238.2" r="4.5" fill="#2563eb"/>
+  <circle cx="450" cy="86.1"  r="4.5" fill="#2563eb"/>
+  <circle cx="580" cy="111.0" r="4.5" fill="#2563eb"/>
+
+  <!-- Read latency line (green) -->
+  <!-- values: 0.061→250.7, 0.023→269.0, 0.024→268.5, 0.025→268.0, 0.031→265.1 -->
+  <polyline points="60,250.7 190,269.0 320,268.5 450,268.0 580,265.1"
+            fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="60"  cy="250.7" r="4.5" fill="#16a34a"/>
+  <circle cx="190" cy="269.0" r="4.5" fill="#16a34a"/>
+  <circle cx="320" cy="268.5" r="4.5" fill="#16a34a"/>
+  <circle cx="450" cy="268.0" r="4.5" fill="#16a34a"/>
+  <circle cx="580" cy="265.1" r="4.5" fill="#16a34a"/>
+
+  <!-- LRU annotation: bracket above 10000 and 20000 where pool eviction kicks in -->
+  <line x1="450" y1="72" x2="580" y2="72" stroke="#dc2626" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="515" y="67" text-anchor="middle" font-size="10" font-family="sans-serif" fill="#dc2626">LRU eviction active</text>
+
+  <!-- Legend -->
+  <rect x="330" y="42" width="140" height="52" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="340" y1="58" x2="360" y2="58" stroke="#2563eb" stroke-width="2.5"/>
+  <circle cx="350" cy="58" r="3.5" fill="#2563eb"/>
+  <text x="366" y="62" font-size="11" font-family="sans-serif" fill="#111">write ms/op</text>
+  <line x1="340" y1="76" x2="360" y2="76" stroke="#16a34a" stroke-width="2.5"/>
+  <circle cx="350" cy="76" r="3.5" fill="#16a34a"/>
+  <text x="366" y="80" font-size="11" font-family="sans-serif" fill="#111">read ms/op</text>
+</svg>
