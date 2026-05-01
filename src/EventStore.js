@@ -544,7 +544,7 @@ class EventStore extends events.EventEmitter {
         fs.renameSync(index.fileName, closedFileName);
 
         // Remove from secondary indexes so that new writes are no longer indexed into this stream
-        delete this.storage.secondaryIndexes[indexName];
+        this.storage.removeSecondaryIndex(indexName);
 
         // Reopen the renamed index for read access, outside the secondary indexes write path
         const closedIndexName = indexName + '.closed';
