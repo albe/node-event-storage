@@ -50,6 +50,8 @@ class JoinEventStream extends EventStream {
                 const from = streamIndex.find(this.minRevision, this.minRevision <= this.maxRevision);
                 const until = streamIndex.find(this.maxRevision, this.minRevision > this.maxRevision);
                 if (from === 0 || until === 0) {
+                    // find() returns 0 when the requested revision is outside the stream's range
+                    // (e.g. minRevision > all entries, or maxRevision < all entries).
                     return emptyIterator;
                 }
                 return eventStore.storage.readRange(from, until, streamIndex);
