@@ -374,7 +374,8 @@ class EventStore extends events.EventEmitter {
         if (!newEventsStream) return;
         let next;
         while ((next = newEventsStream.next()) !== false) {
-            if (condition.types.includes(next.payload?.type)) {
+            if (!next.payload) continue;
+            if (condition.types.includes(next.payload.type)) {
                 if (!condition.matcher || condition.matcher(next.payload, next.metadata)) {
                     throw new OptimisticConcurrencyError(
                         `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`

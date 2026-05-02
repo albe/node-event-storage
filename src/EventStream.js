@@ -257,7 +257,7 @@ class EventStream extends stream.Readable {
     filter(predicate) {
         if (!predicate) return this;
         const originalFetch = this.fetch.bind(this);
-        this.fetch = function() {
+        this.fetch = () => {
             const iter = originalFetch();
             return {
                 next() {
