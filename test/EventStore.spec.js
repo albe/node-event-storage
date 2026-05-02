@@ -1690,27 +1690,19 @@ describe('EventStore', function() {
     // -------------------------------------------------------------------------
     describe('DCB mode', function() {
 
-        it('partitions events by payload.type', function(done) {
+        it('uses the stream name as the physical partition', function(done) {
             eventstore = new EventStore({ storageDirectory, dcbMode: true });
-            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
-                // The physical partition file should be named after the type.
-                const partition = eventstore.storage.getPartition('OrderPlaced');
-                expect(partition).not.to.be(undefined);
-                done();
-            });
-        });
-
-        it('auto-creates a type stream on first commit', function(done) {
-            eventstore = new EventStore({ storageDirectory, dcbMode: true });
-            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+            // In DCB mode, users commit to type-named streams.
+            // The stream name becomes both the stream index and the physical partition.
+            eventstore.commit('OrderPlaced', [{ orderId: 1 }], () => {
                 expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
                 done();
             });
         });
 
-        it('query() works without a prior full-store scan', function(done) {
+        it('query() creates a type stream with reindex=false (no store scan)', function(done) {
             eventstore = new EventStore({ storageDirectory, dcbMode: true });
-            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+            eventstore.commit('OrderPlaced', [{ orderId: 1 }], () => {
                 let scanCount = 0;
                 const orig = eventstore.storage.forEachDocument.bind(eventstore.storage);
                 eventstore.storage.forEachDocument = (...args) => { scanCount++; return orig(...args); };
@@ -1725,8 +1717,9 @@ describe('EventStore', function() {
         it('commit with condition detects conflicts in DCB mode', function(done) {
             eventstore = new EventStore({ storageDirectory, dcbMode: true });
             const { condition } = eventstore.query(['OrderPlaced']);
-            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
-                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', id: 2 }], condition))
+            // Committing an OrderPlaced event after the query — must detect conflict.
+            eventstore.commit('OrderPlaced', [{ orderId: 1 }], () => {
+                expect(() => eventstore.commit('OrderShipped', [{ orderId: 2 }], condition))
                     .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
                 done();
             });
@@ -1735,8 +1728,9 @@ describe('EventStore', function() {
         it('commit with condition succeeds when no conflicting events appeared', function(done) {
             eventstore = new EventStore({ storageDirectory, dcbMode: true });
             const { condition } = eventstore.query(['OrderPlaced']);
-            eventstore.commit('order-1', [{ type: 'OrderShipped', id: 1 }], () => {
-                expect(() => eventstore.commit('order-2', [{ type: 'OrderPaid', id: 2 }], condition))
+            // Committing a different event type — must not conflict.
+            eventstore.commit('OrderShipped', [{ orderId: 1 }], () => {
+                expect(() => eventstore.commit('OrderPaid', [{ orderId: 2 }], condition))
                     .to.not.throwError();
                 done();
             });
@@ -1746,35 +1740,31 @@ describe('EventStore', function() {
             eventstore = new EventStore({ storageDirectory, dcbMode: true });
             const matcher = (payload) => payload.orderId === 'xyz';
             const { condition } = eventstore.query(['OrderPlaced'], matcher);
-            eventstore.commit('order-abc', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
-                expect(() => eventstore.commit('order-xyz', [{ type: 'OrderShipped', orderId: 'xyz' }], condition))
+            // Committing OrderPlaced for a DIFFERENT orderId — must not conflict.
+            eventstore.commit('OrderPlaced', [{ orderId: 'abc' }], () => {
+                expect(() => eventstore.commit('OrderShipped', [{ orderId: 'xyz' }], condition))
                     .to.not.throwError();
                 done();
             });
         });
 
-        it('can still commit to arbitrary (entity-based) stream names', function(done) {
+        it('can commit to multiple type streams independently', function(done) {
             eventstore = new EventStore({ storageDirectory, dcbMode: true });
-            eventstore.commit('order-42', [{ type: 'OrderPlaced', orderId: 42 }], () => {
-                expect(eventstore.getStreamVersion('order-42')).to.be(1);
-                done();
-            });
-        });
-
-        it('type stream and entity stream both capture the same event', function(done) {
-            eventstore = new EventStore({ storageDirectory, dcbMode: true });
-            eventstore.commit('order-42', [{ type: 'OrderPlaced', orderId: 42 }], () => {
-                expect(eventstore.getStreamVersion('order-42')).to.be(1);
-                expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
-                done();
+            eventstore.commit('OrderPlaced', [{ orderId: 42 }], () => {
+                eventstore.commit('OrderShipped', [{ orderId: 42 }], () => {
+                    expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                    expect(eventstore.getStreamVersion('OrderShipped')).to.be(1);
+                    done();
+                });
             });
         });
 
         it('the read stream from query() returns events in insertion order', function(done) {
             eventstore = new EventStore({ storageDirectory, dcbMode: true });
-            eventstore.commit('s', [{ type: 'A', n: 1 }], () => {
-                eventstore.commit('s', [{ type: 'B', n: 2 }], () => {
-                    eventstore.commit('s', [{ type: 'A', n: 3 }], () => {
+            // Commit to type-named streams (DCB convention: stream name = event type).
+            eventstore.commit('A', [{ n: 1 }], () => {
+                eventstore.commit('B', [{ n: 2 }], () => {
+                    eventstore.commit('A', [{ n: 3 }], () => {
                         const { stream } = eventstore.query(['A', 'B']);
                         const payloads = stream.events;
                         expect(payloads.map(e => e.n)).to.eql([1, 2, 3]);
@@ -1786,8 +1776,8 @@ describe('EventStore', function() {
 
         it('query() stream is pre-filtered by the matcher in DCB mode', function(done) {
             eventstore = new EventStore({ storageDirectory, dcbMode: true });
-            eventstore.commit('order-abc', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
-                eventstore.commit('order-xyz', [{ type: 'OrderPlaced', orderId: 'xyz' }], () => {
+            eventstore.commit('OrderPlaced', [{ orderId: 'abc' }], () => {
+                eventstore.commit('OrderPlaced', [{ orderId: 'xyz' }], () => {
                     const { stream } = eventstore.query(['OrderPlaced'], (payload) => payload.orderId === 'xyz');
                     expect(stream.events.length).to.be(1);
                     expect(stream.events[0].orderId).to.be('xyz');

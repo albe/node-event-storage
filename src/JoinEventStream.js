@@ -24,9 +24,11 @@ class JoinEventStream extends EventStream {
      * @param {EventStore} eventStore The event store to get the stream from.
      * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {function(object, object): boolean|null} [predicate] An optional filter function
+     *   `(payload, metadata) => boolean`.  Only events for which this returns truthy are yielded.
      */
-    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1) {
-        super(name, eventStore, minRevision, maxRevision);
+    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {
+        super(name, eventStore, minRevision, maxRevision, predicate);
         if (!(streams instanceof Array) || streams.length === 0) {
             throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
         }
@@ -42,6 +44,9 @@ class JoinEventStream extends EventStream {
                     return { next() { return { done: true }; } };
                 }
                 const streamIndex = eventStore.streams[streamName].index;
+                if (streamIndex.length === 0) {
+                    return { next() { return { done: true }; } };
+                }
                 const from = streamIndex.find(this.minRevision, this.minRevision <= this.maxRevision);
                 const until = streamIndex.find(this.maxRevision, this.minRevision > this.maxRevision);
                 return eventStore.storage.readRange(from, until, streamIndex);
@@ -78,25 +83,29 @@ class JoinEventStream extends EventStream {
         if (!this._iterator) {
             this._iterator = this.fetch();
         }
-        let nextIndex = -1;
-        this._next.forEach((value, index) => {
-            if (typeof value === 'undefined') {
-                value = this._next[index] = this.getValue(index);
-            }
-            if (value === false) {
-                return;
-            }
-            if (nextIndex === -1 || this.follows(this._next[nextIndex].metadata.commitId, value.metadata.commitId)) {
-                nextIndex = index;
-            }
-        });
+        while (true) {
+            let nextIndex = -1;
+            this._next.forEach((value, index) => {
+                if (typeof value === 'undefined') {
+                    value = this._next[index] = this.getValue(index);
+                }
+                if (value === false) {
+                    return;
+                }
+                if (nextIndex === -1 || this.follows(this._next[nextIndex].metadata.commitId, value.metadata.commitId)) {
+                    nextIndex = index;
+                }
+            });
 
-        if (nextIndex === -1) {
-            return false;
+            if (nextIndex === -1) {
+                return false;
+            }
+            const next = this._next[nextIndex];
+            this._next[nextIndex] = undefined;
+            if (!this.predicate || this.predicate(next.payload, next.metadata)) {
+                return next;
+            }
         }
-        const next = this._next[nextIndex];
-        this._next[nextIndex] = undefined;
-        return next;
     }
 
 }

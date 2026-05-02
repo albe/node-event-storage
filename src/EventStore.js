@@ -76,9 +76,7 @@ class EventStore extends events.EventEmitter {
         let defaults = {
             dataDirectory: this.storageDirectory,
             indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
-            partitioner: this.dcbMode
-                ? (event) => event.payload?.type || ''
-                : (event) => event.stream,
+            partitioner: (event) => event.stream,
             readOnly: config.readOnly || false
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
@@ -358,29 +356,33 @@ class EventStore extends events.EventEmitter {
 
     /**
      * Check a {@link Condition} against the current state of the store.
-     * Scans all events appended after `condition.version` and throws an
-     * {@link OptimisticConcurrencyError} when any of them are of a listed type and
-     * (when a matcher is provided) also satisfy `condition.matcher(payload, metadata)`.
+     * Iterates a join stream over all condition type streams, skipping events that existed at the
+     * time the condition was obtained, and throws an {@link OptimisticConcurrencyError} when a new
+     * event of a listed type satisfies `condition.matcher(payload, metadata)` (or any such event
+     * when no matcher is provided).
      *
-     * @private
      * @param {Condition} condition
      * @throws {OptimisticConcurrencyError}
      */
-    _checkCondition(condition) {
-        if (this.storage.length <= condition.version) {
-            return; // No new events since the condition was obtained.
-        }
-        const newEventsStream = this.getEventStream('_all', condition.version + 1);
-        if (!newEventsStream) return;
+    checkCondition(condition) {
+        const existingTypes = condition.types.filter(t => t in this.streams);
+        if (existingTypes.length === 0) return;
+
+        // Build a join over all relevant type streams, pre-filtered to events added
+        // after the condition was captured (commitId >= condition.version).
+        const stream = this.fromStreams(
+            '_check_' + condition.types.join('_'),
+            existingTypes,
+            1, -1,
+            (payload, metadata) => metadata.commitId >= condition.version
+        );
+
         let next;
-        while ((next = newEventsStream.next()) !== false) {
-            if (!next.payload) continue;
-            if (condition.types.includes(next.payload.type)) {
-                if (!condition.matcher || condition.matcher(next.payload, next.metadata)) {
-                    throw new OptimisticConcurrencyError(
-                        `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
-                    );
-                }
+        while ((next = stream.next()) !== false) {
+            if (!condition.matcher || condition.matcher(next.payload, next.metadata)) {
+                throw new OptimisticConcurrencyError(
+                    `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
+                );
             }
         }
     }
@@ -407,19 +409,9 @@ class EventStore extends events.EventEmitter {
 
         ({ events, expectedVersion, metadata, callback } = EventStore.fixArgumentTypes(events, expectedVersion, metadata, callback));
 
-        // In DCB mode, ensure a lightweight type-stream index exists for every event type in this commit.
-        if (this.dcbMode) {
-            for (const event of events) {
-                const type = event?.type;
-                if (type && !(type in this.streams)) {
-                    this.createEventStream(type, { payload: { type } }, false);
-                }
-            }
-        }
-
         // Perform DCB-style concurrency check when a Condition is provided.
         if (expectedVersion instanceof Condition) {
-            this._checkCondition(expectedVersion);
+            this.checkCondition(expectedVersion);
             expectedVersion = ExpectedVersion.Any;
         }
 
@@ -486,10 +478,13 @@ class EventStore extends events.EventEmitter {
      *
      * **Stream availability**
      * Per-type stream indexes are created automatically on first use:
-     * - In **DCB mode** the index starts empty (`reindex=false`) — correct because every event has
-     *   already been routed to the right type partition since the store was created in DCB mode.
-     * - In **standard mode** the index is populated by scanning all existing documents (`reindex=true`).
-     *   This one-time scan can be slow on a large store; subsequent calls are O(1).
+     * - In **DCB mode** events are committed to type-named streams, so the type index matches by
+     *   stream name (`reindex=false`). For a store created in DCB mode from day one, no historical
+     *   scan is needed.
+     * - In **standard mode** events are committed to entity streams and contain the type in their
+     *   payload, so the index matches by `payload.type` and is populated by scanning all existing
+     *   documents (`reindex=true`). This one-time scan can be slow on a large store; subsequent
+     *   calls are O(1).
      *
      * @api
      * @param {string[]} types A non-empty array of event-type names to query.
@@ -512,24 +507,18 @@ class EventStore extends events.EventEmitter {
         for (const type of types) {
             if (!(type in this.streams)) {
                 assert(!(this.storage instanceof ReadOnlyStorage), `The storage was opened in read-only mode and the type stream "${type}" does not exist yet.`);
-                // In DCB mode the type partition only holds events written while DCB mode was active,
-                // so reindexing is not needed (and would produce wrong results for older data).
+                // In DCB mode events are committed to type-named streams, so {stream:type} is
+                // the correct matcher and no reindexing is needed for a store created in DCB mode.
+                // In standard mode events are committed to entity streams, so scan by payload.type.
+                const matcherObj = this.dcbMode ? { stream: type } : { payload: { type } };
                 const reindex = !this.dcbMode;
-                this.createEventStream(type, { payload: { type } }, reindex);
+                this.createEventStream(type, matcherObj, reindex);
             }
         }
 
         const version = this.storage.length;
         const condition = new Condition(types, version, matcher);
-
-        let stream = types.length === 1
-            ? this.getEventStream(types[0])
-            : this.fromStreams('_query_' + types.join('_'), types);
-
-        if (matcher) {
-            stream = stream.filter(matcher);
-        }
-
+        const stream = this.fromStreams('_query_' + types.join('_'), types, 1, -1, matcher);
         return { stream, condition };
     }
 
@@ -569,16 +558,18 @@ class EventStore extends events.EventEmitter {
      * @param {Array<string>} streamNames An array of the stream names to join.
      * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {function(object, object): boolean|null} [predicate] An optional filter predicate
+     *   `(payload, metadata) => boolean`. Only events for which this returns truthy are yielded.
      * @returns {EventStream} The joined event stream.
      * @throws {Error} if any of the streams doesn't exist.
      */
-    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1) {
+    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null) {
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
         for (let stream of streamNames) {
             assert(stream in this.streams, `Stream "${stream}" does not exist.`);
         }
-        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision);
+        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate);
     }
 
     /**

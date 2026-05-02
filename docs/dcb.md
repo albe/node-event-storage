@@ -47,13 +47,11 @@ const store = new EventStore('my-store', {
 
 In DCB mode:
 
-1. **Events are physically partitioned by `payload.type`** instead of by stream name.  Every distinct event type is stored in its own file, making type-scoped reads highly sequential.
+1. **The stream name is the event type**.  Users commit events to type-named streams (e.g. `'OrderPlaced'`, `'OrderShipped'`) rather than entity-scoped streams.  This keeps events of each type in their own partition file.
 
-2. **A lightweight type-stream index is automatically created** for each new event type the first time it appears.  This index is populated with `reindex=false`, meaning it tracks only events written while DCB mode is active (see the [caveats](#important-caveats) section).
+2. **Type-stream indexes are created without a historical scan** (`reindex=false`).  For a store created in DCB mode from day one this is correct: every event has always been written to its type stream, so no backfill is needed.
 
-3. **`query()` requires no store scan** because the type indexes are always up to date.
-
-4. **Commits to arbitrary entity-based stream names still work** — the type stream and the entity stream are maintained concurrently as independent secondary indexes.
+3. **`query()` requires no store scan** because the type streams are always up to date.
 
 ---
 
@@ -89,7 +87,7 @@ Because `stream` is already filtered by both the type list and the matcher, you 
 
 ```javascript
 try {
-    store.commit('order-42', newEvents, condition, () => {
+    store.commit('OrderShipped', [{ orderId: 'order-42', ... }], condition, () => {
         console.log('Committed successfully');
     });
 } catch (e) {
@@ -99,16 +97,13 @@ try {
 }
 ```
 
-The stream name passed to `commit()` can be:
-
-- **An event type** (`'OrderPlaced'`): works naturally in DCB mode since each type is already its own stream.
-- **An entity-based name** (`'order-42'`): still works — the entity stream index is maintained alongside the type indexes.
+The stream name passed to `commit()` in DCB mode should be the event type name (e.g. `'OrderShipped'`).
 
 ---
 
 ## Conflict Semantics
 
-The conflict check at commit time scans all events appended **after** the condition was obtained and evaluates each:
+The conflict check at commit time uses a join stream over the condition's type streams, checking only events appended **after** the condition was obtained:
 
 | Scenario | Result |
 |----------|--------|
@@ -151,8 +146,8 @@ store.on('ready', () => {
         }
 
         // Commit — the condition ensures no concurrent registration with the same email slips through
-        store.commit('customer-' + command.customerId, [
-            { type: 'CustomerRegistered', customerId: command.customerId, email: command.email }
+        store.commit('CustomerRegistered', [
+            { customerId: command.customerId, email: command.email }
         ], condition);
     }
 
@@ -168,14 +163,13 @@ store.on('ready', () => {
 
 | Feature | Standard mode | DCB mode |
 |---------|---------------|----------|
-| Physical partitioning | By stream name | By `payload.type` |
+| Stream naming convention | Entity streams (e.g. `order-42`) | Type-named streams (e.g. `OrderPlaced`) |
+| Type stream matcher | `{ payload: { type } }` (scans all streams) | `{ stream: type }` (matches stream name) |
 | Type stream creation | `reindex=true` on first use (one-time scan) | `reindex=false` (instant) |
 | `query()` first call | May scan existing events | O(1) always |
 | `query()` subsequent calls | O(1) | O(1) |
-| Entity-based stream names | Default | Also supported |
-| Type-based stream names | Manual | Automatic |
 
-In **standard mode** the first call to `query()` for a given event type creates a secondary index by scanning all existing events (`reindex=true`).  This is a one-time cost proportional to the store size; all subsequent calls are O(1).  If your store is large and you want to avoid the initial scan, switch to DCB mode.
+In **standard mode** the first call to `query()` for a given event type creates a secondary index by scanning all existing events (`reindex=true`).  This is a one-time cost proportional to the store size; all subsequent calls are O(1).
 
 ---
 
@@ -183,7 +177,7 @@ In **standard mode** the first call to `query()` for a given event type creates 
 
 ### DCB mode is for new stores
 
-Type indexes in DCB mode are created with `reindex=false`.  This means they only track events written *after* the index was first created.  If you open a pre-existing, stream-partitioned store in DCB mode, the type indexes will be incomplete and the condition will not reflect the full history.
+Type indexes in DCB mode are created with `reindex=false`.  This means they only track events written *after* the index was first created.  If you open a pre-existing store in DCB mode, the type indexes will be incomplete and the condition will not reflect the full history.
 
 **Always create a store with `dcbMode: true` from the beginning** if you intend to use DCB mode.
 
