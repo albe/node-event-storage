@@ -1,6 +1,9 @@
 import EventStream from './EventStream.js';
 import { wrapAndCheck } from './util.js';
 
+/** Reusable sentinel used for missing or empty per-stream iterators. */
+const emptyIterator = Object.freeze({ next() { return { done: true }; } });
+
 /**
  * Calculate the actual version number from a possibly relative (negative) version number.
  *
@@ -40,12 +43,9 @@ class JoinEventStream extends EventStream {
         this.fetch = function() {
             this._next = new Array(streams.length).fill(undefined);
             return streams.map(streamName => {
-                if (!eventStore.streams[streamName]) {
-                    return { next() { return { done: true }; } };
-                }
-                const streamIndex = eventStore.streams[streamName].index;
-                if (streamIndex.length === 0) {
-                    return { next() { return { done: true }; } };
+                const streamIndex = eventStore.streams[streamName]?.index;
+                if (!streamIndex || streamIndex.length === 0) {
+                    return emptyIterator;
                 }
                 const from = streamIndex.find(this.minRevision, this.minRevision <= this.maxRevision);
                 const until = streamIndex.find(this.maxRevision, this.minRevision > this.maxRevision);
