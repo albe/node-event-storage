@@ -356,25 +356,27 @@ class EventStore extends events.EventEmitter {
 
     /**
      * Check a {@link Condition} against the current state of the store.
-     * Iterates a join stream over all condition type streams, skipping events that existed at the
-     * time the condition was obtained, and throws an {@link OptimisticConcurrencyError} when a new
-     * event of a listed type satisfies `condition.matcher(payload, metadata)` (or any such event
-     * when no matcher is provided).
+     * Iterates a join stream over all condition type streams starting from
+     * `condition.version` (the global position captured at query time), and throws an
+     * {@link OptimisticConcurrencyError} when a new event of a listed type satisfies
+     * `condition.matcher(payload, metadata)` (or any such event when no matcher is provided).
      *
      * @param {Condition} condition
      * @throws {OptimisticConcurrencyError}
      */
     checkCondition(condition) {
+        if (this.storage.length <= condition.version) return; // no new events since condition was obtained
+
         const existingTypes = condition.types.filter(t => t in this.streams);
         if (existingTypes.length === 0) return;
 
-        // Build a join over all relevant type streams, pre-filtered to events added
-        // after the condition was captured (commitId >= condition.version).
+        // Use condition.version + 1 as the lower bound — events at or before condition.version
+        // existed at query time; only events appended after that position can be conflicts.
+        // The stream index seeks directly to that global sequence number position.
         const stream = this.fromStreams(
             '_check_' + condition.types.join('_'),
             existingTypes,
-            1, -1,
-            (payload, metadata) => metadata.commitId >= condition.version
+            condition.version + 1
         );
 
         let next;

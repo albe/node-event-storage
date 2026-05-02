@@ -49,6 +49,9 @@ class JoinEventStream extends EventStream {
                 }
                 const from = streamIndex.find(this.minRevision, this.minRevision <= this.maxRevision);
                 const until = streamIndex.find(this.maxRevision, this.minRevision > this.maxRevision);
+                if (from === 0 || until === 0) {
+                    return emptyIterator;
+                }
                 return eventStore.storage.readRange(from, until, streamIndex);
             });
         }
