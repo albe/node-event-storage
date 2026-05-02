@@ -7,7 +7,6 @@ import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from '
 import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert, scanForFiles } from './util.js';
-import { matches } from './metadataUtil.js';
 
 const ExpectedVersion = {
     Any: -1,
@@ -17,27 +16,26 @@ const ExpectedVersion = {
 class OptimisticConcurrencyError extends Error {}
 
 /**
- * A consistency token that captures the versions of a set of event-type streams at a point in time.
- * It is obtained from {@link EventStore#getConsistencyToken} and passed as the `expectedVersion`
- * argument to {@link EventStore#commit} to implement DCB-style (Dynamic Consistency Boundary) optimistic
- * concurrency: the commit only fails if events that match the original query actually appeared since the
- * token was created.
+ * An accept condition that captures the global event-log position at the time a {@link EventStore#query}
+ * call was made.  Pass it as the `expectedVersion` argument to {@link EventStore#commit} to enforce
+ * DCB-style (Dynamic Consistency Boundary) optimistic concurrency: the commit is rejected only when
+ * one or more events that match the original query (types + optional matcher) have been appended to
+ * the store between the `query` call and the `commit` call.
  *
- * @property {string[]} types     The event types whose streams were snapshotted.
- * @property {Object.<string,number>} versions  A map from each event type to the stream length at snapshot time.
- * @property {Matcher|null} matcher An optional additional matcher used to qualify the conflict check.
- *   A new event of a listed type only causes a conflict when this matcher also matches it.
- *   When `null`, any new event of a listed type causes a conflict.
+ * @property {string[]} types   The event types included in the query.
+ * @property {number}   version The global store length (total event count) at the time the query was made.
+ * @property {function(object, object): boolean|null} matcher An optional function `(payload, metadata) => boolean`
+ *   used to narrow the conflict check.  When `null`, any new event of a listed type causes a conflict.
  */
-class ConsistencyToken {
+class Condition {
     /**
      * @param {string[]} types
-     * @param {Object.<string,number>} versions
-     * @param {object|function|null} [matcher]
+     * @param {number}   version
+     * @param {function(object, object): boolean|null} [matcher]
      */
-    constructor(types, versions, matcher = null) {
+    constructor(types, version, matcher = null) {
         this.types = types;
-        this.versions = versions;
+        this.version = version;
         this.matcher = matcher;
     }
 }
@@ -58,8 +56,8 @@ class EventStore extends events.EventEmitter {
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
      * @param {boolean} [config.dcbMode] Enable Dynamic Consistency Boundary (DCB) mode. In this mode events are
      *   physically partitioned by their `payload.type` value and a lightweight stream index is automatically
-     *   maintained for every distinct event type encountered. This makes {@link EventStore#getConsistencyToken}
-     *   and token-based commits efficient without requiring a full store scan.
+     *   maintained for every distinct event type encountered. This makes {@link EventStore#query}
+     *   and condition-based commits efficient without requiring a full store scan.
      * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
@@ -334,16 +332,16 @@ class EventStore extends events.EventEmitter {
      *
      * @private
      * @param {Array<object>|object} events
-     * @param {number|ConsistencyToken} [expectedVersion]
+     * @param {number|Condition} [expectedVersion]
      * @param {object|function} [metadata]
      * @param {function} [callback]
-     * @returns {{events: Array<object>, metadata: object, callback: function, expectedVersion: number|ConsistencyToken}}
+     * @returns {{events: Array<object>, metadata: object, callback: function, expectedVersion: number|Condition}}
      */
     static fixArgumentTypes(events, expectedVersion, metadata, callback) {
         if (!(events instanceof Array)) {
             events = [events];
         }
-        if (typeof expectedVersion !== 'number' && !(expectedVersion instanceof ConsistencyToken)) {
+        if (typeof expectedVersion !== 'number' && !(expectedVersion instanceof Condition)) {
             callback = metadata;
             metadata = expectedVersion;
             expectedVersion = ExpectedVersion.Any;
@@ -359,39 +357,28 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Verify a {@link ConsistencyToken} against the current state of the store.
-     * Throws an {@link OptimisticConcurrencyError} when one or more new events have appeared in
-     * any of the token's event-type streams since the token was obtained and those events also
-     * satisfy the token's optional matcher.
+     * Check a {@link Condition} against the current state of the store.
+     * Scans all events appended after `condition.version` and throws an
+     * {@link OptimisticConcurrencyError} when any of them are of a listed type and
+     * (when a matcher is provided) also satisfy `condition.matcher(payload, metadata)`.
      *
      * @private
-     * @param {ConsistencyToken} token
+     * @param {Condition} condition
      * @throws {OptimisticConcurrencyError}
      */
-    _checkConsistencyToken(token) {
-        for (const type of token.types) {
-            const currentVersion = this.streams[type]?.index.length ?? 0;
-            const tokenVersion = token.versions[type] ?? 0;
-            if (currentVersion === tokenVersion) {
-                continue;
-            }
-            // New events of this type appeared since the token was captured.
-            if (!token.matcher) {
-                // No additional filter – any new event of the type is a conflict.
-                throw new OptimisticConcurrencyError(
-                    `Optimistic Concurrency error. New events of type "${type}" were committed since the consistency token was obtained.`
-                );
-            }
-            // Apply the additional matcher: conflict only if a new event matches it.
-            const typeStream = this.getEventStream(type, tokenVersion + 1, currentVersion);
-            if (typeStream) {
-                let stored;
-                while ((stored = typeStream.next()) !== false) {
-                    if (matches(stored, token.matcher)) {
-                        throw new OptimisticConcurrencyError(
-                            `Optimistic Concurrency error. A conflicting event of type "${type}" was committed since the consistency token was obtained.`
-                        );
-                    }
+    _checkCondition(condition) {
+        if (this.storage.length <= condition.version) {
+            return; // No new events since the condition was obtained.
+        }
+        const newEventsStream = this.getEventStream('_all', condition.version + 1);
+        if (!newEventsStream) return;
+        let next;
+        while ((next = newEventsStream.next()) !== false) {
+            if (condition.types.includes(next.payload?.type)) {
+                if (!condition.matcher || condition.matcher(next.payload, next.metadata)) {
+                    throw new OptimisticConcurrencyError(
+                        `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
+                    );
                 }
             }
         }
@@ -405,12 +392,12 @@ class EventStore extends events.EventEmitter {
      * @api
      * @param {string} streamName The name of the stream to commit the events to.
      * @param {Array<object>|object} events The events to commit or a single event.
-     * @param {number|ConsistencyToken} [expectedVersion] One of the `ExpectedVersion` constants, a positive
-     *   stream version number, or a {@link ConsistencyToken} obtained from {@link EventStore#getConsistencyToken}.
+     * @param {number|Condition} [expectedVersion] One of the `ExpectedVersion` constants, a positive
+     *   stream version number, or a {@link Condition} obtained from {@link EventStore#query}.
      * @param {object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
      * @param {function} [callback] A function that will be executed when all events have been committed.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version, or if a
-     *   {@link ConsistencyToken} was provided and conflicting events have been committed since it was obtained.
+     *   {@link Condition} was provided and conflicting events have been committed since it was obtained.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
@@ -429,9 +416,9 @@ class EventStore extends events.EventEmitter {
             }
         }
 
-        // Perform DCB-style concurrency check when a ConsistencyToken is provided.
-        if (expectedVersion instanceof ConsistencyToken) {
-            this._checkConsistencyToken(expectedVersion);
+        // Perform DCB-style concurrency check when a Condition is provided.
+        if (expectedVersion instanceof Condition) {
+            this._checkCondition(expectedVersion);
             expectedVersion = ExpectedVersion.Any;
         }
 
@@ -487,39 +474,40 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Obtain a {@link ConsistencyToken} that snapshots the current length of each of the given event-type
-     * streams.  The token can later be passed as the `expectedVersion` argument of {@link EventStore#commit}
-     * to implement DCB-style (Dynamic Consistency Boundary) optimistic concurrency.
+     * Query the event store for events matching a set of event types and an optional filter function.
+     * Returns a pre-filtered event stream and a {@link Condition} that can be passed to
+     * {@link EventStore#commit} to enforce DCB-style optimistic concurrency.
      *
      * **What a conflict means**
-     * A conflict is detected when at least one new event has appeared in one of the named type streams
-     * *and* that event also satisfies the optional `matcher` (if provided).  When no `matcher` is given
-     * any new event of a listed type is treated as a conflict.
+     * A conflict occurs when at least one event appended between the `query` call and the `commit` call
+     * belongs to one of the listed types and (when `matcher` is provided) also satisfies
+     * `matcher(payload, metadata)`.  Events written before the `query` call are never treated as conflicts.
      *
      * **Stream availability**
-     * A per-type stream index is created automatically the first time a type is requested:
-     * - In **DCB mode** the index starts empty (`reindex=false`).  This is correct when the store was
-     *   created in DCB mode from the beginning, because every event has been routed to the right type
-     *   partition.  Do not use DCB mode with a pre-existing store that was not created in DCB mode.
+     * Per-type stream indexes are created automatically on first use:
+     * - In **DCB mode** the index starts empty (`reindex=false`) — correct because every event has
+     *   already been routed to the right type partition since the store was created in DCB mode.
      * - In **standard mode** the index is populated by scanning all existing documents (`reindex=true`).
-     *   This one-time scan can be slow on a large store, but subsequent calls are O(1).
+     *   This one-time scan can be slow on a large store; subsequent calls are O(1).
      *
      * @api
-     * @param {string[]} types A non-empty array of event-type names to include in the token.
-     * @param {object|function|null} [matcher] An optional additional matcher.  A new event of a listed
-     *   type is only treated as a conflict when this matcher also matches the stored event document
-     *   (i.e. the full `{ stream, payload, metadata }` object).
-     * @returns {{ token: ConsistencyToken, stream: EventStream }} An object with:
-     *   - `token` — the {@link ConsistencyToken} to pass to {@link EventStore#commit}.
-     *   - `stream` — a read-only event stream covering all events of the given types, ordered by global
+     * @param {string[]} types A non-empty array of event-type names to query.
+     * @param {function(object, object): boolean|null} [matcher] An optional filter function
+     *   `(payload, metadata) => boolean`.  Only events for which this function returns truthy are
+     *   included in the returned stream.  The same function is used during the conflict check at commit
+     *   time: a new event of a listed type is only treated as a conflict when the matcher also returns
+     *   truthy for it.  When omitted, all events of the listed types are included and any new event of
+     *   those types will be a conflict.
+     * @returns {{ condition: Condition, stream: EventStream }} An object with:
+     *   - `condition` — the {@link Condition} to pass to {@link EventStore#commit}.
+     *   - `stream` — a read-only event stream containing all matching events ordered by global
      *     sequence number.  Iterate it to build the transaction context before calling `commit`.
      * @throws {Error} if `types` is not a non-empty array.
      * @throws {Error} if the storage was opened in read-only mode and a type stream does not exist yet.
      */
-    getConsistencyToken(types, matcher = null) {
-        assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for getConsistencyToken.');
+    query(types, matcher = null) {
+        assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for query.');
 
-        const versions = {};
         for (const type of types) {
             if (!(type in this.streams)) {
                 assert(!(this.storage instanceof ReadOnlyStorage), `The storage was opened in read-only mode and the type stream "${type}" does not exist yet.`);
@@ -528,16 +516,20 @@ class EventStore extends events.EventEmitter {
                 const reindex = !this.dcbMode;
                 this.createEventStream(type, { payload: { type } }, reindex);
             }
-            versions[type] = this.streams[type].index.length;
         }
 
-        const token = new ConsistencyToken(types, versions, matcher);
+        const version = this.storage.length;
+        const condition = new Condition(types, version, matcher);
 
-        const stream = types.length === 1
+        let stream = types.length === 1
             ? this.getEventStream(types[0])
-            : this.fromStreams('_dcb_' + types.join('_'), types);
+            : this.fromStreams('_query_' + types.join('_'), types);
 
-        return { token, stream };
+        if (matcher) {
+            stream = stream.filter(matcher);
+        }
+
+        return { stream, condition };
     }
 
     /**
@@ -741,4 +733,4 @@ EventStore.Storage = Storage;
 EventStore.Index = Index;
 
 export default EventStore;
-export { ExpectedVersion, OptimisticConcurrencyError, ConsistencyToken, LOCK_THROW, LOCK_RECLAIM };
+export { ExpectedVersion, OptimisticConcurrencyError, Condition, LOCK_THROW, LOCK_RECLAIM };

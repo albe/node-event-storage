@@ -245,6 +245,37 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * Apply a filter predicate to this stream.  Only events for which `predicate(payload, metadata)`
+     * returns a truthy value will be yielded.  The stream itself is modified in-place (the filtered
+     * `fetch` replaces the previous one) and returned for chaining.
+     *
+     * @api
+     * @param {function(object, object): boolean} predicate A function receiving `(payload, metadata)`.
+     *   Events for which the predicate returns falsy are skipped.
+     * @returns {EventStream} `this`
+     */
+    filter(predicate) {
+        if (!predicate) return this;
+        const originalFetch = this.fetch.bind(this);
+        this.fetch = function() {
+            const iter = originalFetch();
+            return {
+                next() {
+                    while (true) {
+                        const result = iter.next();
+                        if (result.done) return result;
+                        if (predicate(result.value.payload, result.value.metadata)) {
+                            return result;
+                        }
+                    }
+                }
+            };
+        };
+        this._iterator = null;
+        return this;
+    }
+
+    /**
      * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {

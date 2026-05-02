@@ -63,7 +63,7 @@ eventstore.on('ready', () => {
 | **Flexible stream reading** | Range queries, reverse iteration, and a fluent builder API. |
 | **Derived streams** | Filter or combine events into new read-only streams. |
 | **Multi-value matchers** | Object matchers support array values (OR semantics) and still benefit from O(1) discriminant routing on writes. |
-| **DCB mode** | Partition by event type and use `getConsistencyToken()` / `ConsistencyToken` for fine-grained, query-scoped optimistic concurrency (Dynamic Consistency Boundaries). |
+| **DCB mode** | Partition by event type and use `query()` / `Condition` for fine-grained, query-scoped optimistic concurrency (Dynamic Consistency Boundaries). |
 | **Stream categories** | Name streams `<category>-<id>` and query the whole category at once. |
 | **Durable consumers** | At-least-once (and exactly-once with `setState`) event delivery with automatic position tracking. |
 | **Consistency guards** | Build aggregates that enforce business invariants with built-in snapshotting. |
