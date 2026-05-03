@@ -33,22 +33,25 @@ graph LR
     SSFC -->|"?"| CA
 ```
 
-DCB resolves this by letting the command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time. The relevant events are grouped by the query rather than by the aggregate:
+DCB resolves this by letting the command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time. The relevant events are grouped by the query rather than by the aggregate. Note that the aggregate boundaries (dotted) still exist and can be used for their own consistency checks — but they intersect the DCB boundary, sharing some events:
 
 ```mermaid
 graph LR
-    subgraph SA["Student Aggregate"]
-        S(Student)
-        SNC[StudentNameChanged]
-    end
-    subgraph CA["Course Aggregate"]
-        C(Course)
-    end
+    SNC[StudentNameChanged]
     subgraph DCB["Dynamic Consistency Boundary — Course Enrolment"]
-        SE[StudentEnrolled]
-        CC[CourseCreated]
+        subgraph SA["Student Aggregate"]
+            S(Student)
+            SE[StudentEnrolled]
+        end
         SSFC[StudentSignedUpForCourse]
+        subgraph CA["Course Aggregate"]
+            C(Course)
+            CC[CourseCreated]
+        end
     end
+    S --- SNC
+    style SA stroke-dasharray: 5 5
+    style CA stroke-dasharray: 5 5
 ```
 
 ---
