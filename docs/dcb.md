@@ -15,20 +15,41 @@ DCB generalises this:
 
 This removes the need to route every command through a fixed aggregate, enabling commands that span multiple entities while retaining strong consistency guarantees without distributed locks.
 
----
+Consider the classic DCB example: students signing up for courses.  In a traditional aggregate model, `StudentSignedUpForCourse` is ambiguous — it concerns both a Student and a Course, so it is unclear which aggregate owns it.
 
-## Multi-Value Object Matchers
-
-Before introducing full DCB mode it is worth knowing that **object matchers** support arrays for any property value.  An array is treated as an OR condition: a document matches when its property equals **any** value in the list.
-
-```javascript
-// Create a persistent stream that indexes two event types in one shot.
-eventstore.createEventStream('order-events', {
-    payload: { type: ['OrderPlaced', 'OrderShipped', 'OrderCancelled'] }
-});
+```mermaid
+graph LR
+    subgraph SA["Student Aggregate"]
+        S(Student)
+        SE[StudentEnrolled]
+        SNC[StudentNameChanged]
+    end
+    subgraph CA["Course Aggregate"]
+        C(Course)
+        CC[CourseCreated]
+    end
+    SSFC["StudentSignedUpForCourse"]
+    SSFC -->|"?"| SA
+    SSFC -->|"?"| CA
 ```
 
-Crucially, array-valued properties still benefit from the **discriminant optimisation** in the write path: each new event is routed to the right index in O(1) without a full-store scan.  This makes multi-type persistent streams nearly free to maintain.
+DCB resolves this by letting the command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time.  The relevant events are grouped by the query rather than by the aggregate:
+
+```mermaid
+graph LR
+    subgraph SA["Student Aggregate"]
+        S(Student)
+        SNC[StudentNameChanged]
+    end
+    subgraph CA["Course Aggregate"]
+        C(Course)
+    end
+    subgraph DCB["Dynamic Consistency Boundary — Course Enrolment"]
+        SE[StudentEnrolled]
+        CC[CourseCreated]
+        SSFC[StudentSignedUpForCourse]
+    end
+```
 
 ---
 
@@ -103,7 +124,7 @@ The stream name passed to `commit()` in DCB mode should be the event type name (
 
 ## Conflict Semantics
 
-The conflict check at commit time uses a join stream over the condition's type streams, checking only events appended **after** the condition was obtained:
+The commit engine guarantees that under the scope of the query condition, no event matching the query has appeared since the condition was captured:
 
 | Scenario | Result |
 |----------|--------|
@@ -171,6 +192,15 @@ store.on('ready', () => {
 
 In **standard mode** the first call to `query()` for a given event type creates a secondary index by scanning all existing events (`reindex=true`).  This is a one-time cost proportional to the store size; all subsequent calls are O(1).
 
+If this one-time scan is undesirable you can pre-build a persistent multi-type index yourself before calling `query()`.  Object matchers support arrays as OR conditions, and each value is routed in O(1) on writes via the discriminant optimisation:
+
+```javascript
+// Pre-build a multi-type index so the first query() call skips the scan.
+eventstore.createEventStream('order-events', {
+    payload: { type: ['OrderPlaced', 'OrderShipped', 'OrderCancelled'] }
+});
+```
+
 ---
 
 ## Important Caveats
@@ -181,6 +211,6 @@ Type indexes in DCB mode are created with `reindex=false`.  This means they only
 
 **Always create a store with `dcbMode: true` from the beginning** if you intend to use DCB mode.
 
-### Single-writer constraint
+### Stream imbalance in DCB mode
 
-Like the rest of event-storage, DCB mode enforces a single writer per store (via a lock file).  The condition check is not distributed — use this for single-server applications or a single coordinating write process.
+In DCB mode every event of a given type shares a single partition file.  High-volume event types accumulate large files and flush the write buffer more frequently, while rare types accumulate very slowly.  This imbalance is an expected trade-off of the type-stream design: it enables O(1) queries at the cost of uneven write amplification across streams.

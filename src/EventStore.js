@@ -54,10 +54,10 @@ class EventStore extends events.EventEmitter {
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
-     * @param {boolean} [config.dcbMode] Enable Dynamic Consistency Boundary (DCB) mode. In this mode events are
-     *   physically partitioned by their `payload.type` value and a lightweight stream index is automatically
-     *   maintained for every distinct event type encountered. This makes {@link EventStore#query}
-     *   and condition-based commits efficient without requiring a full store scan.
+     * @param {boolean} [config.dcbMode] Enable Dynamic Consistency Boundary (DCB) mode. In this mode
+     *   users commit events to type-named streams (stream name = event type) and
+     *   {@link EventStore#query} creates per-type stream indexes without requiring a full store scan.
+     *   See the DCB documentation for the full workflow.
      * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
@@ -473,20 +473,9 @@ class EventStore extends events.EventEmitter {
      * Returns a pre-filtered event stream and a {@link Condition} that can be passed to
      * {@link EventStore#commit} to enforce DCB-style optimistic concurrency.
      *
-     * **What a conflict means**
      * A conflict occurs when at least one event appended between the `query` call and the `commit` call
      * belongs to one of the listed types and (when `matcher` is provided) also satisfies
      * `matcher(payload, metadata)`.  Events written before the `query` call are never treated as conflicts.
-     *
-     * **Stream availability**
-     * Per-type stream indexes are created automatically on first use:
-     * - In **DCB mode** events are committed to type-named streams, so the type index matches by
-     *   stream name (`reindex=false`). For a store created in DCB mode from day one, no historical
-     *   scan is needed.
-     * - In **standard mode** events are committed to entity streams and contain the type in their
-     *   payload, so the index matches by `payload.type` and is populated by scanning all existing
-     *   documents (`reindex=true`). This one-time scan can be slow on a large store; subsequent
-     *   calls are O(1).
      *
      * @api
      * @param {string[]} types A non-empty array of event-type names to query.
