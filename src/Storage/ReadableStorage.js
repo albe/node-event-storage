@@ -210,6 +210,10 @@ class ReadableStorage extends events.EventEmitter {
                 // removed during emit still fires; the null check below prevents re-opening.
                 if (!this._pendingOpen) return;
                 this._pendingOpen = null;
+                // Call this.open() (not _openIndexes() directly) so that subclass overrides
+                // such as ReadOnlyStorage.open() — which sets up file-change watchers — are
+                // also invoked.  By this point _ready is always true, so open() immediately
+                // calls _openIndexes() with no risk of infinite recursion.
                 this.open();
             };
             this.once('ready', this._pendingOpen);

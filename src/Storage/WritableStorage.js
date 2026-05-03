@@ -93,6 +93,9 @@ class WritableStorage extends ReadableStorage {
                     // Guard against cancellation via close() during emit().
                     if (!this._pendingOpen) return;
                     this._pendingOpen = null;
+                    // Call _openIndexes() directly rather than this.open(), because open()
+                    // would attempt to re-acquire the lock (already held by the earlier
+                    // synchronous lock() call above).
                     this._openIndexes();
                 };
                 this.once('ready', this._pendingOpen);
@@ -261,6 +264,9 @@ class WritableStorage extends ReadableStorage {
     unlock() {
         if (fs.existsSync(this.lockFile)) {
             if (!this.locked) {
+                // The lock file exists but was NOT created by this instance — it is an
+                // orphaned lock left by a previously crashed writer.  Scan for and repair
+                // any torn writes before removing the lock.
                 this.checkTornWrites();
             }
             fs.rmdirSync(this.lockFile);
