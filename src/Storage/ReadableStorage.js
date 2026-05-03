@@ -208,6 +208,8 @@ class ReadableStorage extends events.EventEmitter {
                 // Guard against firing after close() cancelled this handler.
                 // Node.js copies listener arrays before iterating in emit(), so a listener
                 // removed during emit still fires; the null check below prevents re-opening.
+                // JavaScript is single-threaded, so there is no race between the null check
+                // and the this.open() call that follows.
                 if (!this._pendingOpen) return;
                 this._pendingOpen = null;
                 // Call this.open() (not _openIndexes() directly) so that subclass overrides

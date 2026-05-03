@@ -139,7 +139,7 @@ describe('Storage', function() {
                     expect(storage.length).to.be(i);
                 }
                 storage.close();
-                storage.open();  // _ready is true → opens synchronously
+                storage.open();  // scan already done → opens synchronously
                 expect(storage.length).to.be(10);
                 done();
             });
@@ -777,7 +777,7 @@ describe('Storage', function() {
                     storage.write({foo: i});
                 }
                 storage.close();
-                storage.open();  // _ready is true → opens synchronously, index also opened
+                storage.open();  // scan already done → opens synchronously, indexes also opened
 
                 storage.truncate(6);
 

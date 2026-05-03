@@ -91,6 +91,8 @@ class WritableStorage extends ReadableStorage {
             if (!this._pendingOpen) {
                 this._pendingOpen = () => {
                     // Guard against cancellation via close() during emit().
+                    // JavaScript is single-threaded, so there is no race between the
+                    // null check and the _openIndexes() call that follows.
                     if (!this._pendingOpen) return;
                     this._pendingOpen = null;
                     // Call _openIndexes() directly rather than this.open(), because open()
