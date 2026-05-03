@@ -15,7 +15,7 @@ DCB generalises this:
 
 This removes the need to route every command through a fixed aggregate, enabling commands that span multiple entities while retaining strong consistency guarantees without distributed locks.
 
-Consider the classic DCB example: students signing up for courses.  In a traditional aggregate model, `StudentSignedUpForCourse` is ambiguous — it concerns both a Student and a Course, so it is unclear which aggregate owns it.
+Consider the classic DCB example: students signing up for courses. In a traditional aggregate model, `StudentSignedUpForCourse` is ambiguous — it concerns both a Student and a Course, so it is unclear which aggregate owns it.
 
 ```mermaid
 graph LR
@@ -33,7 +33,7 @@ graph LR
     SSFC -->|"?"| CA
 ```
 
-DCB resolves this by letting the command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time.  The relevant events are grouped by the query rather than by the aggregate:
+DCB resolves this by letting the command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time. The relevant events are grouped by the query rather than by the aggregate:
 
 ```mermaid
 graph LR
@@ -190,9 +190,9 @@ store.on('ready', () => {
 | `query()` first call | May scan existing events | O(1) always |
 | `query()` subsequent calls | O(1) | O(1) |
 
-In **standard mode** the first call to `query()` for a given event type creates a secondary index by scanning all existing events (`reindex=true`).  This is a one-time cost proportional to the store size; all subsequent calls are O(1).
+In **standard mode** the first call to `query()` for a given event type creates a secondary index by scanning all existing events (`reindex=true`). This is a one-time cost proportional to the store size; all subsequent calls are O(1).
 
-If this one-time scan is undesirable you can pre-build a persistent multi-type index yourself before calling `query()`.  Object matchers support arrays as OR conditions, and each value is routed in O(1) on writes via the discriminant optimisation:
+If this one-time scan is undesirable you can pre-build a persistent multi-type index yourself before calling `query()`. Object matchers support arrays as OR conditions, and each value is routed in O(1) on writes via the discriminant optimisation:
 
 ```javascript
 // Pre-build a multi-type index so the first query() call skips the scan.
@@ -213,4 +213,4 @@ Type indexes in DCB mode are created with `reindex=false`.  This means they only
 
 ### Stream imbalance in DCB mode
 
-In DCB mode every event of a given type shares a single partition file.  High-volume event types accumulate large files and flush the write buffer more frequently, while rare types accumulate very slowly.  This imbalance is an expected trade-off of the type-stream design: it enables O(1) queries at the cost of uneven write amplification across streams.
+In DCB mode every event of a given type shares a single partition file. High-volume event types accumulate large files and flush the write buffer more frequently, while rare types accumulate very slowly. This imbalance is an expected trade-off of the type-stream design: it enables O(1) queries at the cost of uneven write amplification across streams.
