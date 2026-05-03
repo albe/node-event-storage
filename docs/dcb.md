@@ -17,42 +17,11 @@ This removes the need to route every command through a fixed aggregate, enabling
 
 Consider the classic DCB example: students signing up for courses. In a traditional aggregate model, `StudentSignedUpForCourse` is ambiguous — it concerns both a Student and a Course, so it is unclear which aggregate owns it.
 
-```mermaid
-graph LR
-    subgraph SA["Student Aggregate"]
-        S(Student)
-        SE[StudentEnrolled]
-        SNC[StudentNameChanged]
-    end
-    subgraph CA["Course Aggregate"]
-        C(Course)
-        CC[CourseCreated]
-    end
-    SSFC["StudentSignedUpForCourse"]
-    SSFC -->|"?"| SA
-    SSFC -->|"?"| CA
-```
+![Traditional aggregate model showing StudentSignedUpForCourse as ambiguous between the Student and Course aggregates](diagram-dcb-aggregate-ambiguity.svg)
 
 DCB resolves this by letting the command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time. The relevant events are grouped by the query rather than by the aggregate. Note that the aggregate boundaries (dotted) still exist and can be used for their own consistency checks — but they intersect the DCB boundary, sharing some events:
 
-```mermaid
-graph LR
-    SNC[StudentNameChanged]
-    subgraph DCB["Dynamic Consistency Boundary — Course Enrolment"]
-        subgraph SA["Student Aggregate"]
-            S(Student)
-            SE[StudentEnrolled]
-        end
-        SSFC[StudentSignedUpForCourse]
-        subgraph CA["Course Aggregate"]
-            C(Course)
-            CC[CourseCreated]
-        end
-    end
-    S --- SNC
-    style SA stroke-dasharray: 5 5
-    style CA stroke-dasharray: 5 5
-```
+![Dynamic Consistency Boundary for course enrolment spanning StudentEnrolled, StudentSignedUpForCourse and CourseCreated, with StudentNameChanged outside the boundary](diagram-dcb-boundary.svg)
 
 ---
 
