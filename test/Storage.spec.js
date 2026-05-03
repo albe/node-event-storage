@@ -130,19 +130,19 @@ describe('Storage', function() {
 
     describe('length', function() {
 
-        it('returns the amount of documents in the storage', function() {
+        it('returns the amount of documents in the storage', function(done) {
             storage = createStorage();
             storage.open();
-
-            for (let i = 1; i <= 10; i++) {
-                storage.write({ foo: 'bar' });
-                expect(storage.length).to.be(i);
-            }
-
-            storage.close();
-            storage.open();
-
-            expect(storage.length).to.be(10);
+            storage.on('ready', () => {
+                for (let i = 1; i <= 10; i++) {
+                    storage.write({ foo: 'bar' });
+                    expect(storage.length).to.be(i);
+                }
+                storage.close();
+                storage.open();  // _ready is true → opens synchronously
+                expect(storage.length).to.be(10);
+                done();
+            });
         });
 
     });
@@ -767,30 +767,32 @@ describe('Storage', function() {
             expect(i).to.be(7);
         });
 
-        it('truncates secondary indexes correctly', function() {
+        it('truncates secondary indexes correctly', function(done) {
             storage = createStorage();
             storage.open();
-            let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
+            storage.on('ready', () => {
+                let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
 
-            for (let i = 1; i <= 10; i++) {
-                storage.write({foo: i});
-            }
+                for (let i = 1; i <= 10; i++) {
+                    storage.write({foo: i});
+                }
+                storage.close();
+                storage.open();  // _ready is true → opens synchronously, index also opened
 
-            storage.close();
-            storage.open();
+                storage.truncate(6);
 
-            storage.truncate(6);
+                expect(storage.length).to.be(6);
+                expect(index.length).to.be(3);
 
-            expect(storage.length).to.be(6);
-            expect(index.length).to.be(3);
-
-            let documents = storage.readRange(1, -1, index);
-            let i = 2;
-            for (let doc of documents) {
-                expect(doc).to.eql({ foo: i });
-                i += 2;
-            }
-            expect(i).to.be(8);
+                let documents = storage.readRange(1, -1, index);
+                let i = 2;
+                for (let doc of documents) {
+                    expect(doc).to.eql({ foo: i });
+                    i += 2;
+                }
+                expect(i).to.be(8);
+                done();
+            });
         });
 
         it('keeps truncated secondary indexes closed', function() {

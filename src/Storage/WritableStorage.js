@@ -62,18 +62,41 @@ class WritableStorage extends ReadableStorage {
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         if (config.lock === LOCK_RECLAIM) {
-            this.unlock();
+            // Remove the orphaned lock file synchronously so that open() can lock immediately.
+            // The torn-write check is deferred until after the async partition scan completes.
+            if (fs.existsSync(this.lockFile)) {
+                fs.rmdirSync(this.lockFile);
+                this.once('ready', () => this.checkTornWrites());
+            }
+            this.locked = false;
         }
         this.partitioner = config.partitioner;
     }
 
     /**
      * @inheritDoc
+     * The lock is acquired synchronously (so a second concurrent open() throws immediately).
+     * If the async partition scan has not yet completed, only the index opening is deferred
+     * until 'ready' fires; the lock is held in the meantime.
+     *
      * @returns {boolean}
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open() {
         if (!this.lock()) {
+            return true;
+        }
+        if (!this._ready) {
+            // Lock acquired; defer index opening until scan completes.
+            if (!this._pendingOpen) {
+                this._pendingOpen = () => {
+                    // Guard against cancellation via close() during emit().
+                    if (!this._pendingOpen) return;
+                    this._pendingOpen = null;
+                    this._openIndexes();
+                };
+                this.once('ready', this._pendingOpen);
+            }
             return true;
         }
         return super.open();
@@ -238,10 +261,7 @@ class WritableStorage extends ReadableStorage {
     unlock() {
         if (fs.existsSync(this.lockFile)) {
             if (!this.locked) {
-                // An orphaned lock from a previously crashed writer was found.
-                // Defer the torn-write check until the async partition scan completes
-                // and open() has been called, just before 'ready' is emitted.
-                this._needsRepair = true;
+                this.checkTornWrites();
             }
             fs.rmdirSync(this.lockFile);
         }
@@ -250,22 +270,16 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Runs checkTornWrites() before emitting 'ready' when an orphaned lock was reclaimed.
-     * @private
-     */
-    _emitReadyIfConditionsMet() {
-        if (!this._scanDone || !this._opened) return;
-        if (this._needsRepair) {
-            this._needsRepair = false;
-            this.checkTornWrites();
-        }
-        this.emit('ready');
-    }
-
-    /**
-     * @inheritDoc
+     * Cancels any pending deferred index-open (releasing the lock if it was acquired
+     * pre-scan) before delegating to the parent close().
      */
     close() {
+        if (this._pendingOpen) {
+            // Lock was acquired in open() but index not yet opened.
+            // Cancel the deferred index-open; the lock will be released below.
+            this.removeListener('ready', this._pendingOpen);
+            this._pendingOpen = null;
+        }
         if (this.locked) {
             this.unlock();
         }

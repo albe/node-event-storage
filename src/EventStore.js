@@ -78,6 +78,9 @@ class EventStore extends events.EventEmitter {
         this.streams = Object.create(null);
         this.streams._all = { index: this.storage.index };
 
+        // open() must be registered before the 'ready' listener so its deferred
+        // handler fires first and the storage is open when scanStreams runs.
+        this.storage.open();
         this.storage.on('ready', () => {
             this.scanStreams((err) => {
                 if (err) {
@@ -88,7 +91,6 @@ class EventStore extends events.EventEmitter {
                 this.emit('ready');
             });
         });
-        this.storage.open();
     }
 
     /**

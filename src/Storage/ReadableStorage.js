@@ -93,8 +93,7 @@ class ReadableStorage extends events.EventEmitter {
 
         this.dataDirectory = path.resolve(config.dataDirectory);
 
-        this._scanDone = false;
-        this._opened = false;
+        this._ready = false;
         this.scanPartitions(config);
         this.initializeIndexes(config);
     }
@@ -176,58 +175,84 @@ class ReadableStorage extends events.EventEmitter {
         }, (err) => {
             /* istanbul ignore if */
             if (err) throw err;
-            this._scanDone = true;
-            this._emitReadyIfConditionsMet();
+            this._ready = true;
+            this.emit('ready');
         });
     }
 
     /**
-     * Emit the 'ready' event if both the async partition scan has completed and the storage
-     * has been opened (indexes are open).  Called from both the scan callback and open().
-     * @private
+     * Open the indexes for reading/writing and emit 'opened'.
+     * This is the final step of opening; the lock (if any) must already be held.
+     *
+     * @protected
      */
-    _emitReadyIfConditionsMet() {
-        if (this._scanDone && this._opened) {
-            this.emit('ready');
+    _openIndexes() {
+        this.index.open();
+        this.forEachSecondaryIndex(index => index.open());
+        this.emit('opened');
+    }
+
+    /**
+     * Register a deferred open that will fire once 'ready' is emitted by the constructor's
+     * async partition scan.  At most one deferred open is registered at a time; calling
+     * `_deferOpen()` repeatedly before 'ready' fires is idempotent.  The registration is
+     * cancelled automatically when `close()` is called, preventing the deferred open from
+     * firing after the storage has been explicitly closed.
+     *
+     * @protected
+     * @returns {boolean}
+     */
+    _deferOpen() {
+        if (!this._pendingOpen) {
+            this._pendingOpen = () => {
+                // Guard against firing after close() cancelled this handler.
+                // Node.js copies listener arrays before iterating in emit(), so a listener
+                // removed during emit still fires; the null check below prevents re-opening.
+                if (!this._pendingOpen) return;
+                this._pendingOpen = null;
+                this.open();
+            };
+            this.once('ready', this._pendingOpen);
         }
+        return true;
     }
 
     /**
      * Open the storage and indexes and create read and write buffers eagerly.
-     * Will emit an 'opened' event if finished, and a 'ready' event once the async partition
-     * scan has also completed (or immediately if it has already finished).
+     * If the async partition scan has not yet completed, defers itself and runs once 'ready' fires.
+     * Will emit an 'opened' event when finished.
      *
      * @api
      * @returns {boolean}
      */
     open() {
-        this.index.open();
-
-        this.forEachSecondaryIndex(index => index.open());
-
-        if (!this._opened) {
-            this._opened = true;
-            this._emitReadyIfConditionsMet();
+        if (!this._ready) {
+            return this._deferOpen();
         }
-        this.emit('opened');
+        this._openIndexes();
         return true;
     }
 
     /**
      * Close the storage and frees up all resources.
+     * Cancels any pending deferred open so that a 'ready' event arriving after an explicit
+     * close does not re-open the storage unexpectedly.
      * Will emit a 'closed' event when finished.
      *
      * @api
      * @returns void
      */
     close() {
+        if (this._pendingOpen) {
+            this.removeListener('ready', this._pendingOpen);
+            this._pendingOpen = null;
+        }
         this.index.close();
         this.forEachSecondaryIndex(index => index.close());
         for (let index of Object.values(this.readonlyIndexes)) {
             index.close();
         }
         this.forEachPartition(partition => partition.close());
-        this._opened = false;
         this.emit('closed');
     }
 
