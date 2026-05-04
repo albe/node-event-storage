@@ -15,13 +15,13 @@ DCB generalises this:
 
 This removes the need to route every command through a fixed aggregate, enabling commands that span multiple entities while retaining strong consistency guarantees without distributed locks.
 
-Consider the classic DCB example: students signing up for courses. In a traditional aggregate model, `StudentSignedUpForCourse` is ambiguous — it concerns both a Student and a Course, so it is unclear which aggregate owns it.
+Consider the classic DCB example from Sara Pellegrini's talk: students subscribing to courses. A course raises `CourseCreated`, `CourseRenamed`, and `CourseCapacityChanged`; a student raises `StudentCreated`. The event `StudentSubscribedToCourse` is ambiguous — it concerns both a Student and a Course — so in a traditional aggregate model it is unclear which aggregate owns it. Meanwhile the Course aggregate keeps growing with new event types:
 
-![Traditional aggregate model showing StudentSignedUpForCourse as ambiguous between the Student and Course aggregates](diagram-dcb-aggregate-ambiguity.svg)
+![Traditional aggregate model — the Course aggregate grows with CourseCreated, CourseRenamed and CourseCapacityChanged while StudentSubscribedToCourse is ambiguous between the Course and Student aggregates](diagram-dcb-aggregate-ambiguity.svg)
 
-DCB resolves this by letting the command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time. The relevant events are grouped by the query rather than by the aggregate. Note that the aggregate boundaries (dotted) still exist and can be used for their own consistency checks — but they intersect the DCB boundary, sharing some events:
+DCB resolves this by letting each command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time. Different decisions (commands) define different boundaries, and those boundaries can freely overlap. The `StudentSubscribedToCourse` event ends up inside a cross-aggregate boundary that also shares events with the course-only boundaries:
 
-![Dynamic Consistency Boundary for course enrolment spanning StudentEnrolled, StudentSignedUpForCourse and CourseCreated, with StudentNameChanged outside the boundary](diagram-dcb-boundary.svg)
+![Multiple overlapping Dynamic Consistency Boundaries per decision — Rename Course, Change Course Capacity, and the cross-aggregate Subscribe Student to Course boundary](diagram-dcb-boundary.svg)
 
 ---
 
@@ -147,6 +147,48 @@ store.on('ready', () => {
     handleRegisterCustomer({ customerId: 'cust-1', email: 'alice@example.com' });
 });
 ```
+
+---
+
+## The DCB Specification: Types and Tags
+
+The formal DCB specification (as described by Pellegrini) expresses a query as a list of **query items**, each pairing an array of event types with an array of **domain-identifier tags**:
+
+```
+queryItems = [
+  { types: ['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'],
+    tags:  ['course:jdsj4'] },
+  { types: ['StudentCreated', 'StudentSubscribedToCourse'],
+    tags:  ['student:gfh3j'] }
+]
+```
+
+An event matches the query when **any** query item matches it: the event's type must be in that item's `types` list **and** the event must carry **all** of that item's tags:
+
+```
+event matches query  ⟺  ∃ q ∈ queryItems :  event.type ∈ q.types  ∧  q.tags ⊆ event.tags
+```
+
+In node-event-storage this pattern is expressed today using the `matcher` function parameter of `query()`. The union of all types from every query item is passed as the `types` array, and the multi-item logic is encoded in the matcher:
+
+```javascript
+const courseId  = 'course:jdsj4';
+const studentId = 'student:gfh3j';
+
+const { stream, condition } = store.query(
+    // Union of all types across both query items
+    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    // Matcher encodes the per-item (type, tags) logic
+    (event, meta) =>
+        (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(meta.stream)
+            && meta.tags?.includes(courseId))
+        ||
+        (['StudentCreated', 'StudentSubscribedToCourse'].includes(meta.stream)
+            && meta.tags?.includes(studentId))
+);
+```
+
+Note that the type membership check in the matcher duplicates what is already expressed in the `types` array. This is a current limitation: node-event-storage does not yet support a native multi-item query API. Future versions may introduce tag-based secondary indexes and a structured query item format to avoid this duplication and to make tag-filtered queries as performant as type-filtered ones.
 
 ---
 

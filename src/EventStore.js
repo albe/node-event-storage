@@ -485,6 +485,9 @@ class EventStore extends events.EventEmitter {
      *   time: a new event of a listed type is only treated as a conflict when the matcher also returns
      *   truthy for it.  When omitted, all events of the listed types are included and any new event of
      *   those types will be a conflict.
+     * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned
+     *   stream (inclusive).  Defaults to 1 (full history).  Use a higher value to start iteration from
+     *   a known position, e.g. to resume after a previously observed event.
      * @returns {{ condition: Condition, stream: EventStream }} An object with:
      *   - `condition` — the {@link Condition} to pass to {@link EventStore#commit}.
      *   - `stream` — a read-only event stream containing all matching events ordered by global
@@ -492,7 +495,7 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} if `types` is not a non-empty array.
      * @throws {Error} if the storage was opened in read-only mode and a type stream does not exist yet.
      */
-    query(types, matcher = null) {
+    query(types, matcher = null, minRevision = 1) {
         assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for query.');
 
         for (const type of types) {
@@ -509,7 +512,7 @@ class EventStore extends events.EventEmitter {
 
         const version = this.storage.length;
         const condition = new Condition(types, version, matcher);
-        const stream = this.fromStreams('_query_' + types.join('_'), types, 1, -1, matcher);
+        const stream = this.fromStreams('_query_' + types.join('_'), types, minRevision, -1, matcher);
         return { stream, condition };
     }
 
