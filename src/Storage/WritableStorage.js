@@ -84,9 +84,7 @@ class WritableStorage extends ReadableStorage {
     open() {
         // For LOCK_RECLAIM: remove an orphaned lock immediately before trying to acquire our own.
         // Torn-write repair is deferred until after the partition scan (partitions must be loaded).
-        const needsRepair = this._lockMode === LOCK_RECLAIM
-            && !this.locked
-            && fs.existsSync(this.lockFile);
+        const needsRepair = this._lockMode === LOCK_RECLAIM && fs.existsSync(this.lockFile);
         if (needsRepair) {
             fs.rmdirSync(this.lockFile);
             this.locked = false;

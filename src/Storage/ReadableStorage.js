@@ -98,7 +98,10 @@ class ReadableStorage extends events.EventEmitter {
         this.partitionConfig = Object.assign(partitionDefaults, config);
         this.partitions = new PartitionPool(config.maxOpenPartitions);
 
-        // _initialized: null = not started, false = scan in progress, true = scan done
+        // _initialized tracks the first-open scan state:
+        //   null  = not yet started (or cancelled by close() during scan)
+        //   false = scan in progress
+        //   true  = scan done; re-opens are synchronous
         this._initialized = null;
 
         this.initializeIndexes(config);
