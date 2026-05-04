@@ -78,19 +78,20 @@ class EventStore extends events.EventEmitter {
         this.streams = Object.create(null);
         this.streams._all = { index: this.storage.index };
 
-        // open() must be registered before the 'ready' listener so its deferred
-        // handler fires first and the storage is open when scanStreams runs.
-        this.storage.open();
-        this.storage.on('ready', () => {
-            this.scanStreams((err) => {
-                if (err) {
-                    this.storage.close();
-                    throw err;
-                }
-                this.checkUnfinishedCommits();
-                this.emit('ready');
-            });
+        // Streams found during storage.open()'s index scan, and streams created at runtime,
+        // are both announced via 'index-created'.  Register the handler before open() so that
+        // every event from the scan is received.
+        this.storage.on('index-created', this.registerStream.bind(this));
+
+        // Storage emits 'opened' once the partition+index scan is complete and the primary
+        // index is open.  That is the point at which EventStore can safely check commits and
+        // announce its own 'ready'.
+        this.storage.on('opened', () => {
+            this.checkUnfinishedCommits();
+            this.emit('ready');
         });
+
+        this.storage.open();
     }
 
     /**
@@ -123,22 +124,6 @@ class EventStore extends events.EventEmitter {
             // after `position`, the last sequence number that was successfully read.
             this.storage.truncate(position);
         }
-    }
-
-    /**
-     * Scan the streams directory for existing streams so they are ready for `getEventStream()`.
-     *
-     * @private
-     * @param {function} callback A callback that will be called when all existing streams are found.
-     */
-    scanStreams(callback) {
-        /* istanbul ignore if */
-        if (typeof callback !== 'function') {
-            callback = () => {};
-        }
-        // Find existing streams by scanning dir for filenames starting with 'stream-'
-        scanForFiles(this.streamsDirectory, /(stream-.*)\.index$/, this.registerStream.bind(this), callback);
-        this.storage.on('index-created', this.registerStream.bind(this));
     }
 
     /**

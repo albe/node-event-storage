@@ -133,7 +133,7 @@ describe('Storage', function() {
         it('returns the amount of documents in the storage', function(done) {
             storage = createStorage();
             storage.open();
-            storage.on('ready', () => {
+            storage.once('opened', () => {
                 for (let i = 1; i <= 10; i++) {
                     storage.write({ foo: 'bar' });
                     expect(storage.length).to.be(i);
@@ -207,7 +207,7 @@ describe('Storage', function() {
 
             storage.close();
             storage = createStorage();
-            storage.on('ready', () => {
+            storage.once('opened', () => {
                 for (let i = 1; i <= 8; i++) {
                     expect(storage.read(i)).to.eql({ foo: i });
                 }
@@ -256,7 +256,7 @@ describe('Storage', function() {
 
             storage.close();
             storage = createStorage();
-            storage.on('ready', () => {
+            storage.once('opened', () => {
                 for (let i = 1; i <= 8; i++) {
                     expect(storage.read(i).foo).to.eql(i);
                 }
@@ -770,7 +770,7 @@ describe('Storage', function() {
         it('truncates secondary indexes correctly', function(done) {
             storage = createStorage();
             storage.open();
-            storage.on('ready', () => {
+            storage.once('opened', () => {
                 let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
 
                 for (let i = 1; i <= 10; i++) {
@@ -782,6 +782,8 @@ describe('Storage', function() {
                 storage.truncate(6);
 
                 expect(storage.length).to.be(6);
+                // Secondary indexes are not eagerly re-opened on open(); open explicitly before use.
+                index.open();
                 expect(index.length).to.be(3);
 
                 let documents = storage.readRange(1, -1, index);
@@ -904,7 +906,7 @@ describe('Storage', function() {
             fs.closeSync(fd);
 
             storage = createStorage();
-            storage.on('ready', () => {
+            storage.once('opened', () => {
                 storage.checkTornWrites();
 
                 // Doc5 was torn and removed; index should now have exactly 4 entries.
@@ -933,13 +935,13 @@ describe('Storage', function() {
 
             // Re-open and truncate index to 3 to simulate index lag
             storage = createStorage();
-            storage.on('ready', () => {
+            storage.once('opened', () => {
                 storage.index.truncate(3);
                 storage.index.flush();
                 storage.close();
 
                 storage = createStorage();
-                storage.on('ready', () => {
+                storage.once('opened', () => {
                     storage.checkTornWrites();
 
                     // After torn write removal: doc5 is gone. Auto-repair rebuilds the missing entry
@@ -1087,7 +1089,7 @@ describe('Storage', function() {
             // Session 2: open without writing — partitions are lazily opened, so they are
             // NOT open yet when reindex() is called directly after open()
             storage = createStorage();
-            storage.on('ready', () => {
+            storage.once('opened', () => {
                 storage.reindex(3);
 
                 expect(storage.index.length).to.be(5);
@@ -1105,7 +1107,7 @@ describe('Storage', function() {
 
         it('emits ready event after opening', function(done) {
             storage = createStorage();
-            storage.on('ready', done);
+            storage.once('opened', done);
             storage.open();
         });
 
@@ -1130,7 +1132,7 @@ describe('Storage', function() {
             // until the async partition scan completes, then emits 'ready' after repair.
             const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
             refs.push(repairedStorage);
-            repairedStorage.on('ready', () => {
+            repairedStorage.once('opened', () => {
                 // Index should be fully repaired by the time 'ready' fires
                 expect(repairedStorage.index.length).to.be(5);
                 done();
@@ -1346,7 +1348,7 @@ describe('Storage', function() {
 
             let reader = createReader();
             reader.open();
-            reader.on('index-created', (name) => {
+            reader.once('index-created', (name) => {
                 expect(name).to.be('one');
                 expect(reader.secondaryIndexes[name]).to.be(undefined);
                 reader.close();
@@ -1363,7 +1365,7 @@ describe('Storage', function() {
 
             let reader = createReader( { indexDirectory: dataDirectory + '/indexes' });
             reader.open();
-            reader.on('index-created', (name) => {
+            reader.once('index-created', (name) => {
                 expect(name).to.be('one');
                 expect(reader.secondaryIndexes[name]).to.be(undefined);
                 reader.close();

@@ -93,8 +93,14 @@ class ReadableStorage extends events.EventEmitter {
 
         this.dataDirectory = path.resolve(config.dataDirectory);
 
-        this._ready = false;
-        this.scanPartitions(config);
+        // Partition pool and config are set up here (sync); actual scanning happens in open().
+        const partitionDefaults = { readBufferSize: DEFAULT_READ_BUFFER_SIZE };
+        this.partitionConfig = Object.assign(partitionDefaults, config);
+        this.partitions = new PartitionPool(config.maxOpenPartitions);
+
+        // _initialized: null = not started, false = scan in progress, true = scan done
+        this._initialized = null;
+
         this.initializeIndexes(config);
     }
 
@@ -152,106 +158,101 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Scan the data directory for all existing partitions.
-     * Every file beginning with the storageFile name is considered a partition.
+     * Asynchronously scan the data directory for partition files and the index directory for
+     * secondary index files.  For each found secondary index file, emits `'index-created'` so
+     * that callers (e.g. EventStore) can register the index without their own file scan.
+     * The `done` callback is invoked once both scans complete.
      *
-     * @private
-     * @param {object} config The configuration object containing options for the partitions.
-     * @returns void
+     * @protected
+     * @param {function} done Called when both scans finish.
      */
-    scanPartitions(config) {
-        const defaults = {
-            readBufferSize: DEFAULT_READ_BUFFER_SIZE
-        };
-        this.partitionConfig = Object.assign(defaults, config);
-        this.partitions = new PartitionPool(config.maxOpenPartitions);
-
+    _doScan(done) {
         const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const pattern = new RegExp(`^(${escaped}.*)$`);
-        scanForFiles(this.dataDirectory, pattern, (file) => {
+        const partitionPattern = new RegExp(`^(${escaped}.*)$`);
+        scanForFiles(this.dataDirectory, partitionPattern, (file) => {
             if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
             const partition = this.createPartition(file, this.partitionConfig);
             this.partitions.add(partition.id, partition);
-        }, (err) => {
+        }, (partErr) => {
             /* istanbul ignore if */
-            if (err) throw err;
-            this._ready = true;
-            this.emit('ready');
+            if (partErr) throw partErr;
+
+            // Scan for secondary index files: match `storageFile.NAME.index` (excludes primary).
+            // The directory might not exist yet (no secondary indexes ever created); skip if so.
+            if (!fs.existsSync(this.indexDirectory)) {
+                return done();
+            }
+            const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
+            scanForFiles(this.indexDirectory, indexPattern, (name) => {
+                this.emit('index-created', name);
+            }, (indexErr) => {
+                /* istanbul ignore if */
+                if (indexErr) throw indexErr;
+                done();
+            });
         });
     }
 
     /**
-     * Open the indexes for reading/writing and emit 'opened'.
-     * This is the final step of opening; the lock (if any) must already be held.
+     * Open the primary index (the only eager open; secondary indexes open on demand).
+     * Emits `'opened'` after the primary index FD is ready.
      *
      * @protected
      */
     _openIndexes() {
         this.index.open();
-        this.forEachSecondaryIndex(index => index.open());
         this.emit('opened');
     }
 
     /**
-     * Register a deferred open that will fire once 'ready' is emitted by the constructor's
-     * async partition scan.  At most one deferred open is registered at a time; calling
-     * `_deferOpen()` repeatedly before 'ready' fires is idempotent.  The registration is
-     * cancelled automatically when `close()` is called, preventing the deferred open from
-     * firing after the storage has been explicitly closed.
+     * Open the storage, scanning existing partitions and secondary index files on the first call.
      *
-     * @protected
-     * @returns {boolean}
-     */
-    _deferOpen() {
-        if (!this._pendingOpen) {
-            this._pendingOpen = () => {
-                // Guard against firing after close() cancelled this handler.
-                // Node.js copies listener arrays before iterating in emit(), so a listener
-                // removed during emit still fires; the null check below prevents re-opening.
-                // JavaScript is single-threaded, so there is no race between the null check
-                // and the this.open() call that follows.
-                if (!this._pendingOpen) return;
-                this._pendingOpen = null;
-                // Call this.open() (not _openIndexes() directly) so that subclass overrides
-                // such as ReadOnlyStorage.open() — which sets up file-change watchers — are
-                // also invoked.  By this point _ready is always true, so open() immediately
-                // calls _openIndexes() with no risk of infinite recursion.
-                this.open();
-            };
-            this.once('ready', this._pendingOpen);
-        }
-        return true;
-    }
-
-    /**
-     * Open the storage and indexes and create read and write buffers eagerly.
-     * If the async partition scan has not yet completed, defers itself and runs once 'ready' fires.
-     * Will emit an 'opened' event when finished.
+     * - First call: asynchronously scans the data and index directories, then opens the primary
+     *   index and emits `'opened'`.  The scan is idempotent — subsequent calls on the same
+     *   instance skip the scan and go directly to the synchronous re-open path.
+     * - Subsequent calls (after a `close()`): synchronously re-open the primary index and emit
+     *   `'opened'` immediately.
+     * - Concurrent calls while scanning is in progress are silently ignored.
      *
      * @api
      * @returns {boolean}
      */
     open() {
-        if (!this._ready) {
-            return this._deferOpen();
+        if (this._initialized === true) {
+            // Re-open after close(): scan already done; just re-open the primary index.
+            this._openIndexes();
+            return true;
         }
-        this._openIndexes();
+        if (this._initialized === false) {
+            // Scan already in progress (concurrent open() call); ignore.
+            return true;
+        }
+        // First open: mark scan in progress, then scan asynchronously.
+        this._initialized = false;
+        this._doScan(() => {
+            // Guard: if close() was called while scanning, _initialized was reset to null.
+            if (this._initialized === null) return;
+            this._initialized = true;
+            this._openIndexes();
+        });
         return true;
     }
 
     /**
      * Close the storage and frees up all resources.
-     * Cancels any pending deferred open so that a 'ready' event arriving after an explicit
-     * close does not re-open the storage unexpectedly.
+     * If a first-open scan is still in progress, it is cancelled so the completed scan does not
+     * re-open the storage after an explicit close.
      * Will emit a 'closed' event when finished.
      *
      * @api
      * @returns void
      */
     close() {
-        if (this._pendingOpen) {
-            this.removeListener('ready', this._pendingOpen);
-            this._pendingOpen = null;
+        // Cancel any in-progress first-open scan by resetting the state to "not started".
+        // JavaScript is single-threaded; the scan callback checks _initialized !== null before
+        // proceeding, so this is race-free.
+        if (this._initialized === false) {
+            this._initialized = null;
         }
         this.index.close();
         this.forEachSecondaryIndex(index => index.close());
