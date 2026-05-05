@@ -67,23 +67,14 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Acquires the write lock synchronously (preserving single-writer semantics, throwing
-     * StorageLockedError if another process holds the lock).
-     *
-     * If LOCK_RECLAIM mode is active and an orphaned lock is found, the lock is removed
-     * immediately here — just before our own lock attempt — and torn-write repair runs after
-     * the partition scan completes.
-     *
-     * On the first call, partitions and secondary-index files are scanned asynchronously.
-     * `'opened'` is emitted once the scan is done and the primary index is open.
-     * Re-opening the same instance after `close()` skips the scan and opens synchronously.
+     * Acquires the write lock synchronously.
+     * For LOCK_RECLAIM, removes any orphaned lock before trying to acquire our own; torn-write
+     * repair is deferred until after the partition scan (partitions must be loaded first).
      *
      * @returns {boolean}
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open() {
-        // For LOCK_RECLAIM: remove an orphaned lock immediately before trying to acquire our own.
-        // Torn-write repair is deferred until after the partition scan (partitions must be loaded).
         const needsRepair = this._lockMode === LOCK_RECLAIM && fs.existsSync(this.lockFile);
         if (needsRepair) {
             fs.rmdirSync(this.lockFile);
@@ -91,23 +82,20 @@ class WritableStorage extends ReadableStorage {
         }
 
         if (!this.lock()) {
-            return true; // already locked by this instance (no-op)
+            return true;
         }
 
         if (this._initialized === true) {
-            // Re-open after close(): scan already done; just open the primary index.
             this._openIndexes();
             return true;
         }
         if (this._initialized === false) {
-            // Scan already in progress (concurrent open() call); ignore.
             return true;
         }
 
-        // First open: scan asynchronously, repair if needed, then open indexes.
         this._initialized = false;
-        this._doScan(() => {
-            if (this._initialized === null) return; // cancelled by close()
+        this.scanFiles(() => {
+            if (this._initialized === null) return;
             if (needsRepair) this.checkTornWrites();
             this._initialized = true;
             this._openIndexes();

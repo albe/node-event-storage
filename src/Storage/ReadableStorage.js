@@ -93,15 +93,11 @@ class ReadableStorage extends events.EventEmitter {
 
         this.dataDirectory = path.resolve(config.dataDirectory);
 
-        // Partition pool and config are set up here (sync); actual scanning happens in open().
         const partitionDefaults = { readBufferSize: DEFAULT_READ_BUFFER_SIZE };
         this.partitionConfig = Object.assign(partitionDefaults, config);
         this.partitions = new PartitionPool(config.maxOpenPartitions);
 
-        // _initialized tracks the first-open scan state:
-        //   null  = not yet started (or cancelled by close() during scan)
-        //   false = scan in progress
-        //   true  = scan done; re-opens are synchronous
+        // _initialized: null = not started (or scan cancelled), false = in progress, true = done
         this._initialized = null;
 
         this.initializeIndexes(config);
@@ -161,15 +157,10 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Asynchronously scan the data directory for partition files and the index directory for
-     * secondary index files.  For each found secondary index file, emits `'index-created'` so
-     * that callers (e.g. EventStore) can register the index without their own file scan.
-     * The `done` callback is invoked once both scans complete.
-     *
-     * @protected
+     * Scan partitions and secondary index files; emit 'index-created' for each found index.
      * @param {function} done Called when both scans finish.
      */
-    _doScan(done) {
+    scanFiles(done) {
         const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const partitionPattern = new RegExp(`^(${escaped}.*)$`);
         scanForFiles(this.dataDirectory, partitionPattern, (file) => {
@@ -180,8 +171,7 @@ class ReadableStorage extends events.EventEmitter {
             /* istanbul ignore if */
             if (partErr) throw partErr;
 
-            // Scan for secondary index files: match `storageFile.NAME.index` (excludes primary).
-            // The directory might not exist yet (no secondary indexes ever created); skip if so.
+            // No secondary indexes exist yet — nothing to scan.
             if (!fs.existsSync(this.indexDirectory)) {
                 return done();
             }
@@ -196,44 +186,22 @@ class ReadableStorage extends events.EventEmitter {
         });
     }
 
-    /**
-     * Open the primary index (the only eager open; secondary indexes open on demand).
-     * Emits `'opened'` after the primary index FD is ready.
-     *
-     * @protected
-     */
     _openIndexes() {
         this.index.open();
         this.emit('opened');
     }
 
-    /**
-     * Open the storage, scanning existing partitions and secondary index files on the first call.
-     *
-     * - First call: asynchronously scans the data and index directories, then opens the primary
-     *   index and emits `'opened'`.  The scan is idempotent — subsequent calls on the same
-     *   instance skip the scan and go directly to the synchronous re-open path.
-     * - Subsequent calls (after a `close()`): synchronously re-open the primary index and emit
-     *   `'opened'` immediately.
-     * - Concurrent calls while scanning is in progress are silently ignored.
-     *
-     * @api
-     * @returns {boolean}
-     */
     open() {
         if (this._initialized === true) {
-            // Re-open after close(): scan already done; just re-open the primary index.
             this._openIndexes();
             return true;
         }
         if (this._initialized === false) {
-            // Scan already in progress (concurrent open() call); ignore.
             return true;
         }
-        // First open: mark scan in progress, then scan asynchronously.
         this._initialized = false;
-        this._doScan(() => {
-            // Guard: if close() was called while scanning, _initialized was reset to null.
+        this.scanFiles(() => {
+            // Guard: close() while scanning resets _initialized to null.
             if (this._initialized === null) return;
             this._initialized = true;
             this._openIndexes();
@@ -242,18 +210,10 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Close the storage and frees up all resources.
-     * If a first-open scan is still in progress, it is cancelled so the completed scan does not
-     * re-open the storage after an explicit close.
      * Will emit a 'closed' event when finished.
-     *
-     * @api
-     * @returns void
      */
     close() {
-        // Cancel any in-progress first-open scan by resetting the state to "not started".
-        // JavaScript is single-threaded; the scan callback checks _initialized !== null before
-        // proceeding, so this is race-free.
+        // Cancel in-progress scan so the callback does not re-open after an explicit close.
         if (this._initialized === false) {
             this._initialized = null;
         }
