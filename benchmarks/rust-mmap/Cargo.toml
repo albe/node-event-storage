@@ -1,0 +1,17 @@
+[package]
+name = "nes-bench-mmap"
+version = "0.1.0"
+edition = "2021"
+description = "mmap benchmark replicating node-event-storage file format in Rust"
+
+[dependencies]
+# memory-mapped file I/O
+memmap2 = "0.9"
+# zero-allocation JSON parsing directly from &[u8] slices into the mmap
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
