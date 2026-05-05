@@ -186,14 +186,14 @@ class ReadableStorage extends events.EventEmitter {
         });
     }
 
-    _openIndexes() {
+    openIndexes() {
         this.index.open();
         this.emit('opened');
     }
 
     open() {
         if (this._initialized === true) {
-            this._openIndexes();
+            this.openIndexes();
             return true;
         }
         if (this._initialized === false) {
@@ -204,7 +204,7 @@ class ReadableStorage extends events.EventEmitter {
             // Guard: close() while scanning resets _initialized to null.
             if (this._initialized === null) return;
             this._initialized = true;
-            this._openIndexes();
+            this.openIndexes();
         });
         return true;
     }

@@ -86,7 +86,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         if (this._initialized === true) {
-            this._openIndexes();
+            this.openIndexes();
             return true;
         }
         if (this._initialized === false) {
@@ -98,7 +98,7 @@ class WritableStorage extends ReadableStorage {
             if (this._initialized === null) return;
             if (needsRepair) this.checkTornWrites();
             this._initialized = true;
-            this._openIndexes();
+            this.openIndexes();
         });
         return true;
     }
