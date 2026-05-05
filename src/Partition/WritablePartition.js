@@ -1,4 +1,5 @@
 import fs from 'fs';
+import mmap from '@fayzanx/mmap-io';
 import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
 import { assert, buildMetadataHeader, alignTo, ensureDirectory } from '../util.js';
 import Clock from '../Clock.js';
@@ -47,6 +48,34 @@ class WritablePartition extends ReadablePartition {
         this.metadata = config.metadata;
         assert(typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function', 'Clock needs to implement the method time()');
         this.ClockConstructor = config.clock;
+    }
+
+    /**
+     * Override _mmapFile to map the file with read access for existing data.
+     * Called after flush() so the mmap covers all flushed content.
+     *
+     * @protected
+     * @override
+     */
+    _mmapFile() {
+        if (this.size <= 0) {
+            this.mmapBuffer = null;
+            this.readBuffer = null;
+            this.readBufferPos = -this.headerSize;
+            this.readBufferLength = 0;
+            return;
+        }
+        const mapSize = this.headerSize + this.size;
+        this.mmapBuffer = mmap.map(
+            mapSize,
+            mmap.PROT_READ,
+            mmap.MAP_SHARED,
+            this.fd,
+            0
+        );
+        this.readBuffer = this.mmapBuffer;
+        this.readBufferPos = -this.headerSize;
+        this.readBufferLength = mapSize;
     }
 
     /**
@@ -117,6 +146,7 @@ class WritablePartition extends ReadablePartition {
 
     /**
      * Flush the write buffer to disk.
+     * Marks the mmap as stale so the next read will trigger a remap.
      * This is a sync method and will invoke all previously registered flush callbacks.
      *
      * @returns {boolean}
@@ -136,6 +166,10 @@ class WritablePartition extends ReadablePartition {
 
         this.writeBufferCursor = 0;
         this.writeBufferDocuments = 0;
+
+        // Mark mmap as stale; actual remap is deferred to the next read that needs it.
+        this._mmapStale = true;
+
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
         for (let i = 0; i < callbacks.length; i++) callbacks[i]();
@@ -276,6 +310,8 @@ class WritablePartition extends ReadablePartition {
 
     /**
      * Prepare the read buffer for reading from the specified position.
+     * Unflushed write-buffer data is served directly from the write buffer (when dirtyReads is enabled);
+     * flushed data is served from the memory-mapped file.
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading from.
@@ -286,9 +322,13 @@ class WritablePartition extends ReadablePartition {
             return { buffer: null, cursor: 0, length: 0 };
         }
         const bufferPos = this.size - this.writeBufferCursor;
-        // Handle the case when data that is still in write buffer is supposed to be read
-        if (this.dirtyReads && this.writeBufferCursor > 0 && position >= bufferPos) {
-            return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
+        if (this.writeBufferCursor > 0 && position >= bufferPos) {
+            if (this.dirtyReads) {
+                // Unflushed data: serve directly from the write buffer.
+                return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
+            }
+            // Dirty reads disabled: unflushed data is not visible.
+            return { buffer: null, cursor: 0, length: 0 };
         }
         return super.prepareReadBuffer(position);
     }
@@ -302,9 +342,12 @@ class WritablePartition extends ReadablePartition {
      */
     prepareReadBufferBackwards(position) {
         const bufferPos = this.size - this.writeBufferCursor;
-        // Handle the case when data that is still in write buffer is supposed to be read backwards
-        if (this.dirtyReads && this.writeBufferCursor > 0 && position > bufferPos) {
-            return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
+        if (this.writeBufferCursor > 0 && position > bufferPos) {
+            if (this.dirtyReads) {
+                return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
+            }
+            // Dirty reads disabled: unflushed region is not visible when reading backwards.
+            return super.prepareReadBufferBackwards(Math.min(position, bufferPos));
         }
         return super.prepareReadBufferBackwards(position);
     }
@@ -328,17 +371,14 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
+     * After a truncation update the mmap to reflect the new file size.
      *
      * @internal
      * @param {number} after The byte position to truncate the read buffer after.
      */
     truncateReadBuffer(after) {
-        if (this.readBufferPos >= after) {
-            this.readBufferPos = -1;
-            this.readBufferLength = 0;
-        } else if (this.readBufferPos + this.readBufferLength > after) {
-            this.readBufferLength -= (this.readBufferPos + this.readBufferLength) - after;
-        }
+        // Remap will be performed by _mmapFile(); just reset the invariant fields.
+        this._mmapFile();
     }
 
     /**
@@ -392,13 +432,15 @@ class WritablePartition extends ReadablePartition {
         }
 
         fs.truncateSync(this.fileName, this.headerSize + after);
-        this.truncateReadBuffer(after);
         this.size = after;
+        this.truncateReadBuffer(after);
         this.emit('truncated', after);
     }
 
     /**
      * Create a branch of this partition starting from the given position.
+     * Copies raw document bytes directly from the mmap (flushed region) or
+     * the write buffer (unflushed region) into a new partition file.
      *
      * @internal
      * @param {string} branchName The name that identifies the branch (will be prefixed with this partition name and suffixed with the position)
@@ -408,11 +450,18 @@ class WritablePartition extends ReadablePartition {
     branchOff(branchName, position) {
         const deletedBranch = new WritablePartition(this.name + '-' + branchName + '-' + position + '.branch', { dataDirectory: this.dataDirectory, metadata: { epoch: this.metadata.epoch } });
         deletedBranch.open();
-        do {
-            const reader = this.prepareReadBuffer(position);
-            fs.writeSync(deletedBranch.fd, reader.buffer, reader.cursor, reader.length);
-            position += reader.length;
-        } while (position < this.size);
+        const flushedSize = this.size - this.writeBufferCursor;
+        if (this.mmapBuffer && position < flushedSize) {
+            // Write the flushed portion from the mmap
+            const flushedLength = flushedSize - position;
+            fs.writeSync(deletedBranch.fd, this.mmapBuffer, this.headerSize + position, flushedLength);
+            position = flushedSize;
+        }
+        if (this.writeBufferCursor > 0 && position < this.size) {
+            // Write any remaining unflushed data from the write buffer
+            const bufferStart = position - flushedSize;
+            fs.writeSync(deletedBranch.fd, this.writeBuffer, bufferStart, this.writeBufferCursor - bufferStart);
+        }
         deletedBranch.close();
         return deletedBranch;
     }

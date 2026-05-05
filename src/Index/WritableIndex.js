@@ -1,4 +1,5 @@
 import fs from 'fs';
+import mmap from '@fayzanx/mmap-io';
 import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC } from './ReadableIndex.js';
 import { assertEqual, buildMetadataHeader, ensureDirectory } from '../util.js';
 
@@ -134,7 +135,7 @@ class WritableIndex extends ReadableIndex {
     }
 
     /**
-     * Flush the write buffer to disk if it is not empty.
+     * Flush the write buffer to disk and remap the mmap to expose new entries for zero-copy reads.
      *
      * @returns {boolean} If a flush actually was executed.
      */
@@ -156,6 +157,10 @@ class WritableIndex extends ReadableIndex {
         }
 
         this.writeBufferCursor = 0;
+
+        // Remap to expose newly written entries for zero-copy reads.
+        this._mmapIndexFile();
+
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
         for (let i = 0; i < callbacks.length; i += 2) callbacks[i](callbacks[i + 1]);
@@ -231,6 +236,8 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
+        // Remap to the truncated size.
+        this._mmapIndexFile();
         this.data.splice(after);
         this.readUntil = Math.min(this.readUntil, after);
     }

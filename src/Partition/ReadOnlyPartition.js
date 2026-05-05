@@ -24,6 +24,10 @@ class ReadOnlyPartition extends WatchesFile(ReadablePartition) {
         }
         const prevSize = this.size;
         this.size = this.readFileSize();
+        if (this.size !== prevSize) {
+            // Remap the file at the new size so reads see the updated content.
+            this._mmapFile();
+        }
         if (this.size > prevSize) {
             this.emit('append', prevSize, this.size);
         }

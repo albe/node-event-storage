@@ -26,6 +26,8 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
         }
         const prevLength = this.data.length;
         const newLength = this.readFileLength();
+        // Remap so that new entries are visible in the mmap.
+        this._mmapIndexFile();
         this.data.length = newLength;
         if (newLength > prevLength) {
             this.emit('append', prevLength, newLength);

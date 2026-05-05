@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
+import mmap from '@fayzanx/mmap-io';
 import { assert, alignTo, hash, binarySearch } from '../util.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
@@ -69,7 +70,7 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * Open the partition storage and create read buffers.
+     * Open the partition storage and memory-map the file for zero-copy reads.
      *
      * @api
      * @returns {boolean} Returns false if the file is not a valid partition.
@@ -81,12 +82,6 @@ class ReadablePartition extends events.EventEmitter {
 
         this.fd = fs.openSync(this.fileName, this.fileMode);
 
-        // allocUnsafeSlow because we don't need buffer pooling for these relatively long-lived buffers
-        this.readBuffer = Buffer.allocUnsafeSlow(this.readBufferSize);
-        // Where inside the file the read buffer starts
-        this.readBufferPos = -1;
-        this.readBufferLength = 0;
-
         this.headerSize = 0;
         this.size = this.readFileSize();
         if (this.size <= 0) {
@@ -96,7 +91,43 @@ class ReadablePartition extends events.EventEmitter {
 
         this.size -= this.readMetadata();
 
+        this._mmapFile();
+
         return true;
+    }
+
+    /**
+     * Map the partition file into memory for zero-copy reads.
+     * Sets readBuffer / readBufferPos / readBufferLength so that the existing
+     * arithmetic in findDocumentPositionBefore / readDocumentBefore still works.
+     *
+     * Invariant: buffer[headerSize + position] == first byte of data at position.
+     * So cursor = headerSize + position, and readBufferPos = -headerSize gives
+     *   cursor = position - readBufferPos  (the same formula as the old code).
+     *
+     * @protected
+     */
+    _mmapFile() {
+        if (this.size <= 0) {
+            this.mmapBuffer = null;
+            this.readBuffer = null;
+            this.readBufferPos = -1;
+            this.readBufferLength = 0;
+            return;
+        }
+        this.mmapBuffer = mmap.map(
+            this.headerSize + this.size,
+            mmap.PROT_READ,
+            mmap.MAP_SHARED,
+            this.fd,
+            0,
+            mmap.MADV_SEQUENTIAL
+        );
+        // Alias readBuffer to the mmap so that the invariant-based arithmetic
+        // in findDocumentPositionBefore / readDocumentBefore keeps working.
+        this.readBuffer = this.mmapBuffer;
+        this.readBufferPos = -this.headerSize;
+        this.readBufferLength = this.headerSize + this.size;
     }
 
     /**
@@ -167,22 +198,19 @@ class ReadablePartition extends events.EventEmitter {
             fs.closeSync(this.fd);
             this.fd = null;
         }
-        if (this.readBuffer) {
-            this.readBuffer = null;
-            this.readBufferPos = -1;
-            this.readBufferLength = 0;
-        }
+        this.mmapBuffer = null;
+        this.readBuffer = null;
+        this.readBufferPos = -1;
+        this.readBufferLength = 0;
     }
 
     /**
-     * Fill the internal read buffer starting from the given position.
+     * No-op: the memory-mapped buffer already reflects the on-disk contents.
      *
      * @private
-     * @param {number} [from] The file position to start filling the read buffer from. Default 0.
+     * @param {number} [from]
      */
-    fillBuffer(from = 0) {
-        this.readBufferLength = fs.readSync(this.fd, this.readBuffer, 0, this.readBuffer.byteLength, this.headerSize + from);
-        this.readBufferPos = from;
+    fillBuffer(from = 0) { // jshint ignore:line
     }
 
     /**
@@ -210,45 +238,59 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * Prepare the read buffer for reading from the specified position.
+     * Return a reader anchored at `position` inside the memory-mapped buffer.
+     *
+     * cursor = headerSize + position so that  buffer[cursor]  is the first
+     * byte of the document at data-offset position.
+     * length = mmapBuffer.byteLength (the full mapped extent) so that the
+     * arithmetic inside findDocumentPositionBefore / readDocumentBefore keeps
+     * working unchanged:
+     *   position = readBufferPos + bufferSeparatorPosition + separatorSize
+     *            = -headerSize  + absOffset                + separatorSize
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading from.
-     * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object with properties `buffer`, `cursor` and `length`.
+     * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object.
      */
     prepareReadBuffer(position) {
-        if (position + DOCUMENT_HEADER_SIZE >= this.size) {
+        if (!this.mmapBuffer) {
             return ({ buffer: null, cursor: 0, length: 0 });
         }
-        let bufferCursor = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || bufferCursor < 0 || bufferCursor + DOCUMENT_HEADER_SIZE + DOCUMENT_ALIGNMENT > this.readBufferLength) {
-            this.fillBuffer(position);
-            bufferCursor = 0;
+        const cursor = this.headerSize + position;
+        if (cursor + DOCUMENT_HEADER_SIZE >= this.mmapBuffer.byteLength) {
+            return ({ buffer: null, cursor: 0, length: 0 });
         }
-        return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
+        return ({
+            buffer: this.mmapBuffer,
+            cursor,
+            length: this.mmapBuffer.byteLength
+        });
     }
 
     /**
-     * Prepare the read buffer for reading *before* the specified position. Don't try to reader *after* the returned cursor.
+     * Return a reader anchored *before* `position` inside the memory-mapped buffer.
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading before.
-     * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object with properties `buffer`, `cursor` and `length`.
+     * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object.
      */
     prepareReadBufferBackwards(position) {
-        if (position < 0) {
+        if (position < 0 || !this.mmapBuffer) {
             return ({ buffer: null, cursor: 0, length: 0 });
         }
-        let bufferCursor = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE) || bufferCursor > this.readBufferLength) {
-            this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
-            bufferCursor = position - this.readBufferPos;
+        const cursor = this.headerSize + position;
+        if (cursor > this.mmapBuffer.byteLength) {
+            return ({ buffer: null, cursor: 0, length: 0 });
         }
-        return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
+        return ({
+            buffer: this.mmapBuffer,
+            cursor,
+            length: this.mmapBuffer.byteLength
+        });
     }
 
     /**
-     * Read the data from the given position.
+     * Read the data from the given position using the zero-copy memory-mapped buffer for flushed data.
      *
      * @api
      * @param {number} position The file position to read from.
@@ -265,11 +307,10 @@ class ReadablePartition extends events.EventEmitter {
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
         const reader = this.prepareReadBuffer(position);
-        if (reader.length < size + DOCUMENT_HEADER_SIZE) {
+        if (!reader.buffer) {
             return false;
         }
 
-        let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
         const { dataSize, sequenceNumber, time64 } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
         if (headerOut !== null) {
             headerOut.dataSize = dataSize;
@@ -283,19 +324,17 @@ class ReadablePartition extends events.EventEmitter {
             throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
         }
 
-        if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
-            //console.log('sync read for large document size', dataLength, 'at position', position);
+        const dataStart = reader.cursor + DOCUMENT_HEADER_SIZE;
+        const dataEnd = dataStart + dataSize;
+
+        // For very large documents that exceed the current buffer boundary, fall back to a direct read.
+        if (dataEnd > reader.buffer.byteLength) {
             const tempReadBuffer = Buffer.allocUnsafe(dataSize);
             fs.readSync(this.fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
             return tempReadBuffer.toString('utf8');
         }
 
-        if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
-            this.fillBuffer(position);
-            dataPosition = DOCUMENT_HEADER_SIZE;
-        }
-
-        return reader.buffer.toString('utf8', dataPosition, dataPosition + dataSize);
+        return reader.buffer.toString('utf8', dataStart, dataEnd);
     }
 
     /**

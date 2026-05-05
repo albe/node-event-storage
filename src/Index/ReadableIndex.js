@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
+import mmap from '@fayzanx/mmap-io';
 import Entry, { assertValidEntryClass } from '../IndexEntry.js';
 import { assert, wrapAndCheck, binarySearch } from '../util.js';
 
@@ -72,11 +73,30 @@ class ReadableIndex extends events.EventEmitter {
         this.EntryClass = options.EntryClass;
         this.dataDirectory = options.dataDirectory;
         this.fileName = path.resolve(options.dataDirectory, this.name);
+        // Small scratch buffer used only during checkFile / readMetadata (before mmap is set up).
         this.readBuffer = Buffer.allocUnsafe(Math.max(options.EntryClass.size, options.writeBufferSize > 0 ? options.writeBufferSize : 4096));
+        this.mmapBuffer = null;
 
         if (options.metadata) {
             this.metadata = Object.assign({entryClass: options.EntryClass.name, entrySize: options.EntryClass.size}, options.metadata);
         }
+    }
+
+    /**
+     * Map the index file into memory for zero-copy reads.
+     * Called from open() after headerSize is known.
+     *
+     * @protected
+     */
+    _mmapIndexFile() {
+        const stat = fs.fstatSync(this.fd);
+        if (stat.size <= this.headerSize) {
+            this.mmapBuffer = null;
+            this.readBuffer = null;
+            return;
+        }
+        this.mmapBuffer = mmap.map(stat.size, mmap.PROT_READ, mmap.MAP_SHARED, this.fd, 0);
+        this.readBuffer = this.mmapBuffer;
     }
 
     /**
@@ -154,6 +174,7 @@ class ReadableIndex extends events.EventEmitter {
         this.readUntil = -1;
 
         const length = this.readFileLength();
+        this._mmapIndexFile();
         if (length > 0) {
             this.data = new Array(length);
             // Read last item to get the index started
@@ -234,7 +255,12 @@ class ReadableIndex extends events.EventEmitter {
     close() {
         this.data = [];
         this.readUntil = -1;
-        this.readBuffer.fill(0);
+        // Do not fill the mmap buffer with zeroes - that would corrupt the file.
+        if (this.readBuffer && this.readBuffer !== this.mmapBuffer) {
+            this.readBuffer.fill(0);
+        }
+        this.mmapBuffer = null;
+        this.readBuffer = null;
         if (this.fd) {
             fs.closeSync(this.fd);
             this.fd = null;
@@ -242,7 +268,7 @@ class ReadableIndex extends events.EventEmitter {
     }
 
     /**
-     * Read a single index entry from the given index position.
+     * Read a single index entry from the memory-mapped buffer.
      * Will prevent reading if the entry has already been read sequentially from the start.
      *
      * @private
@@ -252,17 +278,16 @@ class ReadableIndex extends events.EventEmitter {
     read(index) {
         index = Number(index) - 1;
 
-        fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
         if (index === this.readUntil + 1) {
             this.readUntil++;
         }
-        this.data[index] = this.EntryClass.fromBuffer(this.readBuffer);
+        this.data[index] = this.EntryClass.fromBuffer(this.mmapBuffer, this.headerSize + index * this.EntryClass.size);
 
         return this.data[index];
     }
 
     /**
-     * Read a range of entries from disk. This method will not do any range checks.
+     * Read a range of entries from the memory-mapped buffer. This method will not do any range checks.
      * It will however optimize to prevent reading entries that have already been read sequentially from start.
      *
      * @private
@@ -281,16 +306,8 @@ class ReadableIndex extends events.EventEmitter {
         const readFrom = Math.max(this.readUntil + 1, from);
         const amount = (until - readFrom + 1);
 
-        const bufferSize = amount * this.EntryClass.size;
-        const readBuffer = bufferSize <= this.readBuffer.byteLength
-            ? this.readBuffer
-            : Buffer.allocUnsafe(bufferSize);
-        let readSize = fs.readSync(this.fd, readBuffer, 0, bufferSize, this.headerSize + readFrom * this.EntryClass.size);
-        let index = 0;
-        while (index < amount && readSize > 0) {
-            this.data[index + readFrom] = this.EntryClass.fromBuffer(readBuffer, index * this.EntryClass.size);
-            readSize -= this.EntryClass.size;
-            index++;
+        for (let i = 0; i < amount; i++) {
+            this.data[readFrom + i] = this.EntryClass.fromBuffer(this.mmapBuffer, this.headerSize + (readFrom + i) * this.EntryClass.size);
         }
         if (from <= this.readUntil + 1) {
             this.readUntil = Math.max(this.readUntil, until);
