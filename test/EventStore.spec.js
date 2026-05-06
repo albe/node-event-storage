@@ -1706,6 +1706,63 @@ describe('EventStore', function() {
     // -------------------------------------------------------------------------
     describe('typeAccessor', function() {
 
+        describe('string path form', function() {
+
+            it('creates a type stream lazily on first commit', function(done) {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+                expect(eventstore.getStreamVersion('OrderPlaced')).to.be(-1);
+                eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 1 }], () => {
+                    expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                    done();
+                });
+            });
+
+            it('query() returns events once the type has been committed', function(done) {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+                eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 42 }], () => {
+                    const { stream } = eventstore.query(['OrderPlaced']);
+                    expect(stream.events.length).to.be(1);
+                    expect(stream.events[0].orderId).to.be(42);
+                    done();
+                });
+            });
+
+            it('silently skips type stream creation when accessor path resolves to falsy', function(done) {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+                eventstore.commit('s', [{ noType: true }], () => {
+                    expect(Object.keys(eventstore.streams).filter(n => !n.startsWith('_'))).to.eql(['s']);
+                    done();
+                });
+            });
+
+            it('supports nested dot-notation path (e.g. meta.kind)', function(done) {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'meta.kind' });
+                eventstore.commit('order-1', [{ meta: { kind: 'OrderPlaced' }, orderId: 7 }], () => {
+                    expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                    const { stream } = eventstore.query(['OrderPlaced']);
+                    expect(stream.events.length).to.be(1);
+                    expect(stream.events[0].orderId).to.be(7);
+                    done();
+                });
+            });
+
+            it('auto-adds the accessor path to matcherProperties so type-stream matchers get discriminant routing', function() {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'eventKind' });
+                // 'payload.eventKind' is not in the default list, so it must have been injected.
+                const props = eventstore.storage.indexMatcher.properties;
+                expect(props).to.contain('payload.eventKind');
+            });
+
+            it('does not duplicate the path when it is already in matcherProperties', function() {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+                // 'payload.type' is already in the default list — must not appear twice.
+                const props = eventstore.storage.indexMatcher.properties;
+                const count = props.filter(p => p === 'payload.type').length;
+                expect(count).to.be(1);
+            });
+
+        });
+
         it('creates a type stream lazily on first commit', function(done) {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
             expect(eventstore.getStreamVersion('OrderPlaced')).to.be(-1);

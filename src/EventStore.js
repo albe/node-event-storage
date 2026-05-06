@@ -6,12 +6,38 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
-import { assert, scanForFiles } from './util.js';
+import { assert, scanForFiles, getPropertyAtPath } from './util.js';
 
 const ExpectedVersion = {
     Any: -1,
     EmptyStream: 0
 };
+
+/**
+ * Default ordered list of document property paths mirroring the Storage default, used when
+ * a string `typeAccessor` needs to inject an additional discriminant path.
+ */
+const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
+
+/**
+ * Builds a factory function that, given a type string, returns an object matcher for
+ * documents whose payload contains that type at the given dot-notation path.  The path
+ * is split once at construction time so repeated calls in the commit hot-path avoid
+ * re-parsing the string.
+ *
+ * @param {string} payloadPath Dot-notation path relative to the event payload (e.g. `'type'`, `'meta.kind'`).
+ * @returns {function(string): object} A function `(typeValue) => objectMatcher`.
+ */
+function buildTypeMatcherFn(payloadPath) {
+    const parts = payloadPath.split('.');
+    return function(typeValue) {
+        let obj = typeValue;
+        for (let i = parts.length - 1; i >= 0; i--) {
+            obj = { [parts[i]]: obj };
+        }
+        return { payload: obj };
+    };
+}
 
 class OptimisticConcurrencyError extends Error {}
 
@@ -54,13 +80,19 @@ class EventStore extends events.EventEmitter {
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
-     * @param {function(object): string} [config.typeAccessor] An optional function `(event) => string` that
-     *   returns the event type for a given event payload.  When provided, `commit()` automatically ensures a
-     *   dedicated type stream exists for each committed event (using the returned value as the stream name)
-     *   before writing the event to its entity stream.  Enables {@link EventStore#query} to treat missing
-     *   type streams as empty (0-length) rather than throwing — because the stream would have been created
-     *   on the first matching commit.  When `typeAccessor` returns a falsy value for an event the event is
-     *   treated as "untyped" and no type stream is created for it.
+     * @param {function(object): string|string} [config.typeAccessor] An optional function `(event) => string`
+     *   **or a dot-notation property path string** (e.g. `'type'`, `'meta.kind'`) that identifies the event
+     *   type in a given event payload.  When provided, `commit()` automatically ensures a dedicated type
+     *   stream exists for each committed event (using the returned/resolved value as the stream name) before
+     *   writing the event to its entity stream.  Enables {@link EventStore#query} to treat missing type
+     *   streams as empty (0-length) rather than throwing — because the stream would have been created on the
+     *   first matching commit.  When the accessor returns a falsy value for an event the event is treated as
+     *   "untyped" and no type stream is created for it.
+     *
+     *   **Prefer the string form** when the type lives at a fixed payload property: it produces an object
+     *   matcher for each type stream so the `IndexMatcher` discriminant table can route index lookups in O(1)
+     *   on every write.  The corresponding full document path (`payload.<path>`) is automatically added to
+     *   `storageConfig.matcherProperties` if not already present.
      * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
@@ -73,7 +105,14 @@ class EventStore extends events.EventEmitter {
             storeName = 'eventstore';
         }
 
-        this.typeAccessor = typeof config.typeAccessor === 'function' ? config.typeAccessor : null;
+        if (typeof config.typeAccessor === 'string' && config.typeAccessor) {
+            const accessorPath = config.typeAccessor;
+            this.typeAccessor = (event) => getPropertyAtPath(event, accessorPath);
+            this.typeMatcherFn = buildTypeMatcherFn(accessorPath);
+        } else {
+            this.typeAccessor = typeof config.typeAccessor === 'function' ? config.typeAccessor : null;
+            this.typeMatcherFn = null;
+        }
 
         this.storageDirectory = path.resolve(config.storageDirectory || /* istanbul ignore next */ './data');
         let defaults = {
@@ -83,6 +122,17 @@ class EventStore extends events.EventEmitter {
             readOnly: config.readOnly || false
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
+
+        // When typeAccessor is a string path, ensure the corresponding full document path
+        // (payload.<path>) is present in matcherProperties so the IndexMatcher discriminant
+        // table can route type-stream lookups in O(1) on every write.
+        if (this.typeMatcherFn) {
+            const fullPath = 'payload.' + config.typeAccessor;
+            const currentProps = storageConfig.matcherProperties || DEFAULT_MATCHER_PROPERTIES;
+            if (!currentProps.includes(fullPath)) {
+                storageConfig.matcherProperties = [...currentProps, fullPath];
+            }
+        }
 
         // Translate the high-level streamMetadata option into the storage-level metadata function,
         // but only when the caller has not already provided a lower-level storageConfig.metadata.
@@ -435,7 +485,10 @@ class EventStore extends events.EventEmitter {
             for (const event of events) {
                 const type = this.typeAccessor(event);
                 if (type && !(type in this.streams)) {
-                    this.createEventStream(type, (doc) => this.typeAccessor(doc.payload) === type, false);
+                    const matcher = this.typeMatcherFn
+                        ? this.typeMatcherFn(type)
+                        : (doc) => this.typeAccessor(doc.payload) === type;
+                    this.createEventStream(type, matcher, false);
                 }
             }
         }
