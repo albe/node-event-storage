@@ -46,7 +46,7 @@ const store = new EventStore('my-store', {
 
 3. **Any stream name can be used for entity partitioning.**  You are free to commit events to whatever stream names make sense for your domain (e.g. `order-42`, `customer-7`).  The type index is maintained as a separate secondary index independently of the entity stream.
 
-When `typeAccessor` returns a falsy value for an event (e.g. the event has no `type` field), no type stream is created for that event — it is treated as "untyped" and skipped silently.
+When `typeAccessor` returns a falsy value for an event (e.g. the event has no `type` field), no type stream is created for that event — the event is still committed to its entity stream as normal, but type-stream maintenance is skipped for it.
 
 ---
 
@@ -66,7 +66,7 @@ const { stream, condition } = store.query(
 
 The optional `matcher` is a function `(payload, metadata) => boolean` that qualifies **which events are in scope**.  Only events for which the matcher returns truthy appear in `stream`, and only those events can cause a conflict at commit time.
 
-Domain identifiers and tags should be encoded in the `matcher` for now.  A future release may introduce a native tag-based query syntax.
+Domain identifiers and tags are encoded in the `matcher`.  See [The DCB Specification: Types and Tags](#the-dcb-specification-types-and-tags) below for the pattern.
 
 ### Step 2 — Build the Transaction Context
 

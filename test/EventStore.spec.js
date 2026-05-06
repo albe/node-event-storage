@@ -1730,8 +1730,10 @@ describe('EventStore', function() {
         it('silently skips type stream creation when typeAccessor returns a falsy value', function(done) {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
             eventstore.commit('s', [{ noType: true }], () => {
-                // No type stream should have been created
-                expect(Object.keys(eventstore.streams).filter(n => n !== '_all')).to.eql(['s']);
+                // Only the entity stream 's' should have been created; no type stream
+                expect(eventstore.getStreamVersion('s')).to.be(1);
+                expect(eventstore.getStreamVersion('undefined')).to.be(-1);
+                expect(Object.keys(eventstore.streams).filter(n => !n.startsWith('_'))).to.eql(['s']);
                 done();
             });
         });
