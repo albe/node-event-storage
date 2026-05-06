@@ -54,10 +54,13 @@ class EventStore extends events.EventEmitter {
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
-     * @param {boolean} [config.dcbMode] Enable Dynamic Consistency Boundary (DCB) mode. In this mode
-     *   users commit events to type-named streams (stream name = event type) and
-     *   {@link EventStore#query} creates per-type stream indexes without requiring a full store scan.
-     *   See the DCB documentation for the full workflow.
+     * @param {function(object): string} [config.typeAccessor] An optional function `(event) => string` that
+     *   returns the event type for a given event payload.  When provided, `commit()` automatically ensures a
+     *   dedicated type stream exists for each committed event (using the returned value as the stream name)
+     *   before writing the event to its entity stream.  Enables {@link EventStore#query} to treat missing
+     *   type streams as empty (0-length) rather than throwing — because the stream would have been created
+     *   on the first matching commit.  When `typeAccessor` returns a falsy value for an event the event is
+     *   treated as "untyped" and no type stream is created for it.
      * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
@@ -70,7 +73,7 @@ class EventStore extends events.EventEmitter {
             storeName = 'eventstore';
         }
 
-        this.dcbMode = config.dcbMode || false;
+        this.typeAccessor = typeof config.typeAccessor === 'function' ? config.typeAccessor : null;
 
         this.storageDirectory = path.resolve(config.storageDirectory || /* istanbul ignore next */ './data');
         let defaults = {
@@ -426,6 +429,17 @@ class EventStore extends events.EventEmitter {
             throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
         }
 
+        // When typeAccessor is configured, ensure a dedicated type stream exists for each event
+        // before the entity stream write so the type stream index is never incomplete.
+        if (this.typeAccessor) {
+            for (const event of events) {
+                const type = this.typeAccessor(event);
+                if (type && !(type in this.streams)) {
+                    this.createEventStream(type, (doc) => this.typeAccessor(doc.payload) === type, false);
+                }
+            }
+        }
+
         if (events.length > 1) {
             delete metadata.commitVersion;
         }
@@ -471,11 +485,18 @@ class EventStore extends events.EventEmitter {
     /**
      * Query the event store for events matching a set of event types and an optional filter function.
      * Returns a pre-filtered event stream and a {@link Condition} that can be passed to
-     * {@link EventStore#commit} to enforce DCB-style optimistic concurrency.
+     * {@link EventStore#commit} to enforce optimistic concurrency.
      *
      * A conflict occurs when at least one event appended between the `query` call and the `commit` call
      * belongs to one of the listed types and (when `matcher` is provided) also satisfies
      * `matcher(payload, metadata)`.  Events written before the `query` call are never treated as conflicts.
+     *
+     * **Behaviour when a type stream does not exist:**
+     * - Without `typeAccessor` configured: throws an error, because the store cannot guarantee that no
+     *   events of that type exist (the stream was never created).  Create the stream explicitly first,
+     *   or configure `typeAccessor` to have streams created automatically on commit.
+     * - With `typeAccessor` configured: treats the missing stream as empty (0-length).  The stream will
+     *   be created automatically the first time an event of that type is committed.
      *
      * @api
      * @param {string[]} types A non-empty array of event-type names to query.
@@ -493,26 +514,34 @@ class EventStore extends events.EventEmitter {
      *   - `stream` — a read-only event stream containing all matching events ordered by global
      *     sequence number.  Iterate it to build the transaction context before calling `commit`.
      * @throws {Error} if `types` is not a non-empty array.
-     * @throws {Error} if the storage was opened in read-only mode and a type stream does not exist yet.
+     * @throws {Error} if `typeAccessor` is not configured and any of the listed type streams do not exist.
      */
     query(types, matcher = null, minRevision = 1) {
         assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for query.');
 
+        const queryTypes = [];
         for (const type of types) {
             if (!(type in this.streams)) {
-                assert(!(this.storage instanceof ReadOnlyStorage), `The storage was opened in read-only mode and the type stream "${type}" does not exist yet.`);
-                // In DCB mode events are committed to type-named streams, so {stream:type} is
-                // the correct matcher and no reindexing is needed for a store created in DCB mode.
-                // In standard mode events are committed to entity streams, so scan by payload.type.
-                const matcherObj = this.dcbMode ? { stream: type } : { payload: { type } };
-                const reindex = !this.dcbMode;
-                this.createEventStream(type, matcherObj, reindex);
+                if (this.typeAccessor) {
+                    // typeAccessor is configured: type streams are created on commit, so a missing
+                    // stream simply means no event of this type has been committed yet — treat as empty.
+                    continue;
+                }
+                // No typeAccessor: the stream was never created; we cannot know whether events of
+                // this type exist in the store, so throw to avoid an unintentional full-store scan.
+                throw new Error(`Type stream "${type}" does not exist. Create it with createEventStream() first, or configure typeAccessor to have type streams created automatically on commit.`);
             }
+            queryTypes.push(type);
         }
 
         const version = this.storage.length;
         const condition = new Condition(types, version, matcher);
-        const stream = this.fromStreams('_query_' + types.join('_'), types, minRevision, -1, matcher);
+        // When all requested types are missing (only possible with typeAccessor), return an empty stream.
+        if (queryTypes.length === 0) {
+            const stream = new EventStream('_query_' + types.join('_'), this);
+            return { stream, condition };
+        }
+        const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher);
         return { stream, condition };
     }
 
