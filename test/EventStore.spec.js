@@ -1730,7 +1730,7 @@ describe('EventStore', function() {
             it('silently skips type stream creation when accessor path resolves to falsy', function(done) {
                 eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
                 eventstore.commit('s', [{ noType: true }], () => {
-                    expect(Object.keys(eventstore.streams).filter(n => !n.startsWith('_'))).to.eql(['s']);
+                    expect(Object.keys(eventstore.streams).filter(name => !name.startsWith('_'))).to.eql(['s']);
                     done();
                 });
             });

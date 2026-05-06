@@ -127,7 +127,7 @@ class EventStore extends events.EventEmitter {
         // (payload.<path>) is present in matcherProperties so the IndexMatcher discriminant
         // table can route type-stream lookups in O(1) on every write.
         if (this.typeMatcherFn) {
-            const fullPath = 'payload.' + config.typeAccessor;
+            const fullPath = `payload.${config.typeAccessor}`;
             const currentProps = storageConfig.matcherProperties || DEFAULT_MATCHER_PROPERTIES;
             if (!currentProps.includes(fullPath)) {
                 storageConfig.matcherProperties = [...currentProps, fullPath];
