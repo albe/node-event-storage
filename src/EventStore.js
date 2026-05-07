@@ -7,6 +7,7 @@ import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from '
 import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert, scanForFiles, getPropertyAtPath } from './util.js';
+import { buildTypeMatcherFn } from './metadataUtil.js';
 
 const ExpectedVersion = {
     Any: -1,
@@ -14,30 +15,9 @@ const ExpectedVersion = {
 };
 
 /**
- * Default ordered list of document property paths mirroring the Storage default, used when
- * a string `typeAccessor` needs to inject an additional discriminant path.
+ * Default matcher property paths mirroring the Storage default, used for index optimization.
  */
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
-
-/**
- * Builds a factory function that, given a type string, returns an object matcher for
- * documents whose payload contains that type at the given dot-notation path.  The path
- * is split once at construction time so repeated calls in the commit hot-path avoid
- * re-parsing the string.
- *
- * @param {string} payloadPath Dot-notation path relative to the event payload (e.g. `'type'`, `'meta.kind'`).
- * @returns {function(string): object} A function `(typeValue) => objectMatcher`.
- */
-function buildTypeMatcherFn(payloadPath) {
-    const parts = payloadPath.split('.');
-    return function(typeValue) {
-        let obj = typeValue;
-        for (let i = parts.length - 1; i >= 0; i--) {
-            obj = { [parts[i]]: obj };
-        }
-        return { payload: obj };
-    };
-}
 
 class OptimisticConcurrencyError extends Error {}
 
@@ -49,20 +29,20 @@ class OptimisticConcurrencyError extends Error {}
  * the store between the `query` call and the `commit` call.
  *
  * @property {string[]} types   The event types included in the query.
- * @property {number}   version The global store length (total event count) at the time the query was made.
  * @property {function(object, object): boolean|null} matcher An optional function `(payload, metadata) => boolean`
  *   used to narrow the conflict check.  When `null`, any new event of a listed type causes a conflict.
+ * @property {number}   noneMatchAfter The global store length (total event count) at the time the query was made.
  */
-class Condition {
+class CommitCondition {
     /**
      * @param {string[]} types
-     * @param {number}   version
      * @param {function(object, object): boolean|null} [matcher]
+     * @param {number}   noneMatchAfter
      */
-    constructor(types, version, matcher = null) {
+    constructor(types, matcher, noneMatchAfter) {
         this.types = types;
-        this.version = version;
         this.matcher = matcher;
+        this.noneMatchAfter = noneMatchAfter;
     }
 }
 
@@ -80,19 +60,9 @@ class EventStore extends events.EventEmitter {
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
-     * @param {function(object): string|string} [config.typeAccessor] An optional function `(event) => string`
-     *   **or a dot-notation property path string** (e.g. `'type'`, `'meta.kind'`) that identifies the event
-     *   type in a given event payload.  When provided, `commit()` automatically ensures a dedicated type
-     *   stream exists for each committed event (using the returned/resolved value as the stream name) before
-     *   writing the event to its entity stream.  Enables {@link EventStore#query} to treat missing type
-     *   streams as empty (0-length) rather than throwing — because the stream would have been created on the
-     *   first matching commit.  When the accessor returns a falsy value for an event the event is treated as
-     *   "untyped" and no type stream is created for it.
-     *
-     *   **Prefer the string form** when the type lives at a fixed payload property: it produces an object
-     *   matcher for each type stream so the `IndexMatcher` discriminant table can route index lookups in O(1)
-     *   on every write.  The corresponding full document path (`payload.<path>`) is automatically added to
-     *   `storageConfig.matcherProperties` if not already present.
+     * @param {string|function(object): string} [config.typeAccessor] Dot-notation path (e.g. `'type'`) or
+     *   function `(event) => string` identifying the event type. Enables type-based queries via
+     *   {@link EventStore#query} and ensures proper index routing for those queries.
      * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
@@ -383,16 +353,16 @@ class EventStore extends events.EventEmitter {
      *
      * @private
      * @param {Array<object>|object} events
-     * @param {number|Condition} [expectedVersion]
+     * @param {number|CommitCondition} [expectedVersion]
      * @param {object|function} [metadata]
      * @param {function} [callback]
-     * @returns {{events: Array<object>, metadata: object, callback: function, expectedVersion: number|Condition}}
+     * @returns {{events: Array<object>, metadata: object, callback: function, expectedVersion: number|CommitCondition}}
      */
     static fixArgumentTypes(events, expectedVersion, metadata, callback) {
         if (!(events instanceof Array)) {
             events = [events];
         }
-        if (typeof expectedVersion !== 'number' && !(expectedVersion instanceof Condition)) {
+        if (typeof expectedVersion !== 'number' && !(expectedVersion instanceof CommitCondition)) {
             callback = metadata;
             metadata = expectedVersion;
             expectedVersion = ExpectedVersion.Any;
@@ -408,28 +378,26 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Check a {@link Condition} against the current state of the store.
+     * Check a {@link CommitCondition} against the current state of the store.
      * Iterates a join stream over all condition type streams starting from
-     * `condition.version` (the global position captured at query time), and throws an
+     * `condition.noneMatchAfter` (the global position captured at query time), and throws an
      * {@link OptimisticConcurrencyError} when a new event of a listed type satisfies
      * `condition.matcher(payload, metadata)` (or any such event when no matcher is provided).
      *
-     * @param {Condition} condition
+     * @param {CommitCondition} condition
      * @throws {OptimisticConcurrencyError}
      */
     checkCondition(condition) {
-        if (this.storage.length <= condition.version) return; // no new events since condition was obtained
+        if (this.storage.length <= condition.noneMatchAfter) return; // no new events since condition was obtained
 
         const existingTypes = condition.types.filter(t => t in this.streams);
         if (existingTypes.length === 0) return;
 
-        // Use condition.version + 1 as the lower bound — events at or before condition.version
-        // existed at query time; only events appended after that position can be conflicts.
-        // The stream index seeks directly to that global sequence number position.
+        // Only events after condition.noneMatchAfter can be conflicts.
         const stream = this.fromStreams(
             '_check_' + condition.types.join('_'),
             existingTypes,
-            condition.version + 1
+            condition.noneMatchAfter + 1
         );
 
         let next;
@@ -450,12 +418,12 @@ class EventStore extends events.EventEmitter {
      * @api
      * @param {string} streamName The name of the stream to commit the events to.
      * @param {Array<object>|object} events The events to commit or a single event.
-     * @param {number|Condition} [expectedVersion] One of the `ExpectedVersion` constants, a positive
-     *   stream version number, or a {@link Condition} obtained from {@link EventStore#query}.
+     * @param {number|CommitCondition} [expectedVersion] One of the `ExpectedVersion` constants, a positive
+     *   stream version number, or a {@link CommitCondition} obtained from {@link EventStore#query}.
      * @param {object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
      * @param {function} [callback] A function that will be executed when all events have been committed.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version, or if a
-     *   {@link Condition} was provided and conflicting events have been committed since it was obtained.
+     *   {@link CommitCondition} was provided and conflicting events have been committed since it was obtained.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
@@ -464,19 +432,10 @@ class EventStore extends events.EventEmitter {
 
         ({ events, expectedVersion, metadata, callback } = EventStore.fixArgumentTypes(events, expectedVersion, metadata, callback));
 
-        // Perform DCB-style concurrency check when a Condition is provided.
-        if (expectedVersion instanceof Condition) {
+        // Perform DCB-style concurrency check when a CommitCondition is provided.
+        if (expectedVersion instanceof CommitCondition) {
             this.checkCondition(expectedVersion);
             expectedVersion = ExpectedVersion.Any;
-        }
-
-        if (!(streamName in this.streams)) {
-            this.createEventStream(streamName, { stream: streamName }, false);
-        }
-        assert(!this.streams[streamName].closed, `Stream "${streamName}" is closed and cannot be written to.`);
-        let streamVersion = this.streams[streamName].index.length;
-        if (expectedVersion !== ExpectedVersion.Any && streamVersion !== expectedVersion) {
-            throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
         }
 
         // When typeAccessor is configured, ensure a dedicated type stream exists for each event
@@ -491,6 +450,15 @@ class EventStore extends events.EventEmitter {
                     this.createEventStream(type, matcher, false);
                 }
             }
+        }
+
+        if (!(streamName in this.streams)) {
+            this.createEventStream(streamName, { stream: streamName }, false);
+        }
+        assert(!this.streams[streamName].closed, `Stream "${streamName}" is closed and cannot be written to.`);
+        let streamVersion = this.streams[streamName].index.length;
+        if (expectedVersion !== ExpectedVersion.Any && streamVersion !== expectedVersion) {
+            throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
         }
 
         if (events.length > 1) {
@@ -537,7 +505,7 @@ class EventStore extends events.EventEmitter {
 
     /**
      * Query the event store for events matching a set of event types and an optional filter function.
-     * Returns a pre-filtered event stream and a {@link Condition} that can be passed to
+     * Returns a pre-filtered event stream and a {@link CommitCondition} that can be passed to
      * {@link EventStore#commit} to enforce optimistic concurrency.
      *
      * A conflict occurs when at least one event appended between the `query` call and the `commit` call
@@ -553,19 +521,12 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string[]} types A non-empty array of event-type names to query.
-     * @param {function(object, object): boolean|null} [matcher] An optional filter function
-     *   `(payload, metadata) => boolean`.  Only events for which this function returns truthy are
-     *   included in the returned stream.  The same function is used during the conflict check at commit
-     *   time: a new event of a listed type is only treated as a conflict when the matcher also returns
-     *   truthy for it.  When omitted, all events of the listed types are included and any new event of
-     *   those types will be a conflict.
-     * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned
-     *   stream (inclusive).  Defaults to 1 (full history).  Use a higher value to start iteration from
-     *   a known position, e.g. to resume after a previously observed event.
-     * @returns {{ condition: Condition, stream: EventStream }} An object with:
-     *   - `condition` — the {@link Condition} to pass to {@link EventStore#commit}.
-     *   - `stream` — a read-only event stream containing all matching events ordered by global
-     *     sequence number.  Iterate it to build the transaction context before calling `commit`.
+     * @param {function(object, object): boolean|null} [matcher] An optional filter function `(payload, metadata) => boolean`
+     *   passed to the returned {@link CommitCondition}.
+     * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned stream (inclusive).
+     * @returns {{ condition: CommitCondition, stream: EventStream }} An object with:
+     *   - `condition` — the {@link CommitCondition} to pass to {@link EventStore#commit}.
+     *   - `stream` — a read-only event stream containing all matching events.
      * @throws {Error} if `types` is not a non-empty array.
      * @throws {Error} if `typeAccessor` is not configured and any of the listed type streams do not exist.
      */
@@ -587,13 +548,7 @@ class EventStore extends events.EventEmitter {
             queryTypes.push(type);
         }
 
-        const version = this.storage.length;
-        const condition = new Condition(types, version, matcher);
-        // When all requested types are missing (only possible with typeAccessor), return an empty stream.
-        if (queryTypes.length === 0) {
-            const stream = new EventStream('_query_' + types.join('_'), this);
-            return { stream, condition };
-        }
+        const condition = new CommitCondition(types, matcher, this.storage.length);
         const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher);
         return { stream, condition };
     }
@@ -642,9 +597,20 @@ class EventStore extends events.EventEmitter {
     fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null) {
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
+        if (streamNames.length === 0) {
+            return new EventStream(streamName, this);
+        }
+
         for (let stream of streamNames) {
             assert(stream in this.streams, `Stream "${stream}" does not exist.`);
         }
+
+        if (streamNames.length === 1) {
+            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate);
+            stream.name = streamName;
+            return stream;
+        }
+
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate);
     }
 
@@ -801,4 +767,4 @@ EventStore.Storage = Storage;
 EventStore.Index = Index;
 
 export default EventStore;
-export { ExpectedVersion, OptimisticConcurrencyError, Condition, LOCK_THROW, LOCK_RECLAIM };
+export { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM };

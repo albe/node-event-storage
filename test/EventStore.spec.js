@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import fsSync from 'fs';
 import path from 'path';
-import EventStore, { ExpectedVersion, OptimisticConcurrencyError, Condition, LOCK_RECLAIM } from '../src/EventStore.js';
+import EventStore, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
 import Consumer from '../src/Consumer.js';
 import { fileURLToPath } from 'url';
 
@@ -1543,17 +1543,17 @@ describe('EventStore', function() {
         it('returns a condition and a stream', function() {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
             const { condition, stream } = eventstore.query(['OrderPlaced']);
-            expect(condition).to.be.a(Condition);
+            expect(condition).to.be.a(CommitCondition);
             expect(condition.types).to.eql(['OrderPlaced']);
-            expect(condition.version).to.be(0);
+            expect(condition.noneMatchAfter).to.be(0);
             expect(stream).not.to.be(false);
         });
 
-        it('captures the current store length as condition.version', function(done) {
+        it('captures the current store length as condition.noneMatchAfter', function(done) {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
             eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
                 const { condition } = eventstore.query(['OrderPlaced', 'OrderShipped']);
-                expect(condition.version).to.be(1);
+                expect(condition.noneMatchAfter).to.be(1);
                 done();
             });
         });
@@ -1634,9 +1634,9 @@ describe('EventStore', function() {
     });
 
     // -------------------------------------------------------------------------
-    // commit() with Condition
+    // commit() with CommitCondition
     // -------------------------------------------------------------------------
-    describe('commit with Condition', function() {
+    describe('commit with CommitCondition', function() {
 
         it('commits successfully when no events appeared since the condition', function(done) {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
