@@ -168,11 +168,7 @@ queryItems = [
 ]
 ```
 
-An event matches the query when **any** query item matches it: the event's type must be in that item's `types` list **and** the event must carry **all** of that item's tags:
-
-```
-event matches query  ⟺  ∃ q ∈ queryItems :  event.type ∈ q.types  ∧  q.tags ⊆ event.tags
-```
+An event matches the query when **any** query item matches it: the event's type must be in that item's `types` list **and** the event must carry **all** of that item's tags.
 
 In node-event-storage this pattern is expressed today using the `matcher` function parameter of `query()`. The union of all types from every query item is passed as the `types` array, and the multi-item logic is encoded in the matcher:
 

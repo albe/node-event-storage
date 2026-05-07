@@ -1,53 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 985 270" width="985" height="270" role="img" aria-labelledby="dcb-title1">
-  <title id="dcb-title1">Traditional aggregate model — the Course aggregate grows with CourseCreated, CourseRenamed and CourseCapacityChanged while StudentSubscribedToCourse is ambiguous between the Course and Student aggregates</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 215" width="880" height="215" role="img" aria-labelledby="dcb-agg-title">
+  <title id="dcb-agg-title">Traditional aggregate model: Course Aggregate (left column) and Student Aggregate (right column) with StudentSubscribedToCourse floating ambiguously between them</title>
   <defs>
-    <marker id="arr-q" markerWidth="8" markerHeight="7" refX="8" refY="3.5" orient="auto">
-      <polygon points="0 0,8 3.5,0 7" fill="#9ca3af"/>
+    <marker id="arr-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#9ca3af"/>
     </marker>
   </defs>
 
-  <rect width="985" height="270" fill="#ffffff"/>
+  <rect width="880" height="215" fill="#ffffff"/>
 
-  <!-- ── Course Aggregate (large, growing) ── -->
-  <rect x="10" y="12" width="575" height="213" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
-  <text x="297" y="36" text-anchor="middle" font-size="14" font-family="sans-serif" font-weight="bold" fill="#1d4ed8">Course Aggregate</text>
+  <!-- Course Aggregate column -->
+  <rect x="3" y="50" width="467" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="236" y="68" text-anchor="middle" font-size="13" font-family="sans-serif" font-weight="bold" fill="#1d4ed8">Course Aggregate</text>
 
-  <!-- Course events — row 1 -->
-  <rect x="25" y="52" width="150" height="36" rx="5" fill="white" stroke="#93c5fd" stroke-width="1.2"/>
-  <text x="100" y="75" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCreated</text>
+  <!-- Student Aggregate column -->
+  <rect x="752" y="50" width="120" height="80" rx="8" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+  <text x="812" y="68" text-anchor="middle" font-size="13" font-family="sans-serif" font-weight="bold" fill="#15803d">Student Aggregate</text>
 
-  <rect x="188" y="52" width="150" height="36" rx="5" fill="white" stroke="#93c5fd" stroke-width="1.2"/>
-  <text x="263" y="75" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseRenamed</text>
+  <!-- CourseCreated -->
+  <rect x="10" y="85" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="75" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCreated</text>
 
-  <rect x="350" y="52" width="50" height="36" rx="5" fill="#f9fafb" stroke="#d1d5db" stroke-width="1"/>
-  <text x="375" y="76" text-anchor="middle" font-size="18" font-family="sans-serif" fill="#9ca3af">···</text>
+  <!-- CourseRenamed -->
+  <rect x="148" y="85" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="213" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseRenamed</text>
 
-  <!-- Course events — row 2 -->
-  <rect x="25" y="115" width="183" height="36" rx="5" fill="white" stroke="#93c5fd" stroke-width="1.2"/>
-  <text x="116" y="138" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCapacityChanged</text>
+  <!-- CourseCapacityChanged -->
+  <rect x="286" y="85" width="182" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="377" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCapacityChanged</text>
 
-  <rect x="220" y="115" width="150" height="36" rx="5" fill="white" stroke="#93c5fd" stroke-width="1.2"/>
-  <text x="295" y="138" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseFullyBooked</text>
+  <!-- StudentSubscribedToCourse (floating between the two aggregate columns) -->
+  <rect x="520" y="85" width="200" height="36" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="620" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" font-weight="bold" fill="#78350f">StudentSubscribedToCourse</text>
 
-  <rect x="382" y="115" width="50" height="36" rx="5" fill="#f9fafb" stroke="#d1d5db" stroke-width="1"/>
-  <text x="407" y="139" text-anchor="middle" font-size="18" font-family="sans-serif" fill="#9ca3af">···</text>
+  <!-- StudentCreated -->
+  <rect x="760" y="85" width="104" height="36" rx="5" fill="#dcfce7" stroke="#86efac" stroke-width="1.2"/>
+  <text x="812" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">StudentCreated</text>
 
-  <!-- ── Student Aggregate ── -->
-  <rect x="757" y="12" width="218" height="110" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
-  <text x="866" y="35" text-anchor="middle" font-size="14" font-family="sans-serif" font-weight="bold" fill="#15803d">Student Aggregate</text>
+  <!-- Left "?" arrow: StudentSubscribedToCourse → Course Aggregate -->
+  <line x1="520" y1="103" x2="472" y2="103" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-a)"/>
+  <text x="496" y="98" text-anchor="middle" font-size="18" font-family="sans-serif" font-weight="bold" fill="#9ca3af">?</text>
 
-  <rect x="771" y="50" width="190" height="36" rx="5" fill="white" stroke="#86efac" stroke-width="1.2"/>
-  <text x="866" y="73" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">StudentCreated</text>
-
-  <!-- ── StudentSubscribedToCourse (ambiguous, floating between aggregates) ── -->
-  <rect x="622" y="228" width="228" height="35" rx="6" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
-  <text x="736" y="250" text-anchor="middle" font-size="11" font-family="sans-serif" font-weight="bold" fill="#78350f">StudentSubscribedToCourse</text>
-
-  <!-- Arrow: SSFC → Course Aggregate (left, with "?") -->
-  <line x1="622" y1="246" x2="588" y2="183" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-q)"/>
-  <text x="592" y="225" text-anchor="middle" font-size="17" font-family="sans-serif" fill="#9ca3af" font-weight="bold">?</text>
-
-  <!-- Arrow: SSFC → Student Aggregate (right, with "?") -->
-  <line x1="850" y1="228" x2="820" y2="124" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-q)"/>
-  <text x="855" y="188" text-anchor="middle" font-size="17" font-family="sans-serif" fill="#9ca3af" font-weight="bold">?</text>
+  <!-- Right "?" arrow: StudentSubscribedToCourse → Student Aggregate -->
+  <line x1="720" y1="103" x2="750" y2="103" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-a)"/>
+  <text x="736" y="98" text-anchor="middle" font-size="18" font-family="sans-serif" font-weight="bold" fill="#9ca3af">?</text>
 </svg>
