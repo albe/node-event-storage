@@ -411,6 +411,25 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
+     * Ensure a dedicated type stream exists for each event's type, creating it if needed.
+     * Must be called before the entity stream is created to guarantee correct index routing.
+     *
+     * @param {Array<object>} events The events to process.
+     */
+    ensureTypeStreams(events) {
+        if (!this.typeAccessor) return;
+        for (const event of events) {
+            const type = this.typeAccessor(event);
+            if (type && !(type in this.streams)) {
+                const matcher = this.typeMatcherFn
+                    ? this.typeMatcherFn(type)
+                    : (doc) => this.typeAccessor(doc.payload) === type;
+                this.createEventStream(type, matcher, false);
+            }
+        }
+    }
+
+    /**
      * Commit a list of events for the given stream name, which is expected to be at the given version.
      * Note that the events committed may still appear in other streams too - the given stream name is only
      * relevant for optimistic concurrency checks with the given expected version.
@@ -440,17 +459,7 @@ class EventStore extends events.EventEmitter {
 
         // When typeAccessor is configured, ensure a dedicated type stream exists for each event
         // before the entity stream write so the type stream index is never incomplete.
-        if (this.typeAccessor) {
-            for (const event of events) {
-                const type = this.typeAccessor(event);
-                if (type && !(type in this.streams)) {
-                    const matcher = this.typeMatcherFn
-                        ? this.typeMatcherFn(type)
-                        : (doc) => this.typeAccessor(doc.payload) === type;
-                    this.createEventStream(type, matcher, false);
-                }
-            }
-        }
+        this.ensureTypeStreams(events);
 
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName }, false);
