@@ -3,7 +3,7 @@ import path from 'path';
 import events from 'events';
 import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
-import { assert, wrapAndCheck, kWayMerge } from '../util.js';
+import { assert, wrapAndCheck, kWayMerge, scanForFilesSync } from '../util.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
 import IndexMatcher from '../IndexMatcher.js';
 import PartitionPool from '../PartitionPool.js';
@@ -165,16 +165,13 @@ class ReadableStorage extends events.EventEmitter {
         this.partitionConfig = Object.assign(defaults, config);
         this.partitions = new PartitionPool(config.maxOpenPartitions);
 
-        const files = fs.readdirSync(this.dataDirectory);
-        for (let file of files) {
-            if (file.substr(-6) === '.index') continue;
-            if (file.substr(-7) === '.branch') continue;
-            if (file.substr(-5) === '.lock') continue;
-            if (file.substr(0, this.storageFile.length) !== this.storageFile) continue;
-
+        const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(`^(${escaped}.*)$`);
+        scanForFilesSync(this.dataDirectory, pattern, (file) => {
+            if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
             const partition = this.createPartition(file, this.partitionConfig);
             this.partitions.add(partition.id, partition);
-        }
+        });
     }
 
     /**
