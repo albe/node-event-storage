@@ -39,7 +39,7 @@ class CommitCondition {
      * @param {function(object, object): boolean|null} [matcher]
      * @param {number}   noneMatchAfter
      */
-    constructor(types, matcher, noneMatchAfter) {
+    constructor(types, matcher = null, noneMatchAfter) {
         this.types = types;
         this.matcher = matcher;
         this.noneMatchAfter = noneMatchAfter;
