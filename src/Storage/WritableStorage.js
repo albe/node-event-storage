@@ -69,7 +69,7 @@ class WritableStorage extends ReadableStorage {
      * @inheritDoc
      * Acquires the write lock synchronously.
      * For LOCK_RECLAIM, removes any orphaned lock before trying to acquire our own; torn-write
-     * repair is deferred until after the partition scan (partitions must be loaded first).
+     * repair is deferred via onScanned (partitions must be loaded first).
      *
      * @returns {boolean}
      * @throws {StorageLockedError} If this storage is locked by another process.
@@ -85,22 +85,7 @@ class WritableStorage extends ReadableStorage {
             return true;
         }
 
-        if (this._initialized === true) {
-            this.openIndexes();
-            return true;
-        }
-        if (this._initialized === false) {
-            return true;
-        }
-
-        this._initialized = false;
-        this.scanFiles(() => {
-            if (this._initialized === null) return;
-            if (needsRepair) this.checkTornWrites();
-            this._initialized = true;
-            this.openIndexes();
-        });
-        return true;
+        return super.open(needsRepair ? () => this.checkTornWrites() : undefined);
     }
 
     /**

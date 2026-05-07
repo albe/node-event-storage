@@ -21,6 +21,6 @@
 
 ## Testing
 
-- Use `once('opened', ...)` (not `on`) when waiting for the first-open event in tests.
-- Use `once('index-created', ...)` to avoid double-firing when both the scan and a file-watcher can emit the same event.
-- After a `close()` + `open()` cycle, secondary indexes are not eagerly re-opened; call `index.open()` explicitly before checking `index.length` in tests.
+- Prefer `once` over `on` for one-shot assertions on events that fire exactly once per lifecycle (e.g. `'opened'`, `'ready'`, `'index-created'` from a single scan).
+- After a `close()` + `open()` cycle, resources not eagerly re-opened must be opened explicitly before use.
+- Test interactions with the storage lifecycle (scan in progress, re-open, concurrent calls) using the events and callbacks the API provides.

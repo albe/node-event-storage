@@ -186,12 +186,23 @@ class ReadableStorage extends events.EventEmitter {
         });
     }
 
+    /**
+     * @protected
+     */
     openIndexes() {
         this.index.open();
         this.emit('opened');
     }
 
-    open() {
+    /**
+     * Open the storage; emits `'opened'` once ready.
+     * First call scans partitions and indexes asynchronously. Re-opens after `close()` are synchronous.
+     *
+     * @api
+     * @param {function} [onScanned] Called after scan completes, before indexes open.
+     * @returns {boolean}
+     */
+    open(onScanned) {
         if (this._initialized === true) {
             this.openIndexes();
             return true;
@@ -203,6 +214,7 @@ class ReadableStorage extends events.EventEmitter {
         this.scanFiles(() => {
             // Guard: close() while scanning resets _initialized to null.
             if (this._initialized === null) return;
+            if (onScanned) onScanned();
             this._initialized = true;
             this.openIndexes();
         });

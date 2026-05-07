@@ -78,14 +78,8 @@ class EventStore extends events.EventEmitter {
         this.streams = Object.create(null);
         this.streams._all = { index: this.storage.index };
 
-        // Streams found during storage.open()'s index scan, and streams created at runtime,
-        // are both announced via 'index-created'.  Register the handler before open() so that
-        // every event from the scan is received.
         this.storage.on('index-created', this.registerStream.bind(this));
 
-        // Storage emits 'opened' once the partition+index scan is complete and the primary
-        // index is open.  That is the point at which EventStore can safely check commits and
-        // announce its own 'ready'.
         this.storage.on('opened', () => {
             this.checkUnfinishedCommits();
             this.emit('ready');
