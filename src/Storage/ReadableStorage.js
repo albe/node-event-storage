@@ -199,7 +199,7 @@ class ReadableStorage extends events.EventEmitter {
      * First call scans partitions and indexes asynchronously. Re-opens after `close()` are synchronous.
      *
      * @api
-     * @param {function} [onScanned] Called after scan completes, before indexes open.
+     * @param {function(): void} [onScanned] Called after scan completes, before indexes open.
      * @returns {boolean}
      */
     open(onScanned) {
