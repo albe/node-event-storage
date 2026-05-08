@@ -75,11 +75,7 @@ class WritableStorage extends ReadableStorage {
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open() {
-        const needsRepair = this._lockMode === LOCK_RECLAIM && fs.existsSync(this.lockFile);
-        if (needsRepair) {
-            fs.rmdirSync(this.lockFile);
-            this.locked = false;
-        }
+        const needsRepair = this._lockMode === LOCK_RECLAIM && this.unlock();
 
         if (!this.lock()) {
             return true;
@@ -243,15 +239,16 @@ class WritableStorage extends ReadableStorage {
      * Unlock this storage, no matter if it was previously locked by this writer.
      * Only use this if you are sure there is no other process still having a writer open.
      * Current implementation just deletes a lock file that is named like the storage.
+     * @returns {boolean} True if an orphaned lock from another process was removed.
      */
     unlock() {
-        if (fs.existsSync(this.lockFile)) {
-            if (!this.locked) {
-                this.checkTornWrites();
-            }
+        const lockExists = fs.existsSync(this.lockFile);
+        const orphaned = lockExists && !this.locked;
+        if (lockExists) {
             fs.rmdirSync(this.lockFile);
         }
         this.locked = false;
+        return orphaned;
     }
 
     /**
