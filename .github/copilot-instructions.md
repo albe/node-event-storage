@@ -15,8 +15,9 @@
 - **`'opened'` event**: emitted by Storage once the first async scan + primary index open completes. EventStore listens to `'opened'` to emit its own `'ready'`.
 - **`'index-created'` event**: emitted by Storage during `scanFiles()` for each existing secondary index file found. EventStore uses this to register streams without its own directory scan.
 - **Secondary indexes open on demand**: only the primary index is opened eagerly in `openIndexes()`. Secondary indexes are opened lazily on first access.
-- **`_initialized` three-state**: `null` = not started (or scan cancelled by `close()`), `false` = scan in progress, `true` = scan done. Re-opens after `close()` are synchronous.
-- **LOCK_RECLAIM in `open()`**: orphaned lock removal and torn-write repair both live in `WritableStorage.open()`, directly before the `lock()` call. Use a closure-captured local variable (`needsRepair`) — no instance flags.
+- **`initialized` three-state**: `null` = not started (or scan cancelled by `close()`), `false` = scan in progress, `true` = scan done. Re-opens after `close()` are synchronous.
+- **LOCK_RECLAIM in `open()`**: orphaned lock removal lives in `WritableStorage.open()`, directly before the `lock()` call; torn-write repair runs via the `open(callback)` hook after the primary index is open. Use a closure-captured local variable (`needsRepair`) — no instance flags.
+- **`open(callback)` hook**: the optional callback passed to `open()` fires after `openIndexes()` and before `'opened'` is emitted — a synchronous alternative to listening for `'opened'`. Used by `WritableStorage` for torn-write repair and available for callers that need to run code immediately after the index is ready.
 - **EventStore `initialize()`**: register `storage.on('index-created', ...)` *before* calling `storage.open()` so scan-phase events are not missed.
 
 ## Testing

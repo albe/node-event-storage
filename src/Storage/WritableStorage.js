@@ -69,19 +69,22 @@ class WritableStorage extends ReadableStorage {
      * @inheritDoc
      * Acquires the write lock synchronously.
      * For LOCK_RECLAIM, removes any orphaned lock before trying to acquire our own; torn-write
-     * repair is deferred via onScanned (partitions must be loaded first).
+     * repair runs after the primary index is open, before `'opened'` is emitted.
      *
      * @returns {boolean}
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
-    open() {
+    open(callback) {
         const needsRepair = this._lockMode === LOCK_RECLAIM && this.unlock();
 
         if (!this.lock()) {
             return true;
         }
 
-        return super.open(needsRepair ? () => this.checkTornWrites() : undefined);
+        const onOpen = needsRepair
+            ? () => { this.checkTornWrites(); if (callback) callback(); }
+            : callback;
+        return super.open(onOpen);
     }
 
     /**

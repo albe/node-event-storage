@@ -193,7 +193,6 @@ class ReadableStorage extends events.EventEmitter {
      */
     openIndexes() {
         this.index.open();
-        this.emit('opened');
     }
 
     /**
@@ -202,12 +201,15 @@ class ReadableStorage extends events.EventEmitter {
      * Will emit an `'opened'` event when finished.
      *
      * @api
-     * @param {function(): void} [onScanned] Called after scan completes, before indexes open.
+     * @param {function(): void} [callback] Called after indexes open, before `'opened'` is emitted.
+     *   Can be used as a synchronous alternative to listening to the `'opened'` event.
      * @returns {boolean}
      */
-    open(onScanned) {
+    open(callback) {
         if (this.initialized === true) {
             this.openIndexes();
+            if (callback) callback();
+            this.emit('opened');
             return true;
         }
         if (this.initialized === false) {
@@ -217,15 +219,19 @@ class ReadableStorage extends events.EventEmitter {
         this.scanFiles(() => {
             // Guard: close() while scanning resets initialized to null.
             if (this.initialized === null) return;
-            if (onScanned) onScanned();
             this.initialized = true;
             this.openIndexes();
+            if (callback) callback();
+            this.emit('opened');
         });
         return true;
     }
 
     /**
+     * Close the storage and frees up all resources.
      * Will emit a 'closed' event when finished.
+     *
+     * @api
      */
     close() {
         // Cancel in-progress scan so the callback does not re-open after an explicit close.

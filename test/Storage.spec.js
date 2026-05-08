@@ -132,16 +132,16 @@ describe('Storage', function() {
 
         it('returns the amount of documents in the storage', function(done) {
             storage = createStorage();
-            storage.open();
-            storage.once('opened', () => {
+            storage.open(() => {
                 for (let i = 1; i <= 10; i++) {
                     storage.write({ foo: 'bar' });
                     expect(storage.length).to.be(i);
                 }
                 storage.close();
-                storage.open();  // scan already done → opens synchronously
-                expect(storage.length).to.be(10);
-                done();
+                storage.open(() => {
+                    expect(storage.length).to.be(10);
+                    done();
+                });
             });
         });
 
