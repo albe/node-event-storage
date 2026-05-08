@@ -4,7 +4,7 @@
 
 **Dynamic Consistency Boundary** (DCB) is a pattern for event-sourced systems where the unit of consistency is defined at command-handling time rather than fixed to a single aggregate stream.
 
-In traditional event-sourcing each command targets one aggregate (e.g. `order-42`) and optimistic concurrency is enforced by checking that aggregate stream's version.
+In traditional event-sourcing each command targets one aggregate (e.g. `order-42`) and optimistic concurrency is enforced by checking the aggregate stream's version.
 
 DCB generalises this: the consistency boundary is expressed as a **query** over a set of event types (and an optional filter). Before reading, a **condition** captures the current global position in the event log. After building state from those events, the handler commits its new events together with the condition. The commit engine then checks whether any new matching events appeared — if so, a conflict is raised.
 
@@ -83,7 +83,7 @@ const store = new EventStore('my-store', {
 });
 ```
 
-`typeAccessor` accepts a dot-notation path string (e.g. `'type'`, `'meta.kind'`) pointing to the event type field. The path form also registers the field in the storage index properties for O(1) routing. For non-standard event layouts a function `(event) => string` can be used instead.
+`typeAccessor` accepts a dot-notation path string (e.g. `'type'`, `'meta.kind'`) pointing to the event type field, which also enables faster index routing. For non-standard event layouts a function `(event) => string` can be used instead.
 
 When configured, `query()` treats a missing type stream as empty rather than throwing — a type that has never been committed yet is simply an empty result.
 
