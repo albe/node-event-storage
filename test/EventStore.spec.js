@@ -1737,11 +1737,14 @@ describe('EventStore', function() {
             });
         });
 
-        it('stores the matcher in the condition', function() {
+        it('causes an OCC error when a matched event appeared since the condition', function(done) {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
-            const m = (payload, metadata) => payload.orderId === 'x';
-            const { condition } = eventstore.query(['OrderPlaced'], m);
-            expect(condition.matcher).to.be(m);
+            const { condition } = eventstore.query(['OrderPlaced'], (payload) => payload.orderId === 'abc');
+            eventstore.commit('order-abc', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
+                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', id: 2 }], condition))
+                    .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
+                done();
+            });
         });
 
         it('passes payload and metadata as separate arguments to the matcher', function(done) {
@@ -1983,37 +1986,6 @@ describe('EventStore', function() {
                     expect(stream.events[0].orderId).to.be('xyz');
                     done();
                 });
-            });
-        });
-
-        it('commit with condition detects conflicts via type stream', function(done) {
-            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
-            const { condition } = eventstore.query(['OrderPlaced']);
-            eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 1 }], () => {
-                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', orderId: 2 }], condition))
-                    .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
-                done();
-            });
-        });
-
-        it('commit with condition succeeds when no conflicting events appeared', function(done) {
-            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
-            const { condition } = eventstore.query(['OrderPlaced']);
-            eventstore.commit('order-1', [{ type: 'OrderShipped', orderId: 1 }], () => {
-                expect(() => eventstore.commit('order-2', [{ type: 'OrderPaid', orderId: 2 }], condition))
-                    .to.not.throwError();
-                done();
-            });
-        });
-
-        it('commit with condition and matcher ignores non-matching new events', function(done) {
-            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
-            const matcher = (payload) => payload.orderId === 'xyz';
-            const { condition } = eventstore.query(['OrderPlaced'], matcher);
-            eventstore.commit('order-abc', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
-                expect(() => eventstore.commit('order-xyz', [{ type: 'OrderShipped', orderId: 'xyz' }], condition))
-                    .to.not.throwError();
-                done();
             });
         });
 
