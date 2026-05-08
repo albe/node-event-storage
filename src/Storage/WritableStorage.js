@@ -253,8 +253,7 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Cancels any in-progress first-open scan (so it does not re-open after an explicit close),
-     * unlocks the storage, then delegates to the parent close().
+     * Unlocks the storage, then delegates to the parent close().
      */
     close() {
         if (this.locked) {
