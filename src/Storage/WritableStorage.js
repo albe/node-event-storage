@@ -82,7 +82,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         const onOpen = needsRepair
-            ? () => { this.checkTornWrites(); if (callback) callback(); }
+            ? () => { this.checkTornWrites(); callback?.(); }
             : callback;
         return super.open(onOpen);
     }

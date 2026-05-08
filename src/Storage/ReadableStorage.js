@@ -208,7 +208,7 @@ class ReadableStorage extends events.EventEmitter {
     open(callback) {
         if (this.initialized === true) {
             this.openIndexes();
-            if (callback) callback();
+            callback?.();
             this.emit('opened');
             return true;
         }
@@ -221,7 +221,7 @@ class ReadableStorage extends events.EventEmitter {
             if (this.initialized === null) return;
             this.initialized = true;
             this.openIndexes();
-            if (callback) callback();
+            callback?.();
             this.emit('opened');
         });
         return true;
