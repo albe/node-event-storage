@@ -228,7 +228,7 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Close the storage and frees up all resources.
+     * Close the storage and free up all resources.
      * Will emit a 'closed' event when finished.
      *
      * @api
