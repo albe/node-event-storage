@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import fsSync from 'fs';
 import path from 'path';
-import EventStore, { ExpectedVersion, OptimisticConcurrencyError, LOCK_RECLAIM } from '../src/EventStore.js';
+import EventStore, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
 import Consumer from '../src/Consumer.js';
 import { fileURLToPath } from 'url';
 
@@ -1604,6 +1604,389 @@ describe('EventStore', function() {
             eventstore.on('ready', handler);
             eventstore.removeListener('ready', handler);
             // No assertion needed — just must not throw
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // Multi-value object matchers (Option 1)
+    // -------------------------------------------------------------------------
+    describe('multi-value object matchers', function() {
+
+        it('matches a document when its property equals any value in an array', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+
+            // Create a persistent stream that matches two event types using an array value.
+            eventstore.createEventStream('orders', {
+                payload: { type: ['OrderPlaced', 'OrderShipped'] }
+            });
+
+            eventstore.commit('order-1', [{ type: 'OrderPlaced',  orderId: 1 }], () => {
+                eventstore.commit('order-2', [{ type: 'OrderShipped', orderId: 2 }], () => {
+                    eventstore.commit('order-3', [{ type: 'OrderPaid', orderId: 3 }], () => {
+                        const stream = eventstore.getEventStream('orders');
+                        expect(stream.events.length).to.be(2);
+                        expect(stream.events[0].type).to.be('OrderPlaced');
+                        expect(stream.events[1].type).to.be('OrderShipped');
+                        done();
+                    });
+                });
+            });
+        });
+
+        it('uses the discriminant optimisation so the stream index is updated in O(1)', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            eventstore.createEventStream('typed', {
+                payload: { type: ['A', 'B'] }
+            });
+
+            let scanCount = 0;
+            const orig = eventstore.storage.forEachDocument.bind(eventstore.storage);
+            eventstore.storage.forEachDocument = (...args) => { scanCount++; return orig(...args); };
+
+            eventstore.commit('s', [{ type: 'A' }, { type: 'B' }, { type: 'C' }]);
+
+            // No full-store scan should have occurred for routing writes to the index.
+            expect(scanCount).to.be(0);
+            expect(eventstore.getStreamVersion('typed')).to.be(2);
+        });
+
+        it('does not match when the property value is not in the array', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.createEventStream('ab', { payload: { type: ['A', 'B'] } });
+            eventstore.commit('s', [{ type: 'C' }]);
+            expect(eventstore.getStreamVersion('ab')).to.be(0);
+        });
+
+        it('reindexes correctly when building from existing events', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('s', [{ type: 'A' }, { type: 'B' }, { type: 'C' }], () => {
+                const stream = eventstore.createEventStream('ab', { payload: { type: ['A', 'B'] } });
+                expect(stream.events.length).to.be(2);
+                done();
+            });
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // query() (standard mode)
+    // -------------------------------------------------------------------------
+    describe('query', function() {
+
+        it('throws when types is empty', function() {
+            eventstore = new EventStore({ storageDirectory });
+            expect(() => eventstore.query([])).to.throwError();
+        });
+
+        it('throws when types is not an array', function() {
+            eventstore = new EventStore({ storageDirectory });
+            expect(() => eventstore.query('OrderPlaced')).to.throwError();
+        });
+
+        it('returns a condition and a stream', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const { condition, stream } = eventstore.query(['OrderPlaced']);
+            expect(condition).to.be.a(CommitCondition);
+            expect(condition.types).to.eql(['OrderPlaced']);
+            expect(condition.noneMatchAfter).to.be(0);
+            expect(stream).not.to.be(false);
+        });
+
+        it('captures the current store length as condition.noneMatchAfter', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                const { condition } = eventstore.query(['OrderPlaced', 'OrderShipped']);
+                expect(condition.noneMatchAfter).to.be(1);
+                done();
+            });
+        });
+
+        it('returns a joined stream over multiple types', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('s', [{ type: 'A', n: 1 }], () => {
+                eventstore.commit('s', [{ type: 'B', n: 2 }], () => {
+                    const { stream } = eventstore.query(['A', 'B']);
+                    expect(stream.events.length).to.be(2);
+                    done();
+                });
+            });
+        });
+
+        it('the stream for a single type is a plain EventStream', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('s', [{ type: 'A', n: 1 }], () => {
+                const { stream } = eventstore.query(['A']);
+                const evs = stream.events;
+                expect(evs.length).to.be(1);
+                expect(evs[0].n).to.be(1);
+                done();
+            });
+        });
+
+        it('pre-filters the stream by the matcher function', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
+                eventstore.commit('order-2', [{ type: 'OrderPlaced', orderId: 'xyz' }], () => {
+                    const { stream } = eventstore.query(['OrderPlaced'], (payload) => payload.orderId === 'abc');
+                    expect(stream.events.length).to.be(1);
+                    expect(stream.events[0].orderId).to.be('abc');
+                    done();
+                });
+            });
+        });
+
+        it('causes an OCC error when a matched event appeared since the condition', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const { condition } = eventstore.query(['OrderPlaced'], (payload) => payload.orderId === 'abc');
+            eventstore.commit('order-abc', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
+                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', id: 2 }], condition))
+                    .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
+                done();
+            });
+        });
+
+        it('passes payload and metadata as separate arguments to the matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            let receivedPayload, receivedMetadata;
+            eventstore.commit('s', [{ type: 'A', val: 42 }], () => {
+                const { stream } = eventstore.query(['A'], (payload, metadata) => {
+                    receivedPayload = payload;
+                    receivedMetadata = metadata;
+                    return true;
+                });
+                stream.events; // trigger iteration
+                expect(receivedPayload.val).to.be(42);
+                expect(typeof receivedMetadata).to.be('object');
+                done();
+            });
+        });
+
+        it('throws when a type stream does not exist and typeAccessor is not configured', function() {
+            eventstore = new EventStore({ storageDirectory });
+            expect(() => eventstore.query(['OrderPlaced'])).to.throwError(/Type stream "OrderPlaced" does not exist/);
+        });
+
+        it('does not throw when a type stream does not exist and typeAccessor is configured', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            expect(() => eventstore.query(['OrderPlaced'])).to.not.throwError();
+        });
+
+        it('returns an empty stream for types with no committed events when typeAccessor is configured', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const { stream } = eventstore.query(['OrderPlaced']);
+            expect(stream.events.length).to.be(0);
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // commit() with CommitCondition
+    // -------------------------------------------------------------------------
+    describe('commit with CommitCondition', function() {
+
+        it('commits successfully when no events appeared since the condition', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                const { condition } = eventstore.query(['OrderPlaced']);
+                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', id: 2 }], condition)).to.not.throwError();
+                done();
+            });
+        });
+
+        it('throws when a new event of the type appeared since the condition (no matcher)', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const { condition } = eventstore.query(['OrderPlaced']);
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', id: 1 }], () => {
+                expect(() => eventstore.commit('order-2', [{ type: 'OrderShipped', id: 2 }], condition))
+                    .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
+                done();
+            });
+        });
+
+        it('does not throw when new events do not match the condition matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const matcher = (payload) => payload.orderId === 'xyz';
+            const { condition } = eventstore.query(['OrderPlaced'], matcher);
+            // Commit an OrderPlaced for a DIFFERENT order — should not conflict.
+            eventstore.commit('order-other', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
+                expect(() => eventstore.commit('order-xyz', [{ type: 'OrderShipped', orderId: 'xyz' }], condition))
+                    .to.not.throwError();
+                done();
+            });
+        });
+
+        it('throws when a new event matches the condition matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const matcher = (payload) => payload.orderId === 'xyz';
+            const { condition } = eventstore.query(['OrderPlaced'], matcher);
+            // Commit an OrderPlaced for the SAME order — should conflict.
+            eventstore.commit('order-xyz', [{ type: 'OrderPlaced', orderId: 'xyz' }], () => {
+                expect(() => eventstore.commit('order-xyz', [{ type: 'OrderShipped', orderId: 'xyz' }], condition))
+                    .to.throwError(e => expect(e).to.be.a(OptimisticConcurrencyError));
+                done();
+            });
+        });
+
+        it('accepts a condition together with a callback', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const { condition } = eventstore.query(['OrderPlaced']);
+            eventstore.commit('s', [{ type: 'OrderShipped' }], condition, (commit) => {
+                expect(commit.streamName).to.be('s');
+                done();
+            });
+        });
+
+        it('accepts a condition together with metadata and a callback', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const { condition } = eventstore.query(['OrderPlaced']);
+            eventstore.commit('s', [{ type: 'OrderShipped' }], condition, { extra: 'meta' }, (commit) => {
+                expect(commit.extra).to.be('meta');
+                done();
+            });
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // typeAccessor
+    // -------------------------------------------------------------------------
+    describe('typeAccessor', function() {
+
+        describe('string path form', function() {
+
+            it('creates a type stream lazily on first commit', function(done) {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+                expect(eventstore.getStreamVersion('OrderPlaced')).to.be(-1);
+                eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 1 }], () => {
+                    expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                    done();
+                });
+            });
+
+            it('query() returns events once the type has been committed', function(done) {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+                eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 42 }], () => {
+                    const { stream } = eventstore.query(['OrderPlaced']);
+                    expect(stream.events.length).to.be(1);
+                    expect(stream.events[0].orderId).to.be(42);
+                    done();
+                });
+            });
+
+            it('silently skips type stream creation when accessor path resolves to falsy', function(done) {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+                eventstore.commit('s', [{ noType: true }], () => {
+                    expect(Object.keys(eventstore.streams).filter(name => !name.startsWith('_'))).to.eql(['s']);
+                    done();
+                });
+            });
+
+            it('supports nested dot-notation path (e.g. meta.kind)', function(done) {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'meta.kind' });
+                eventstore.commit('order-1', [{ meta: { kind: 'OrderPlaced' }, orderId: 7 }], () => {
+                    expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                    const { stream } = eventstore.query(['OrderPlaced']);
+                    expect(stream.events.length).to.be(1);
+                    expect(stream.events[0].orderId).to.be(7);
+                    done();
+                });
+            });
+
+            it('auto-adds the accessor path to matcherProperties so type-stream matchers get discriminant routing', function() {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'eventKind' });
+                // 'payload.eventKind' is not in the default list, so it must have been injected.
+                const props = eventstore.storage.indexMatcher.properties;
+                expect(props).to.contain('payload.eventKind');
+            });
+
+            it('does not duplicate the path when it is already in matcherProperties', function() {
+                eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+                // 'payload.type' is already in the default list — must not appear twice.
+                const props = eventstore.storage.indexMatcher.properties;
+                const count = props.filter(p => p === 'payload.type').length;
+                expect(count).to.be(1);
+            });
+
+        });
+
+        it('creates a type stream lazily on first commit', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            expect(eventstore.getStreamVersion('OrderPlaced')).to.be(-1);
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 1 }], () => {
+                expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                done();
+            });
+        });
+
+        it('creates type streams for all event types in a multi-event commit', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [
+                { type: 'OrderPlaced', orderId: 1 },
+                { type: 'OrderShipped', orderId: 1 }
+            ], () => {
+                expect(eventstore.getStreamVersion('OrderPlaced')).to.be(1);
+                expect(eventstore.getStreamVersion('OrderShipped')).to.be(1);
+                done();
+            });
+        });
+
+        it('silently skips type stream creation when typeAccessor returns a falsy value', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('s', [{ noType: true }], () => {
+                // Only the entity stream 's' should have been created; no type stream
+                expect(eventstore.getStreamVersion('s')).to.be(1);
+                expect(eventstore.getStreamVersion('undefined')).to.be(-1);
+                expect(Object.keys(eventstore.streams).filter(n => !n.startsWith('_'))).to.eql(['s']);
+                done();
+            });
+        });
+
+        it('query() does not throw for missing type streams when typeAccessor is configured', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            expect(() => eventstore.query(['OrderPlaced'])).to.not.throwError();
+        });
+
+        it('query() returns an empty stream when typeAccessor is configured but type not yet committed', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const { stream } = eventstore.query(['OrderPlaced']);
+            expect(stream.events.length).to.be(0);
+        });
+
+        it('query() returns events once the type has been committed', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 42 }], () => {
+                const { stream } = eventstore.query(['OrderPlaced']);
+                expect(stream.events.length).to.be(1);
+                expect(stream.events[0].orderId).to.be(42);
+                done();
+            });
+        });
+
+        it('query() returns events in insertion order across multiple type streams', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'A', n: 1 }], () => {
+                eventstore.commit('order-2', [{ type: 'B', n: 2 }], () => {
+                    eventstore.commit('order-1', [{ type: 'A', n: 3 }], () => {
+                        const { stream } = eventstore.query(['A', 'B']);
+                        expect(stream.events.map(e => e.n)).to.eql([1, 2, 3]);
+                        done();
+                    });
+                });
+            });
+        });
+
+        it('query() stream is pre-filtered by the matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 'abc' }], () => {
+                eventstore.commit('order-2', [{ type: 'OrderPlaced', orderId: 'xyz' }], () => {
+                    const { stream } = eventstore.query(['OrderPlaced'], (payload) => payload.orderId === 'xyz');
+                    expect(stream.events.length).to.be(1);
+                    expect(stream.events[0].orderId).to.be('xyz');
+                    done();
+                });
+            });
         });
 
     });

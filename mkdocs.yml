@@ -15,6 +15,7 @@ nav:
   - Overview: index.md
   - Getting Started: getting-started.md
   - Event Streams: streams.md
+  - Dynamic Consistency Boundaries (DCB): dcb.md
   - Consumers: consumers.md
   - Advanced Topics: advanced.md
   - Performance: performance.md

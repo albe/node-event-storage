@@ -62,6 +62,8 @@ eventstore.on('ready', () => {
 | **Optimistic concurrency** | Pass `expectedVersion` to `commit()` to guarantee conflict-free writes. |
 | **Flexible stream reading** | Range queries, reverse iteration, and a fluent builder API. |
 | **Derived streams** | Filter or combine events into new read-only streams. |
+| **Multi-value matchers** | Object matchers support array values (OR semantics) and still benefit from O(1) discriminant routing on writes. |
+| **DCB / `typeAccessor`** | Configure `typeAccessor` to have per-type stream indexes maintained automatically, and use `query()` / `Condition` for fine-grained, query-scoped optimistic concurrency (Dynamic Consistency Boundaries). |
 | **Stream categories** | Name streams `<category>-<id>` and query the whole category at once. |
 | **Durable consumers** | At-least-once (and exactly-once with `setState`) event delivery with automatic position tracking. |
 | **Consistency guards** | Build aggregates that enforce business invariants with built-in snapshotting. |
@@ -79,6 +81,7 @@ The full documentation is hosted at **<https://node-event-storage.readthedocs.io
 
 - [Getting Started](https://node-event-storage.readthedocs.io/en/latest/getting-started/) — installation, constructor options, basic usage.
 - [Event Streams](https://node-event-storage.readthedocs.io/en/latest/streams/) — writing, reading, optimistic concurrency, fluent API, joining streams, categories, and event metadata.
+- [Dynamic Consistency Boundaries (DCB)](https://node-event-storage.readthedocs.io/en/latest/dcb/) — `typeAccessor`, multi-value matchers, consistency tokens, and the full DCB workflow.
 - [Consumers](https://node-event-storage.readthedocs.io/en/latest/consumers/) — at-least-once and exactly-once delivery, consumer state, consistency guards, and read-only mode.
 - [Advanced Topics](https://node-event-storage.readthedocs.io/en/latest/advanced/) — ACID properties, reliability and crash-safety guarantees, storage configuration, partitioning, custom serialization, compression, security, and access control hooks.
 

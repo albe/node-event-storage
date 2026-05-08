@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 215" width="880" height="215" role="img" aria-labelledby="dcb-boundary-title">
+  <title id="dcb-boundary-title">DCB model: same events with three non-nested dynamic consistency boundary bars — Rename Course, Change Course Capacity, and the cross-aggregate Subscribe Student to Course</title>
+
+  <rect width="880" height="215" fill="#ffffff"/>
+
+  <!-- CourseCreated (same position as diagram 1) -->
+  <rect x="10" y="85" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="75" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCreated</text>
+
+  <!-- CourseRenamed -->
+  <rect x="148" y="85" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="213" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseRenamed</text>
+
+  <!-- CourseCapacityChanged -->
+  <rect x="286" y="85" width="182" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="377" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCapacityChanged</text>
+
+  <!-- StudentSubscribedToCourse (same position as diagram 1) -->
+  <rect x="520" y="85" width="200" height="36" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="620" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" font-weight="bold" fill="#78350f">StudentSubscribedToCourse</text>
+
+  <!-- StudentCreated (same position as diagram 1) -->
+  <rect x="760" y="85" width="104" height="36" rx="5" fill="#dcfce7" stroke="#86efac" stroke-width="1.2"/>
+  <text x="812" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">StudentCreated</text>
+
+  <!-- Boundary bars (stacked below events, each at its own row — no nesting) -->
+
+  <!-- Rename Course (amber): CourseCreated + CourseRenamed -->
+  <rect x="8" y="137" width="272" height="20" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="144" y="151" text-anchor="middle" font-size="10" font-family="sans-serif" font-weight="bold" fill="#92400e">Rename Course</text>
+
+  <!-- Change Course Capacity (blue): CourseCreated + CourseCapacityChanged -->
+  <rect x="8" y="160" width="462" height="20" rx="4" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="239" y="174" text-anchor="middle" font-size="10" font-family="sans-serif" font-weight="bold" fill="#1e40af">Change Course Capacity</text>
+
+  <!-- Subscribe Student to Course (purple): spans all events, cross-aggregate -->
+  <rect x="8" y="183" width="856" height="20" rx="4" fill="#faf5ff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="436" y="197" text-anchor="middle" font-size="10" font-family="sans-serif" font-weight="bold" fill="#6b21a8">Subscribe Student to Course</text>
+</svg>

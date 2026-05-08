@@ -33,13 +33,16 @@ class EventStream extends stream.Readable {
      * @param {EventStore} eventStore The event store to get the stream from.
      * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {function(object, object): boolean|null} [predicate] An optional filter function
+     *   `(payload, metadata) => boolean`.  Only events for which this returns truthy are yielded.
      */
-    constructor(name, eventStore, minRevision = 1, maxRevision = -1) {
+    constructor(name, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {
         super({ objectMode: true });
         assert(typeof name === 'string' && name !== '', 'Need to specify a stream name.');
         assert(typeof eventStore === 'object' && eventStore !== null, `Need to provide EventStore instance to create EventStream ${name}.`);
 
         this.name = name;
+        this.predicate = predicate || null;
         if (eventStore.streams[name]) {
             this.streamIndex = eventStore.streams[name].index;
             this.minRevision = normalizeVersion(minRevision, this.streamIndex.length);
@@ -245,19 +248,40 @@ class EventStream extends stream.Readable {
     }
 
     /**
+     * Apply a filter predicate to this stream.  Only events for which `predicate(payload, metadata)`
+     * returns a truthy value will be yielded.  The predicate is stored as a first-class property
+     * of the stream and applied in {@link EventStream#next}.
+     *
+     * @api
+     * @param {function(object, object): boolean} predicate A function receiving `(payload, metadata)`.
+     *   Events for which the predicate returns falsy are skipped.
+     * @returns {EventStream} `this`
+     */
+    filter(predicate) {
+        this.predicate = predicate || null;
+        this._iterator = null;
+        this._events = null;
+        return this;
+    }
+
+    /**
      * @returns {object|boolean} The next event or false if no more events in the stream.
      */
     next() {
         if (!this._iterator) {
             this._iterator = this.fetch();
         }
-        let next;
         try {
-            next = this._iterator.next();
+            while (true) {
+                const result = this._iterator.next();
+                if (result.done) return false;
+                if (!this.predicate || this.predicate(result.value.payload, result.value.metadata)) {
+                    return result.value;
+                }
+            }
         } catch(e) {
             return false;
         }
-        return next.done ? false : next.value;
     }
 
     // noinspection JSUnusedGlobalSymbols

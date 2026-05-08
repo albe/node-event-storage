@@ -26,7 +26,11 @@ function matches(document, matcher) {
     if (typeof matcher === 'function') return matcher(document);
 
     for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (typeof matcher[prop] === 'object') {
+        if (Array.isArray(matcher[prop])) {
+            if (!matcher[prop].includes(document[prop])) {
+                return false;
+            }
+        } else if (typeof matcher[prop] === 'object') {
             if (!matches(document[prop], matcher[prop])) {
                 return false;
             }
@@ -71,9 +75,28 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
     return matcher;
 }
 
+/**
+ * Builds a factory function that, given a type string, returns an object matcher for
+ * documents whose payload contains that type at the given dot-notation path.
+ *
+ * @param {string} payloadPath Dot-notation path relative to the event payload (e.g. `'type'`, `'meta.kind'`).
+ * @returns {function(string): object} A function `(typeValue) => objectMatcher`.
+ */
+function buildTypeMatcherFn(payloadPath) {
+    const parts = payloadPath.split('.');
+    return function(typeValue) {
+        let obj = typeValue;
+        for (let i = parts.length - 1; i >= 0; i--) {
+            obj = { [parts[i]]: obj };
+        }
+        return { payload: obj };
+    };
+}
+
 export {
     createHmac,
     matches,
     buildMetadataForMatcher,
-    buildMatcherFromMetadata
+    buildMatcherFromMetadata,
+    buildTypeMatcherFn
 };

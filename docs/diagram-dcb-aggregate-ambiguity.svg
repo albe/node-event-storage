@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 215" width="880" height="215" role="img" aria-labelledby="dcb-agg-title">
+  <title id="dcb-agg-title">Traditional aggregate model: Course Aggregate (left column) and Student Aggregate (right column) with StudentSubscribedToCourse floating ambiguously between them</title>
+  <defs>
+    <marker id="arr-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#9ca3af"/>
+    </marker>
+  </defs>
+
+  <rect width="880" height="215" fill="#ffffff"/>
+
+  <!-- Course Aggregate column -->
+  <rect x="3" y="50" width="467" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="236" y="68" text-anchor="middle" font-size="13" font-family="sans-serif" font-weight="bold" fill="#1d4ed8">Course Aggregate</text>
+
+  <!-- Student Aggregate column -->
+  <rect x="752" y="50" width="120" height="80" rx="8" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+  <text x="812" y="68" text-anchor="middle" font-size="13" font-family="sans-serif" font-weight="bold" fill="#15803d">Student Aggregate</text>
+
+  <!-- CourseCreated -->
+  <rect x="10" y="85" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="75" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCreated</text>
+
+  <!-- CourseRenamed -->
+  <rect x="148" y="85" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="213" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseRenamed</text>
+
+  <!-- CourseCapacityChanged -->
+  <rect x="286" y="85" width="182" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="377" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCapacityChanged</text>
+
+  <!-- StudentSubscribedToCourse (floating between the two aggregate columns) -->
+  <rect x="520" y="85" width="200" height="36" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="620" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" font-weight="bold" fill="#78350f">StudentSubscribedToCourse</text>
+
+  <!-- StudentCreated -->
+  <rect x="760" y="85" width="104" height="36" rx="5" fill="#dcfce7" stroke="#86efac" stroke-width="1.2"/>
+  <text x="812" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">StudentCreated</text>
+
+  <!-- Left "?" arrow: StudentSubscribedToCourse → Course Aggregate -->
+  <line x1="520" y1="103" x2="472" y2="103" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-a)"/>
+  <text x="496" y="98" text-anchor="middle" font-size="18" font-family="sans-serif" font-weight="bold" fill="#9ca3af">?</text>
+
+  <!-- Right "?" arrow: StudentSubscribedToCourse → Student Aggregate -->
+  <line x1="720" y1="103" x2="750" y2="103" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-a)"/>
+  <text x="736" y="98" text-anchor="middle" font-size="18" font-family="sans-serif" font-weight="bold" fill="#9ca3af">?</text>
+</svg>
