@@ -2,85 +2,50 @@
 
 ## What is DCB?
 
-**Dynamic Consistency Boundary** (DCB) is a pattern for event-sourced systems where the unit of consistency — the "transaction boundary" — is defined at command-handling time rather than fixed to a single aggregate stream.
+**Dynamic Consistency Boundary** (DCB) is a pattern for event-sourced systems where the unit of consistency is defined at command-handling time rather than fixed to a single aggregate stream.
 
-In traditional event-sourcing each command targets one aggregate (e.g. `order-42`) and optimistic concurrency is enforced by checking that the aggregate's stream is at the expected version.
+In traditional event-sourcing each command targets one aggregate (e.g. `order-42`) and optimistic concurrency is enforced by checking that aggregate stream's version.
 
-DCB generalises this:
+DCB generalises this: the consistency boundary is expressed as a **query** over a set of event types (and an optional filter). Before reading, a **condition** captures the current global position in the event log. After building state from those events, the handler commits its new events together with the condition. The commit engine then checks whether any new matching events appeared — if so, a conflict is raised.
 
-- The consistency boundary is expressed as a **query**: _a set of event types_ (and an optional additional filter function) that the command handler cares about.
-- A **condition** is obtained before reading, capturing the current global position in the event log.
-- After building the transaction context from those events the handler commits its new events together with the condition.
-- The commit engine checks: did any new events appear that satisfy the original query? If yes, a conflict is raised; if no, the commit succeeds.
+This removes the need to route every command through a fixed aggregate, enabling commands that naturally span multiple entities while retaining strong consistency guarantees.
 
-This removes the need to route every command through a fixed aggregate, enabling commands that span multiple entities while retaining strong consistency guarantees without distributed locks.
+Consider the classic example from Sara Pellegrini's talk: students subscribing to courses. The event `StudentSubscribedToCourse` concerns both a Student and a Course — in a traditional aggregate model it is unclear which aggregate owns it, and the Course aggregate keeps growing with every new event type:
 
-Consider the classic DCB example from Sara Pellegrini's talk: students subscribing to courses. A course raises `CourseCreated`, `CourseRenamed`, and `CourseCapacityChanged`; a student raises `StudentCreated`. The event `StudentSubscribedToCourse` is ambiguous — it concerns both a Student and a Course — so in a traditional aggregate model it is unclear which aggregate owns it. Meanwhile the Course aggregate keeps growing with new event types:
+![Traditional aggregate model — the Course aggregate grows while StudentSubscribedToCourse is ambiguous between Course and Student](diagram-dcb-aggregate-ambiguity.svg)
 
-![Traditional aggregate model — the Course aggregate grows with CourseCreated, CourseRenamed and CourseCapacityChanged while StudentSubscribedToCourse is ambiguous between the Course and Student aggregates](diagram-dcb-aggregate-ambiguity.svg)
+DCB resolves this by letting each command handler declare exactly which events it needs to be consistent with. Different commands define different boundaries that can freely overlap:
 
-DCB resolves this by letting each command handler declare exactly which events it needs to be consistent with — a **dynamic** boundary defined at execution time, not at design time. Different decisions (commands) define different boundaries, and those boundaries can freely overlap. The `StudentSubscribedToCourse` event ends up inside a cross-aggregate boundary that also shares events with the course-only boundaries:
-
-![Multiple overlapping Dynamic Consistency Boundaries per decision — Rename Course, Change Course Capacity, and the cross-aggregate Subscribe Student to Course boundary](diagram-dcb-boundary.svg)
-
----
-
-## Enabling DCB-style Queries with `typeAccessor`
-
-To use `query()` the store needs per-type stream indexes.  Configure `typeAccessor` to have those indexes created automatically on every commit:
-
-```javascript
-import { EventStore } from 'event-storage';
-
-const store = new EventStore('my-store', {
-    storageDirectory: './data',
-    typeAccessor: (event) => event.type   // tell the store how to read the event type
-});
-```
-
-`typeAccessor` is a function `(event) => string` that returns the event type for a given event payload.  When configured:
-
-1. **Type streams are created automatically on commit.**  Before writing each event to its entity stream (e.g. `order-42`), the store ensures a dedicated type-stream index exists for the value returned by `typeAccessor`.  Because the index is created just before the write, it is always complete — no historical scan is needed (`reindex=false`).
-
-2. **`query()` treats missing type streams as empty (0-length)** rather than throwing.  A missing stream simply means no event of that type has been committed yet, which is a valid and expected state when the store is new or the type has never been used.
-
-3. **Any stream name can be used for entity partitioning.**  You are free to commit events to whatever stream names make sense for your domain (e.g. `order-42`, `customer-7`).  The type index is maintained as a separate secondary index independently of the entity stream.
-
-When `typeAccessor` returns a falsy value for an event (e.g. the event has no `type` field), no type stream is created for that event — the event is still committed to its entity stream as normal, but type-stream maintenance is skipped for it.
+![Multiple overlapping Dynamic Consistency Boundaries — Rename Course, Change Course Capacity, and the cross-aggregate Subscribe Student to Course boundary](diagram-dcb-boundary.svg)
 
 ---
 
 ## The DCB Workflow
 
-### Step 1 — Query for the Transaction Context
+### Step 1 — Query for the transaction context
 
 ```javascript
 const { stream, condition } = store.query(
-    ['OrderPlaced', 'OrderShipped'],  // event types to watch
-    (event, metadata) => event.orderId === 'order-42'  // optional additional filter
+    ['OrderPlaced', 'OrderShipped'],                           // event types to watch
+    (event, metadata) => event.orderId === 'order-42'          // optional filter
 );
 ```
 
-- `stream` — an `EventStream` pre-filtered to events of the given types that also satisfy the optional matcher.  Iterate it to build the transaction context.
-- `condition` — an accept condition capturing the current global event-log position.  Pass it to `commit()` to enforce the concurrency check.
+- `stream` — an `EventStream` filtered to events of the given types that also satisfy the optional matcher.
+- `condition` — captures the current global event-log position; pass it to `commit()` to enforce the concurrency check.
 
-The optional `matcher` is a function `(payload, metadata) => boolean` that qualifies **which events are in scope**.  Only events for which the matcher returns truthy appear in `stream`, and only those events can cause a conflict at commit time.
+The optional `matcher` narrows the boundary to exactly the events that would affect the decision — unrelated events of the same type (e.g. a different order) never cause spurious conflicts.
 
-Domain identifiers and tags are encoded in the `matcher`.  See [The DCB Specification: Types and Tags](#the-dcb-specification-types-and-tags) below for the pattern.
-
-### Step 2 — Build the Transaction Context
+### Step 2 — Build the decision model
 
 ```javascript
 const model = new OrderModel();
-
 stream.forEach((event, metadata) => {
     model.apply(event);
 });
 ```
 
-Because `stream` is already filtered by both the type list and the matcher, you can iterate it directly to build your decision model.
-
-### Step 3 — Commit with the Condition
+### Step 3 — Commit with the condition
 
 ```javascript
 try {
@@ -94,13 +59,9 @@ try {
 }
 ```
 
-The stream name passed to `commit()` is the entity stream (e.g. `'order-42'`).  The `typeAccessor` takes care of maintaining the type index so that subsequent `query()` calls remain O(1).
-
 ---
 
 ## Conflict Semantics
-
-The commit engine guarantees that under the scope of the query condition, no event matching the query has appeared since the condition was captured:
 
 | Scenario | Result |
 |----------|--------|
@@ -109,7 +70,26 @@ The commit engine guarantees that under the scope of the query condition, no eve
 | New events appeared and at least one matches the `matcher` | ❌ `OptimisticConcurrencyError` |
 | New events appeared and no `matcher` was provided | ❌ `OptimisticConcurrencyError` |
 
-Unrelated concurrent writes (same event type but different business entity) never cause spurious conflicts — the optional `matcher` lets you narrow the boundary to exactly the events that would actually affect the decision.
+---
+
+## Enabling DCB-style Queries with `typeAccessor`
+
+`query()` requires a named stream per event type. Configure `typeAccessor` to have those streams created and maintained automatically on every `commit()`:
+
+```javascript
+const store = new EventStore('my-store', {
+    storageDirectory: './data',
+    typeAccessor: 'type'   // dot-notation path to the type field in the event payload
+});
+```
+
+`typeAccessor` accepts a dot-notation path string (e.g. `'type'`, `'meta.kind'`) pointing to the event type field. The path form also registers the field in the storage index properties for O(1) routing. For non-standard event layouts a function `(event) => string` can be used instead.
+
+When configured, `query()` treats a missing type stream as empty rather than throwing — a type that has never been committed yet is simply an empty result.
+
+> **Without `typeAccessor`**, `query()` throws if a listed type stream does not exist. You must create it first with `createEventStream()`, or use type-named entity streams (e.g. `commit('OrderPlaced', ...)`).
+
+> **New stores only**: type indexes are built with `reindex=false` — they only cover events committed *after* the index was first created. Always configure `typeAccessor` from the beginning if you intend to use `query()`.
 
 ---
 
@@ -120,19 +100,17 @@ import { EventStore } from 'event-storage';
 
 const store = new EventStore('accounts', {
     storageDirectory: './data',
-    typeAccessor: (event) => event.type
+    typeAccessor: 'type'
 });
 
 store.on('ready', () => {
 
     function handleRegisterCustomer(command) {
-        // Query for any prior registration with the same email
         const { stream, condition } = store.query(
             ['CustomerRegistered'],
-            (event, metadata) => event.email === command.email
+            (event) => event.email === command.email
         );
 
-        // Build state: is this email already taken?
         let emailTaken = false;
         stream.forEach((event) => {
             if (event.email === command.email) emailTaken = true;
@@ -142,8 +120,6 @@ store.on('ready', () => {
             throw new Error(`Email ${command.email} is already registered`);
         }
 
-        // Commit to the customer entity stream.
-        // typeAccessor ensures the 'CustomerRegistered' type index is updated automatically.
         store.commit(`customer-${command.customerId}`, [
             { type: 'CustomerRegistered', customerId: command.customerId, email: command.email }
         ], condition);
@@ -157,7 +133,7 @@ store.on('ready', () => {
 
 ## The DCB Specification: Types and Tags
 
-The formal DCB specification (as described by Pellegrini) expresses a query as a list of **query items**, each pairing an array of event types with an array of **domain-identifier tags**:
+The formal DCB specification expresses a query as a list of **query items**, each pairing an array of event types with an array of **domain-identifier tags**:
 
 ```
 queryItems = [
@@ -168,18 +144,16 @@ queryItems = [
 ]
 ```
 
-An event matches the query when **any** query item matches it: the event's type must be in that item's `types` list **and** the event must carry **all** of that item's tags.
+An event matches when **any** item matches it: the event's type must be in that item's `types` **and** the event must carry **all** of that item's tags.
 
-In node-event-storage this pattern is expressed today using the `matcher` function parameter of `query()`. The union of all types from every query item is passed as the `types` array, and the multi-item logic is encoded in the matcher:
+In node-event-storage this is expressed today using the `matcher` function. Pass the union of all types, and encode the per-item logic in the matcher:
 
 ```javascript
 const courseId  = 'course:jdsj4';
 const studentId = 'student:gfh3j';
 
 const { stream, condition } = store.query(
-    // Union of all types across both query items
     ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
-    // Matcher encodes the per-item (type, tags) logic
     (event, meta) =>
         (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(meta.stream)
             && meta.tags?.includes(courseId))
@@ -189,30 +163,5 @@ const { stream, condition } = store.query(
 );
 ```
 
-Note that the type membership check in the matcher duplicates what is already expressed in the `types` array. This is a current limitation: node-event-storage does not yet support a native multi-item query API. Future versions may introduce tag-based secondary indexes and a structured query item format to avoid this duplication and to make tag-filtered queries as performant as type-filtered ones.
-
----
-
-## `query()` Behaviour by Configuration
-
-| Configuration | Missing type stream in `query()` | Type stream creation |
-|---|---|---|
-| Default (no `typeAccessor`) | **Throws** — create the stream first with `createEventStream()` or use type-named entity streams | Manual via `createEventStream()` |
-| With `typeAccessor` | Treated as **empty** (0-length) | Automatic on each `commit()` |
-
-In the default configuration (no `typeAccessor`) `query()` will throw if any of the listed type streams do not exist.  This prevents accidental full-store scans: if a stream was never created the store cannot know whether matching events exist.
-
-When using type-named entity streams (stream name = event type, e.g. `commit('OrderPlaced', ...)`) the type stream will exist as soon as the first event of that type has been committed, so `query()` will work without `typeAccessor` as long as every type listed has had at least one event committed.
-
-When `typeAccessor` is configured, type streams are maintained automatically and `query()` will never throw for a missing type — it simply returns an empty stream for types that have not yet seen any events.
-
----
-
-## Important Caveats
-
-### `typeAccessor` is for new stores
-
-Type indexes created via `typeAccessor` are built with `reindex=false`.  This means they only track events written *after* the index was first created.  If you open a pre-existing store and add `typeAccessor` for the first time, the type indexes will be incomplete for events that were written before.
-
-**Always configure `typeAccessor` from the beginning** if you intend to use `query()` with automatic type indexes.
+The type membership check in the matcher duplicates what is already expressed in the `types` array — this is a current limitation. Future versions may introduce tag-based secondary indexes and a native query-item format to remove this duplication.
 
