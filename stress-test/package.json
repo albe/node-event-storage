@@ -2,8 +2,10 @@
   "name": "event-storage-stress-test",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "description": "Stress tests for node-event-storage, checking crash-safety and data consistency",
   "scripts": {
-    "stress-test": "bash run.sh"
+    "stress-test": "bash run.sh",
+    "test": "mocha memory.spec.js stress.spec.js"
   }
 }
