@@ -21,4 +21,5 @@ nav:
   - Performance: performance.md
   - API Reference: api.md
   - Implementation Architecture: architecture.md
+  - Changelog: changelog.md
   - Upgrading from 0.x to 1.0: upgrading.md

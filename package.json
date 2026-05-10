@@ -1,6 +1,6 @@
 {
   "name": "event-storage",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "An optimized embedded event store for node.js",
   "keywords": [
