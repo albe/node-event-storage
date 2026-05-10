@@ -117,35 +117,7 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
     scanDir(directory, '', true, regexPattern, onEach, onDone);
 }
 
-/**
- * Synchronously scan a directory (and its subdirectories) for files whose relative paths match a
- * regex pattern, calling a callback for each match.
- *
- * Behaves identically to {@link scanForFiles} but uses synchronous fs calls, making it suitable
- * for use during object construction.
- *
- * @param {string} directory The root directory to scan.
- * @param {RegExp} regexPattern The pattern to match relative file paths against.
- * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching path.
- */
-function scanForFilesSync(directory, regexPattern, onEach) {
-    function scan(dir, relativePrefix) {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (let entry of entries) {
-            if (entry.isDirectory()) {
-                scan(path.join(dir, entry.name), relativePrefix + entry.name + '/');
-            } else {
-                visitMatchingPath(relativePrefix + entry.name, regexPattern, onEach);
-            }
-        }
-    }
-
-    scan(directory, '');
-}
-
 export {
     ensureDirectory,
     scanForFiles,
-    scanForFilesSync,
 };
-
