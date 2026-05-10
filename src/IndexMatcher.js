@@ -57,27 +57,30 @@ class IndexMatcher {
             this.functionMatchers.add(indexName);
             return;
         }
-        if (matcher && typeof matcher === 'object') {
-            const discriminant = this.findDiscriminant(matcher);
-            if (discriminant) {
-                let propMap = this.table.get(discriminant.propPath);
-                if (!propMap) {
-                    propMap = new Map();
-                    this.table.set(discriminant.propPath, propMap);
-                }
-                for (const v of discriminant.values) {
-                    let indexSet = propMap.get(v);
-                    if (!indexSet) {
-                        indexSet = new Set();
-                        propMap.set(v, indexSet);
-                    }
-                    indexSet.add(indexName);
-                }
-                return;
-            }
+        if (!matcher || typeof matcher !== 'object') {
+            this.unclassifiedMatchers.add(indexName);
+            return;
         }
-        // null/undefined matcher or object with no usable discriminant property.
-        this.unclassifiedMatchers.add(indexName);
+
+        const discriminant = this.findDiscriminant(matcher);
+        if (!discriminant) {
+            this.unclassifiedMatchers.add(indexName);
+            return;
+        }
+
+        let propMap = this.table.get(discriminant.propPath);
+        if (!propMap) {
+            propMap = new Map();
+            this.table.set(discriminant.propPath, propMap);
+        }
+        for (const v of discriminant.values) {
+            let indexSet = propMap.get(v);
+            if (!indexSet) {
+                indexSet = new Set();
+                propMap.set(v, indexSet);
+            }
+            indexSet.add(indexName);
+        }
     }
 
     /**
@@ -97,16 +100,20 @@ class IndexMatcher {
             this.functionMatchers.delete(indexName);
             return;
         }
-        if (matcher && typeof matcher === 'object') {
-            const discriminant = this.findDiscriminant(matcher);
-            if (discriminant) {
-                for (const v of discriminant.values) {
-                    this.table.get(discriminant.propPath)?.get(v)?.delete(indexName);
-                }
-                return;
-            }
+        if (!matcher || typeof matcher !== 'object') {
+            this.unclassifiedMatchers.delete(indexName);
+            return;
         }
-        this.unclassifiedMatchers.delete(indexName);
+
+        const discriminant = this.findDiscriminant(matcher);
+        if (!discriminant) {
+            this.unclassifiedMatchers.delete(indexName);
+            return;
+        }
+
+        for (const v of discriminant.values) {
+            this.table.get(discriminant.propPath)?.get(v)?.delete(indexName);
+        }
     }
 
     /**
@@ -136,27 +143,27 @@ class IndexMatcher {
 
         for (const propPath of this.properties) {
             const docValue = getPropertyAtPath(document, propPath);
-            if (docValue !== undefined && docValue !== null && typeof docValue !== 'object') {
-                const indexSet = this.table.get(propPath)?.get(String(docValue));
-                if (indexSet) {
-                    for (const indexName of indexSet) {
-                        if (matches(document, this.matchers.get(indexName))) {
-                            iterationHandler(indexName);
-                        }
-                    }
+            if (docValue === undefined || docValue === null || typeof docValue === 'object') {
+                continue;
+            }
+
+            const indexSet = this.table.get(propPath)?.get(String(docValue));
+            if (!indexSet) {
+                continue;
+            }
+
+            for (const indexName of indexSet) {
+                if (matches(document, this.matchers.get(indexName))) {
+                    iterationHandler(indexName);
                 }
             }
         }
 
-        for (const indexName of this.unclassifiedMatchers) {
-            if (matches(document, this.matchers.get(indexName))) {
-                iterationHandler(indexName);
-            }
-        }
-
-        for (const indexName of this.functionMatchers) {
-            if (matches(document, this.matchers.get(indexName))) {
-                iterationHandler(indexName);
+        for (const matcherSet of [this.unclassifiedMatchers, this.functionMatchers]) {
+            for (const indexName of matcherSet) {
+                if (matches(document, this.matchers.get(indexName))) {
+                    iterationHandler(indexName);
+                }
             }
         }
     }
