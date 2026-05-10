@@ -1,6 +1,8 @@
 import fs from 'fs';
 import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
-import { assert, buildMetadataHeader, alignTo, ensureDirectory } from '../util.js';
+import { assert, alignTo } from '../util.js';
+import { buildMetadataHeader } from '../metadataUtil.js';
+import { ensureDirectory } from '../fsUtil.js';
 import Clock from '../Clock.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;

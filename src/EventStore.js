@@ -6,7 +6,8 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
-import { assert, ensureDirectory, scanForFiles, getPropertyAtPath } from './util.js';
+import { assert, getPropertyAtPath } from './util.js';
+import { ensureDirectory, scanForFiles } from './fsUtil.js';
 import { buildTypeMatcherFn } from './metadataUtil.js';
 
 const ExpectedVersion = {

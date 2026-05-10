@@ -1,6 +1,8 @@
 import fs from 'fs';
 import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC } from './ReadableIndex.js';
-import { assertEqual, buildMetadataHeader, ensureDirectory } from '../util.js';
+import { assertEqual } from '../util.js';
+import { buildMetadataHeader } from '../metadataUtil.js';
+import { ensureDirectory } from '../fsUtil.js';
 
 /**
  * An index is a simple append-only file that stores an ordered list of entry elements pointing to the actual file position

@@ -1,7 +1,7 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
-import { scanForFiles } from '../src/util.js';
+import { scanForFiles } from '../src/fsUtil.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

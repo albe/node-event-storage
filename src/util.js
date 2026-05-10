@@ -1,7 +1,3 @@
-import fs from 'fs';
-import path from 'path';
-import { mkdirpSync } from 'mkdirp';
-
 /**
  * Assert that actual and expected match or throw an Error with the given message appended by information about expected and actual value.
  *
@@ -64,28 +60,6 @@ function hash(str) {
 }
 
 /**
- * Build a buffer containing the file magic header and a JSON stringified metadata block, padded to be a multiple of 16 bytes long.
- *
- * @param {string} magic
- * @param {object} metadata
- * @returns {Buffer} A buffer containing the header data
- */
-function buildMetadataHeader(magic, metadata) {
-    assertEqual(magic.length, 8, 'The header magic bytes length is wrong.');
-    let metadataString = JSON.stringify(metadata);
-    let metadataSize = Buffer.byteLength(metadataString, 'utf8');
-    // 8 byte MAGIC, 4 byte metadata size, 1 byte line break
-    const pad = (16 - ((8 + 4 + metadataSize + 1) % 16)) % 16;
-    metadataString += ' '.repeat(pad) + "\n";
-    metadataSize += pad + 1;
-    const metadataBuffer = Buffer.allocUnsafe(8 + 4 + metadataSize);
-    metadataBuffer.write(magic, 0, 8, 'utf8');
-    metadataBuffer.writeUInt32BE(metadataSize, 8);
-    metadataBuffer.write(metadataString, 8 + 4, metadataSize, 'utf8');
-    return metadataBuffer;
-}
-
-/**
  * Do a binary search for number in the range 1-length with values retrieved via a provided getter.
  *
  * @param {number} number The value to search for
@@ -139,22 +113,6 @@ function wrapAndCheck(index, length) {
 }
 
 /**
- * Ensure that the given directory exists.
- * @param {string} dirName
- * @return {boolean} true if the directory existed already
- */
-function ensureDirectory(dirName) {
-    if (!fs.existsSync(dirName)) {
-        try {
-            mkdirpSync(dirName);
-        } catch (e) {
-        }
-        return false;
-    }
-    return true;
-}
-
-/**
  * Perform a k-way merge over multiple streams, invoking a callback for each item in ascending key order.
  * Each stream object is mutated in place by the `advance` function.
  *
@@ -180,91 +138,6 @@ function kWayMerge(streams, getKey, advance, visit) {
 }
 
 /**
- * Scan a directory (and its subdirectories) for files whose relative paths match a regex pattern,
- * calling a callback for each match.
- *
- * The regex is matched against the **relative path from `directory`** (e.g. `eventstore.stream-x/foo.index`),
- * so patterns that capture a path prefix work transparently for both flat and nested layouts.
- *
- * The `onEach` callback receives the first capturing group of the match (`match[1]`), or the full
- * match (`match[0]`) when no capturing group is defined in the pattern.
- *
- * @param {string} directory The root directory to scan.
- * @param {RegExp} regexPattern The pattern to match relative file paths against.
- * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching path.
- * @param {function(Error?)} onDone Called when the scan is complete, or with an error if one occurred.
- */
-function scanForFiles(directory, regexPattern, onEach, onDone) {
-    function scan(dir, relativePrefix, isRoot, done) {
-        fs.readdir(dir, { withFileTypes: true }, (err, entries) => {
-            if (err) {
-                // For non-root subdirectories, silently skip if they have disappeared
-                // (e.g. a transient lock directory that was removed while scanning).
-                /* istanbul ignore next */
-                if (!isRoot && err.code === 'ENOENT') return done(null);
-                return done(err);
-            }
-            const subdirs = [];
-            for (let entry of entries) {
-                if (entry.isDirectory()) {
-                    subdirs.push(entry.name);
-                } else {
-                    const relativePath = relativePrefix + entry.name;
-                    const match = relativePath.match(regexPattern);
-                    if (match !== null) {
-                        onEach(match[1] !== undefined ? match[1] : match[0]);
-                    }
-                }
-            }
-            let i = 0;
-            function next() {
-                if (i >= subdirs.length) return done(null);
-                const name = subdirs[i++];
-                scan(path.join(dir, name), relativePrefix + name + '/', false, (err) => {
-                    if (err) return done(err);
-                    next();
-                });
-            }
-            next();
-        });
-    }
-
-    scan(directory, '', true, onDone);
-}
-
-
-/**
- * Synchronously scan a directory (and its subdirectories) for files whose relative paths match a
- * regex pattern, calling a callback for each match.
- *
- * Behaves identically to {@link scanForFiles} but uses synchronous fs calls, making it suitable
- * for use during object construction.
- *
- * @param {string} directory The root directory to scan.
- * @param {RegExp} regexPattern The pattern to match relative file paths against.
- * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching path.
- */
-function scanForFilesSync(directory, regexPattern, onEach) {
-    function scan(dir, relativePrefix) {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (let entry of entries) {
-            if (entry.isDirectory()) {
-                scan(path.join(dir, entry.name), relativePrefix + entry.name + '/');
-            } else {
-                const relativePath = relativePrefix + entry.name;
-                const match = relativePath.match(regexPattern);
-                if (match !== null) {
-                    onEach(match[1] !== undefined ? match[1] : match[0]);
-                }
-            }
-        }
-    }
-
-    scan(directory, '');
-}
-
-
-/**
  * Read a scalar value at a dot-notation path from an object.
  * Returns `undefined` if any path segment is absent or an intermediate value is not an object.
  *
@@ -288,11 +161,7 @@ export {
     hash,
     wrapAndCheck,
     binarySearch,
-    buildMetadataHeader,
     alignTo,
-    ensureDirectory,
-    scanForFiles,
-    scanForFilesSync,
     kWayMerge,
     getPropertyAtPath
 };
