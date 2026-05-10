@@ -3,7 +3,7 @@ import path from 'path';
 import events from 'events';
 import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
-import { assert, wrapAndCheck, kWayMerge, scanForFilesSync } from '../util.js';
+import { assert, wrapAndCheck, kWayMerge, scanForFiles } from '../util.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
 import IndexMatcher from '../IndexMatcher.js';
 import PartitionPool from '../PartitionPool.js';
@@ -93,7 +93,13 @@ class ReadableStorage extends events.EventEmitter {
 
         this.dataDirectory = path.resolve(config.dataDirectory);
 
-        this.scanPartitions(config);
+        const partitionDefaults = { readBufferSize: DEFAULT_READ_BUFFER_SIZE };
+        this.partitionConfig = Object.assign(partitionDefaults, config);
+        this.partitions = new PartitionPool(config.maxOpenPartitions);
+
+        // initialized: null = not started (or scan cancelled), false = in progress, true = done
+        this.initialized = null;
+
         this.initializeIndexes(config);
     }
 
@@ -151,53 +157,91 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Scan the data directory for all existing partitions.
-     * Every file beginning with the storageFile name is considered a partition.
-     *
-     * @private
-     * @param {object} config The configuration object containing options for the partitions.
-     * @returns void
+     * Scan partitions and secondary index files; emit 'index-created' for each found index.
+     * @param {function} done Called when both scans finish.
      */
-    scanPartitions(config) {
-        const defaults = {
-            readBufferSize: DEFAULT_READ_BUFFER_SIZE
-        };
-        this.partitionConfig = Object.assign(defaults, config);
-        this.partitions = new PartitionPool(config.maxOpenPartitions);
-
+    scanFiles(done) {
         const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const pattern = new RegExp(`^(${escaped}.*)$`);
-        scanForFilesSync(this.dataDirectory, pattern, (file) => {
+        const partitionPattern = new RegExp(`^(${escaped}.*)$`);
+        scanForFiles(this.dataDirectory, partitionPattern, (file) => {
             if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
             const partition = this.createPartition(file, this.partitionConfig);
             this.partitions.add(partition.id, partition);
+        }, (partErr) => {
+            /* istanbul ignore if */
+            if (partErr) throw partErr;
+
+            // Scan was cancelled by close() between the two scan phases.
+            if (this.initialized === null) return;
+
+            // No secondary indexes exist yet — nothing to scan.
+            if (!fs.existsSync(this.indexDirectory)) {
+                return done();
+            }
+            const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
+            scanForFiles(this.indexDirectory, indexPattern, (name) => {
+                this.emit('index-created', name);
+            }, (indexErr) => {
+                // The directory could disappear between existsSync and readdir (e.g. test cleanup).
+                /* istanbul ignore if */
+                if (indexErr && indexErr.code !== 'ENOENT') throw indexErr;
+                done();
+            });
         });
     }
 
     /**
-     * Open the storage and indexes and create read and write buffers eagerly.
-     * Will emit an 'opened' event if finished.
+     * Only the primary index is opened eagerly; secondary indexes open on demand.
+     *
+     * @protected
+     */
+    openIndexes() {
+        this.index.open();
+    }
+
+    /**
+     * Open the storage; scans existing partitions and indexes asynchronously on first open.
+     * Re-opens after `close()` are synchronous.
+     * Will emit an `'opened'` event when finished.
      *
      * @api
+     * @param {function(): void} [callback] Called after indexes open, before `'opened'` is emitted.
+     *   Can be used as a synchronous alternative to listening to the `'opened'` event.
      * @returns {boolean}
      */
-    open() {
-        this.index.open();
-
-        this.forEachSecondaryIndex(index => index.open());
-
-        this.emit('opened');
+    open(callback) {
+        if (this.initialized === true) {
+            this.openIndexes();
+            callback?.();
+            this.emit('opened');
+            return true;
+        }
+        if (this.initialized === false) {
+            return true;
+        }
+        this.initialized = false;
+        this.scanFiles(() => {
+            // Guard: close() while scanning resets initialized to null.
+            if (this.initialized === null) return;
+            this.initialized = true;
+            this.openIndexes();
+            callback?.();
+            this.emit('opened');
+        });
         return true;
     }
 
     /**
-     * Close the storage and frees up all resources.
+     * Close the storage and free up all resources.
      * Will emit a 'closed' event when finished.
      *
      * @api
-     * @returns void
      */
     close() {
+        // Cancel in-progress scan so the callback does not re-open after an explicit close.
+        if (this.initialized === false) {
+            this.initialized = null;
+        }
         this.index.close();
         this.forEachSecondaryIndex(index => index.close());
         for (let index of Object.values(this.readonlyIndexes)) {

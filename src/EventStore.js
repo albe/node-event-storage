@@ -129,18 +129,17 @@ class EventStore extends events.EventEmitter {
         this.storage = (storageConfig.readOnly === true) ?
                         new ReadOnlyStorage(storeName, storageConfig)
                         : new Storage(storeName, storageConfig);
-        this.storage.open();
         this.streams = Object.create(null);
         this.streams._all = { index: this.storage.index };
 
-        this.scanStreams((err) => {
-            if (err) {
-                this.storage.close();
-                throw err;
-            }
+        this.storage.on('index-created', this.registerStream.bind(this));
+
+        this.storage.on('opened', () => {
             this.checkUnfinishedCommits();
             this.emit('ready');
         });
+
+        this.storage.open();
     }
 
     /**
@@ -173,22 +172,6 @@ class EventStore extends events.EventEmitter {
             // after `position`, the last sequence number that was successfully read.
             this.storage.truncate(position);
         }
-    }
-
-    /**
-     * Scan the streams directory for existing streams so they are ready for `getEventStream()`.
-     *
-     * @private
-     * @param {function} callback A callback that will be called when all existing streams are found.
-     */
-    scanStreams(callback) {
-        /* istanbul ignore if */
-        if (typeof callback !== 'function') {
-            callback = () => {};
-        }
-        // Find existing streams by scanning dir for filenames starting with 'stream-'
-        scanForFiles(this.streamsDirectory, /(stream-.*)\.index$/, this.registerStream.bind(this), callback);
-        this.storage.on('index-created', this.registerStream.bind(this));
     }
 
     /**
