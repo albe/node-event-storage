@@ -282,12 +282,12 @@ describe('EventStore', function() {
             storageDirectory
         });
 
-        eventstore.on('ready', () => {
+        eventstore.once('ready', () => {
             const readstore = new EventStore({
                 storageDirectory,
                 readOnly: true
             });
-            readstore.on('ready', () => {
+            readstore.once('ready', () => {
                 expect(readstore.isLocked()).to.be(true);
                 readstore.close();
                 done();
@@ -300,13 +300,13 @@ describe('EventStore', function() {
             storageDirectory
         });
 
-        eventstore.on('ready', () => {
+        eventstore.once('ready', () => {
             eventstore.close();
             const readstore = new EventStore({
                 storageDirectory,
                 readOnly: true
             });
-            readstore.on('ready', () => {
+            readstore.once('ready', () => {
                 expect(readstore.isLocked()).to.be(false);
                 readstore.close();
                 eventstore = null;
