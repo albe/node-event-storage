@@ -222,6 +222,17 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
+     * Returns true if the storage is currently locked by a writer process.
+     * Useful when this store is opened read-only to check whether a writer holds an exclusive lock.
+     *
+     * @api
+     * @returns {boolean}
+     */
+    isLocked() {
+        return this.storage.isLocked();
+    }
+
+    /**
      * Override EventEmitter.on() to delegate 'preCommit' and 'preRead' event registrations
      * to the underlying storage, so that `eventstore.on('preCommit', handler)` works naturally.
      * All other events are handled by the default EventEmitter.

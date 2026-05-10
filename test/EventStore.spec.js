@@ -277,6 +277,44 @@ describe('EventStore', function() {
         });
     });
 
+    it('isLocked() returns true when a writer is open', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        eventstore.on('ready', () => {
+            const readstore = new EventStore({
+                storageDirectory,
+                readOnly: true
+            });
+            readstore.on('ready', () => {
+                expect(readstore.isLocked()).to.be(true);
+                readstore.close();
+                done();
+            });
+        });
+    });
+
+    it('isLocked() returns false when no writer is open', function(done) {
+        eventstore = new EventStore({
+            storageDirectory
+        });
+
+        eventstore.on('ready', () => {
+            eventstore.close();
+            const readstore = new EventStore({
+                storageDirectory,
+                readOnly: true
+            });
+            readstore.on('ready', () => {
+                expect(readstore.isLocked()).to.be(false);
+                readstore.close();
+                eventstore = null;
+                done();
+            });
+        });
+    });
+
     describe('commit', function() {
 
         it('throws when no stream name specified', function() {

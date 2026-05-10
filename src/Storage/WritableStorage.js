@@ -61,7 +61,6 @@ class WritableStorage extends ReadableStorage {
         ensureDirectory(config.dataDirectory);
         super(storageName, config);
 
-        this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         this._lockMode = config.lock;
         this.partitioner = config.partitioner;
     }
@@ -226,14 +225,18 @@ class WritableStorage extends ReadableStorage {
         if (this.locked) {
             return false;
         }
+        if (this.isLocked()) {
+            throw new StorageLockedError(`Storage ${this.storageFile} is locked by another process`);
+        }
         try {
             fs.mkdirSync(this.lockFile);
             this.locked = true;
         } catch (e) {
-            /* istanbul ignore if */
+            /* istanbul ignore next */
             if (e.code !== 'EEXIST') {
                 throw new Error(`Error creating lock for storage ${this.storageFile}: ` + e.message);
             }
+            /* istanbul ignore next */
             throw new StorageLockedError(`Storage ${this.storageFile} is locked by another process`);
         }
         return true;
