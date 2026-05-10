@@ -1,4 +1,27 @@
 import crypto from 'crypto';
+import { assertEqual } from './util.js';
+
+/**
+ * Build a buffer containing the file magic header and a JSON stringified metadata block, padded to be a multiple of 16 bytes long.
+ *
+ * @param {string} magic
+ * @param {object} metadata
+ * @returns {Buffer} A buffer containing the header data
+ */
+function buildMetadataHeader(magic, metadata) {
+    assertEqual(magic.length, 8, 'The header magic bytes length is wrong.');
+    let metadataString = JSON.stringify(metadata);
+    let metadataSize = Buffer.byteLength(metadataString, 'utf8');
+    // 8 byte MAGIC, 4 byte metadata size, 1 byte line break
+    const pad = (16 - ((8 + 4 + metadataSize + 1) % 16)) % 16;
+    metadataString += ' '.repeat(pad) + "\n";
+    metadataSize += pad + 1;
+    const metadataBuffer = Buffer.allocUnsafe(8 + 4 + metadataSize);
+    metadataBuffer.write(magic, 0, 8, 'utf8');
+    metadataBuffer.writeUInt32BE(metadataSize, 8);
+    metadataBuffer.write(metadataString, 8 + 4, metadataSize, 'utf8');
+    return metadataBuffer;
+}
 
 /**
  * @param {string} secret The secret to use for calculating further HMACs
@@ -96,6 +119,7 @@ function buildTypeMatcherFn(payloadPath) {
 export {
     createHmac,
     matches,
+    buildMetadataHeader,
     buildMetadataForMatcher,
     buildMatcherFromMetadata,
     buildTypeMatcherFn

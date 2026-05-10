@@ -1,7 +1,8 @@
 import stream from 'stream';
 import fs from 'fs';
 import path from 'path';
-import { assert, ensureDirectory } from './util.js';
+import { assert } from './util.js';
+import { ensureDirectory } from './fsUtil.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
 

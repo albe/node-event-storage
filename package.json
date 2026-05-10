@@ -44,6 +44,7 @@
     "src/Storage/*.js",
     "src/WatchesFile.js",
     "src/util.js",
+    "src/fsUtil.js",
     "src/metadataUtil.js",
     "index.js"
   ],

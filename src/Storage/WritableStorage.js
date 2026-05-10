@@ -3,7 +3,8 @@ import path from 'path';
 import WritablePartition from '../Partition/WritablePartition.js';
 import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableIndex.js';
 import ReadableStorage from './ReadableStorage.js';
-import { assert, ensureDirectory } from '../util.js';
+import { assert } from '../util.js';
+import { ensureDirectory } from '../fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../metadataUtil.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
