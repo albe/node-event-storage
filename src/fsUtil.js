@@ -43,7 +43,7 @@ function visitMatchingPath(relativePath, regexPattern, onEach) {
  */
 function classifyEntries(entries, relativePrefix, regexPattern, onEach) {
     const subdirs = [];
-    for (const entry of entries) {
+    for (let entry of entries) {
         if (entry.isDirectory()) {
             subdirs.push(entry.name);
         } else {
@@ -131,7 +131,7 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
 function scanForFilesSync(directory, regexPattern, onEach) {
     function scan(dir, relativePrefix) {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
+        for (let entry of entries) {
             if (entry.isDirectory()) {
                 scan(path.join(dir, entry.name), relativePrefix + entry.name + '/');
             } else {
