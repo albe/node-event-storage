@@ -1225,6 +1225,43 @@ describe('Storage', function() {
             }).to.not.throwError();
         });
 
+        it('isLocked() returns true when a writer holds the lock', function(){
+            storage = createStorage();
+            storage.open();
+            const reader = createReader();
+            reader.open();
+            expect(reader.isLocked()).to.be(true);
+            reader.close();
+        });
+
+        it('isLocked() returns false when no writer holds the lock', function(){
+            storage = createStorage();
+            storage.open();
+            storage.close();
+            const reader = createReader();
+            reader.open();
+            expect(reader.isLocked()).to.be(false);
+            reader.close();
+        });
+
+        it('isLocked() returns false on a writer before open', function(){
+            storage = createStorage();
+            expect(storage.isLocked()).to.be(false);
+        });
+
+        it('isLocked() returns true on a writer after open', function(){
+            storage = createStorage();
+            storage.open();
+            expect(storage.isLocked()).to.be(true);
+        });
+
+        it('isLocked() returns false on a writer after close', function(){
+            storage = createStorage();
+            storage.open();
+            storage.close();
+            expect(storage.isLocked()).to.be(false);
+        });
+
         it('allows multiple readers for one storage', function () {
             storage = createStorage();
             storage.open();

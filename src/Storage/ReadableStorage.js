@@ -93,6 +93,7 @@ class ReadableStorage extends events.EventEmitter {
         this.hmac = createHmac(config.hmacSecret);
 
         this.dataDirectory = path.resolve(config.dataDirectory);
+        this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
 
         const partitionDefaults = { readBufferSize: DEFAULT_READ_BUFFER_SIZE };
         this.partitionConfig = Object.assign(partitionDefaults, config);
@@ -155,6 +156,17 @@ class ReadableStorage extends events.EventEmitter {
      */
     get length() {
         return this.index.length;
+    }
+
+    /**
+     * Returns true if the storage is currently locked by a writer process.
+     * Useful for read-only clients to check whether a writer holds an exclusive lock.
+     *
+     * @api
+     * @returns {boolean}
+     */
+    isLocked() {
+        return fs.existsSync(this.lockFile);
     }
 
     /**
