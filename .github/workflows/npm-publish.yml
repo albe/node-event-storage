@@ -35,10 +35,14 @@ jobs:
           test "$REPO" = "git+https://github.com/albe/node-event-storage.git" \
             || { echo "ERROR: repository.url must be git+https://github.com/albe/node-event-storage.git for npm OIDC trusted publishing"; exit 1; }
       - name: Validate version
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
+          set -euo pipefail
           echo "GITHUB_REF=$GITHUB_REF"
           VERSION="$(node -p "require('./package.json').version")"
-          TAG="${{ inputs.tag || github.event.release.tag_name }}"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] \
+            || { echo "ERROR: invalid tag format '$TAG'"; exit 1; }
           echo "tag=$TAG version=$VERSION"
           test "v$VERSION" = "$TAG" || { echo "ERROR: Tag ($TAG) does not match package.json version (v$VERSION)"; exit 1; }
           
