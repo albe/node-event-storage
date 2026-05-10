@@ -171,6 +171,9 @@ class ReadableStorage extends events.EventEmitter {
             /* istanbul ignore if */
             if (partErr) throw partErr;
 
+            // Scan was cancelled by close() between the two scan phases.
+            if (this.initialized === null) return;
+
             // No secondary indexes exist yet — nothing to scan.
             if (!fs.existsSync(this.indexDirectory)) {
                 return done();
@@ -179,8 +182,9 @@ class ReadableStorage extends events.EventEmitter {
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
                 this.emit('index-created', name);
             }, (indexErr) => {
+                // The directory could disappear between existsSync and readdir (e.g. test cleanup).
                 /* istanbul ignore if */
-                if (indexErr) throw indexErr;
+                if (indexErr && indexErr.code !== 'ENOENT') throw indexErr;
                 done();
             });
         });
