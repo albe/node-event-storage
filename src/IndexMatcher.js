@@ -159,11 +159,15 @@ class IndexMatcher {
             }
         }
 
-        for (const matcherSet of [this.unclassifiedMatchers, this.functionMatchers]) {
-            for (const indexName of matcherSet) {
-                if (matches(document, this.matchers.get(indexName))) {
-                    iterationHandler(indexName);
-                }
+        for (const indexName of this.unclassifiedMatchers) {
+            if (matches(document, this.matchers.get(indexName))) {
+                iterationHandler(indexName);
+            }
+        }
+
+        for (const indexName of this.functionMatchers) {
+            if (matches(document, this.matchers.get(indexName))) {
+                iterationHandler(indexName);
             }
         }
     }
