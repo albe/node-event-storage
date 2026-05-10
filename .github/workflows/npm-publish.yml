@@ -10,9 +10,6 @@ on:
         required: true
         type: string
 
-env:
-  RELEASE_REF: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
-
 permissions: {}
 
 jobs:
@@ -26,7 +23,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ env.RELEASE_REF }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.target_commitish }}
       - uses: actions/setup-node@v6
         with:
           node-version: '24.x'
@@ -106,7 +103,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ env.RELEASE_REF }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.target_commitish }}
       - uses: actions/setup-node@v6
         with:
           node-version: '24.x'
