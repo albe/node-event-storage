@@ -77,6 +77,7 @@ class ReadableIndex extends events.EventEmitter {
         if (options.metadata) {
             this.metadata = Object.assign({entryClass: options.EntryClass.name, entrySize: options.EntryClass.size}, options.metadata);
         }
+        this.headerSize = 0;
     }
 
     /**
@@ -208,6 +209,7 @@ class ReadableIndex extends events.EventEmitter {
      * @throws {Error} if the metadata size in the header is invalid.
      */
     readMetadata() {
+        if (this.headerSize > 0) return this.headerSize;
         const headerBuffer = Buffer.allocUnsafe(8 + 4);
         fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
