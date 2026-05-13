@@ -16,7 +16,7 @@ function resolveMmapModule() {
 	if (mmapModule) {
 		return mmapModule;
 	}
-	const packageNames = ['mmap-io', '@riaskov/mmap-io', '@fayzanx/mmap-io'];
+	const packageNames = ['@riaskov/mmap-io', 'mmap-io', '@fayzanx/mmap-io'];
 	let lastError = null;
 	for (const packageName of packageNames) {
 		try {
@@ -38,6 +38,7 @@ class MmapIndex {
 		resolveMmapModule();
 		this.name = name;
 		this.dataDirectory = options.dataDirectory || '.';
+		this.mappedEntries = options.mappedEntries || 2048;
 		this.fileName = path.resolve(this.dataDirectory, this.name);
 		this.fd = null;
 		this.length = 0;
@@ -57,22 +58,29 @@ class MmapIndex {
 	}
 
 	close() {
-		this.unmapEntries();
 		if (this.fd) {
+			if (this.mapBuffer) {
+				resolveMmapModule().sync(this.mapBuffer);
+			}
+			fs.ftruncateSync(this.fd, this.length * ENTRY_SIZE);
 			fs.closeSync(this.fd);
 			this.fd = null;
 		}
+		this.unmapEntries();
 	}
 
 	add(entry) {
-		const data = Buffer.allocUnsafe(ENTRY_SIZE);
-		data.writeUInt32LE(entry.number ?? entry[0], 0);
-		data.writeUInt32LE(entry.position ?? entry[1], 4);
-		data.writeUInt32LE(entry.size ?? entry[2] ?? 0, 8);
-		data.writeUInt32LE(entry.partition ?? entry[3] ?? 0, 12);
-		fs.writeSync(this.fd, data, 0, ENTRY_SIZE, null);
-		this.length++;
-		return this.length;
+		const nextLength = this.length + 1;
+		if (nextLength > this.mappedEntries) {
+			throw new Error(`Mapped index capacity exceeded: ${nextLength} > ${this.mappedEntries}`);
+		}
+		const offset = (nextLength - 1) * ENTRY_SIZE;
+		this.mapBuffer.writeUInt32LE(entry.number ?? entry[0], offset);
+		this.mapBuffer.writeUInt32LE(entry.position ?? entry[1], offset + 4);
+		this.mapBuffer.writeUInt32LE(entry.size ?? entry[2] ?? 0, offset + 8);
+		this.mapBuffer.writeUInt32LE(entry.partition ?? entry[3] ?? 0, offset + 12);
+		this.length = nextLength;
+		return nextLength;
 	}
 
 	range(from, until = -1) {
@@ -99,10 +107,9 @@ class MmapIndex {
 	mapEntries() {
 		const mmap = resolveMmapModule();
 		this.unmapEntries();
-		if (this.length === 0) {
-			return;
-		}
-		this.mapBuffer = mmap.map(this.length * ENTRY_SIZE, mmap.PROT_READ, mmap.MAP_SHARED, this.fd, 0);
+		const mapLength = Math.max(this.length, this.mappedEntries);
+		fs.ftruncateSync(this.fd, mapLength * ENTRY_SIZE);
+		this.mapBuffer = mmap.map(mapLength * ENTRY_SIZE, mmap.PROT_READ | mmap.PROT_WRITE, mmap.MAP_SHARED, this.fd, 0);
 	}
 
 	unmapEntries() {
@@ -117,12 +124,11 @@ class MmapIndex {
 			return false;
 		}
 		const offset = (index - 1) * ENTRY_SIZE;
-		const values = new Uint32Array(this.mapBuffer.buffer, this.mapBuffer.byteOffset + offset, 4);
 		return {
-			number: values[0],
-			position: values[1],
-			size: values[2],
-			partition: values[3]
+			number: this.mapBuffer.readUInt32LE(offset),
+			position: this.mapBuffer.readUInt32LE(offset + 4),
+			size: this.mapBuffer.readUInt32LE(offset + 8),
+			partition: this.mapBuffer.readUInt32LE(offset + 12)
 		};
 	}
 
