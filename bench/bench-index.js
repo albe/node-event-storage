@@ -2,7 +2,141 @@ import Benchmark from 'benchmark';
 import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
+import { createRequire } from 'module';
+import path from 'path';
 import { Index as LatestIndex } from '../index.js';
+
+const require = createRequire(import.meta.url);
+const ENTRY_SIZE = 16;
+
+let mmapModule = null;
+let mmapPackageName = null;
+
+function resolveMmapModule() {
+	if (mmapModule) {
+		return mmapModule;
+	}
+	const packageNames = ['mmap-io', '@riaskov/mmap-io', '@fayzanx/mmap-io'];
+	let lastError = null;
+	for (const packageName of packageNames) {
+		try {
+			mmapModule = require(packageName);
+			mmapPackageName = packageName;
+			return mmapModule;
+		} catch (e) {
+			lastError = e;
+		}
+	}
+	if (lastError) {
+		throw new Error(`No compatible mmap-io implementation installed: ${lastError.message}`);
+	}
+	throw new Error('No compatible mmap-io implementation installed.');
+}
+
+class MmapIndex {
+	constructor(name = '.index', options = {}) {
+		resolveMmapModule();
+		this.name = name;
+		this.dataDirectory = options.dataDirectory || '.';
+		this.fileName = path.resolve(this.dataDirectory, this.name);
+		this.fd = null;
+		this.length = 0;
+		this.mapBuffer = null;
+		this.open();
+	}
+
+	open() {
+		if (this.fd) {
+			return false;
+		}
+		fs.ensureDirSync(this.dataDirectory);
+		this.fd = fs.openSync(this.fileName, 'a+');
+		this.loadLength();
+		this.mapEntries();
+		return true;
+	}
+
+	close() {
+		this.unmapEntries();
+		if (this.fd) {
+			fs.closeSync(this.fd);
+			this.fd = null;
+		}
+	}
+
+	add(entry) {
+		const data = Buffer.allocUnsafe(ENTRY_SIZE);
+		data.writeUInt32LE(entry.number ?? entry[0], 0);
+		data.writeUInt32LE(entry.position ?? entry[1], 4);
+		data.writeUInt32LE(entry.size ?? entry[2] ?? 0, 8);
+		data.writeUInt32LE(entry.partition ?? entry[3] ?? 0, 12);
+		fs.writeSync(this.fd, data, 0, ENTRY_SIZE, null);
+		this.length++;
+		return this.length;
+	}
+
+	range(from, until = -1) {
+		from = this.wrapAndCheck(from);
+		until = this.wrapAndCheck(until);
+		if (from <= 0 || until < from) {
+			return false;
+		}
+		const entries = new Array(until - from + 1);
+		for (let i = 0; i < entries.length; i++) {
+			entries[i] = this.readEntry(from + i);
+		}
+		return entries;
+	}
+
+	loadLength() {
+		const stat = fs.fstatSync(this.fd);
+		if (stat.size % ENTRY_SIZE !== 0) {
+			throw new Error(`Corrupted mmap index file: ${this.fileName}`);
+		}
+		this.length = stat.size / ENTRY_SIZE;
+	}
+
+	mapEntries() {
+		const mmap = resolveMmapModule();
+		this.unmapEntries();
+		if (this.length === 0) {
+			return;
+		}
+		this.mapBuffer = mmap.map(this.length * ENTRY_SIZE, mmap.PROT_READ, mmap.MAP_SHARED, this.fd, 0);
+	}
+
+	unmapEntries() {
+		if (!this.mapBuffer) {
+			return;
+		}
+		this.mapBuffer = null;
+	}
+
+	readEntry(index) {
+		if (!this.mapBuffer) {
+			return false;
+		}
+		const offset = (index - 1) * ENTRY_SIZE;
+		const values = new Uint32Array(this.mapBuffer.buffer, this.mapBuffer.byteOffset + offset, 4);
+		return {
+			number: values[0],
+			position: values[1],
+			size: values[2],
+			partition: values[3]
+		};
+	}
+
+	wrapAndCheck(index) {
+		index = Number(index);
+		if (!Number.isFinite(index)) {
+			return 0;
+		}
+		if (index < 0) {
+			index = this.length + 1 + index;
+		}
+		return index > this.length ? 0 : index;
+	}
+}
 
 const Suite = new Benchmark.Suite('index');
 Suite.on('start', () => fs.emptyDirSync('data'));
@@ -13,6 +147,7 @@ Suite.on('error', (e) => console.log(e.target.error));
 const WRITES = 1000;
 let stableCallCount = 0;
 let latestCallCount = 0;
+let mmapCallCount = 0;
 
 function bench(index) {
 	index.open();
@@ -37,5 +172,14 @@ Suite.add('index [stable]', function() {
 Suite.add('index [latest]', function() {
 	bench(new LatestIndex((latestCallCount++) + '.index', { dataDirectory: 'data/latest' }));
 });
+
+try {
+	const packageName = resolveMmapModule() && mmapPackageName;
+	Suite.add(`index [${packageName}]`, function() {
+		bench(new MmapIndex((mmapCallCount++) + '.index', { dataDirectory: 'data/mmap' }));
+	});
+} catch (e) {
+	console.log('Skipping mmap benchmark:', e.message);
+}
 
 Suite.run();
