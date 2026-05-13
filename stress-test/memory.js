@@ -40,8 +40,9 @@ import fs from 'fs';
 import os from 'os';
 
 import EventStore from '../index.js';
+import Index from '../src/Index.js';
 import Partition from '../src/Partition.js';
-import MmapWritableIndex, { resolveMmapModule, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
+import MmapWritableIndex, { getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -56,13 +57,14 @@ const WRITE_MILESTONES = [1000, 2000, 10000];
 // Events per commit batch (trade-off between callback overhead and accuracy).
 const BATCH_SIZE = 100;
 const storageIndexOptions = {};
+let mmapIndexPackageName = null;
 
 // How many times larger the growth at 10 000 events is allowed to be compared
 // to the growth at 1 000 events.  10 × events → ≤ GROWTH_RATIO × growth.
 const GROWTH_RATIO_LIMIT = 15;
 
 try {
-    resolveMmapModule();
+    mmapIndexPackageName = getMmapPackageName();
     storageIndexOptions.IndexClass = MmapWritableIndex;
     storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
 } catch (e) {
@@ -310,6 +312,7 @@ const LEAK_CYCLES = 100;
 // With GC exposed a well-behaved implementation shows near-zero growth;
 // without GC the allocator may retain a page or two temporarily.
 const LEAK_BYTES_PER_CYCLE_LIMIT = 10 * 1024; // 10 KiB
+const TestIndexClass = storageIndexOptions.IndexClass || Index.ReadOnly;
 
 // ---------------------------------------------------------------------------
 // Leak-phase helpers
@@ -416,7 +419,7 @@ function runLeakPhase(callback) {
     // immediately closes it again.
     // -----------------------------------------------------------------------
     const idxResult = runSyncCycles(() => {
-        const idx = new MmapWritableIndex(INDEX_FILE, { dataDirectory: STREAMS_DIR });
+        const idx = new TestIndexClass(INDEX_FILE, { dataDirectory: STREAMS_DIR });
         idx.close();
     });
     assertNoLeak('Index open/close', idxResult.before, idxResult.after);
@@ -525,7 +528,7 @@ console.log(`  Data directory    : ${DATA_DIR}`);
 console.log(`  Index entry size  : ${INDEX_ENTRY_BYTES} bytes`);
 console.log(`  GC exposed        : ${typeof global.gc === 'function' ? 'yes (--expose-gc)' : 'no'}`);
 if (storageIndexOptions.IndexClass) {
-    console.log(`  Index impl        : ${getMmapPackageName()} (mmap)`);
+    console.log(`  Index impl        : ${mmapIndexPackageName} (mmap)`);
 } else {
     console.log('  Index impl        : default');
 }

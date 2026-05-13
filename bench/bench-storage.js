@@ -3,7 +3,7 @@ import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
 import { Storage as LatestStorage } from '../index.js';
-import MmapWritableIndex, { resolveMmapModule } from '../src/Index/MmapWritableIndex.js';
+import MmapWritableIndex, { loadMmapModule } from '../src/Index/MmapWritableIndex.js';
 
 const Suite = new Benchmark.Suite('storage');
 Suite.on('start', () => fs.emptyDirSync('data'));
@@ -15,7 +15,7 @@ const WRITES = 1000;
 const latestIndexOptions = {};
 
 try {
-	resolveMmapModule();
+	loadMmapModule();
 	latestIndexOptions.IndexClass = MmapWritableIndex;
 	latestIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
 } catch (e) {

@@ -6,37 +6,38 @@ const require = createRequire(import.meta.url);
 
 let mmapModule = null;
 let mmapPackageName = null;
+const supportedMmapPackages = ['@riaskov/mmap-io', 'mmap-io', '@fayzanx/mmap-io'];
 
-function resolveMmapModule() {
+function loadMmapModule() {
     if (mmapModule) {
         return mmapModule;
     }
-    const packageNames = ['@riaskov/mmap-io', 'mmap-io', '@fayzanx/mmap-io'];
-    let lastError = null;
-    for (const packageName of packageNames) {
+    let hasError = false;
+    for (const packageName of supportedMmapPackages) {
         try {
             mmapModule = require(packageName);
             mmapPackageName = packageName;
             return mmapModule;
         } catch (e) {
-            lastError = e;
+            hasError = true;
         }
     }
-    if (lastError) {
-        throw new Error(`No compatible mmap-io implementation installed: ${lastError.message}`);
+    const attempted = supportedMmapPackages.join(', ');
+    if (hasError) {
+        throw new Error(`No compatible mmap-io implementation installed. Tried: ${attempted}`);
     }
     throw new Error('No compatible mmap-io implementation installed.');
 }
 
 function getMmapPackageName() {
-    resolveMmapModule();
+    loadMmapModule();
     return mmapPackageName;
 }
 
 class MmapWritableIndex extends WritableIndex {
     initialize(options) {
         super.initialize(options);
-        this.mmap = resolveMmapModule();
+        this.mmap = loadMmapModule();
         this.mapBuffer = null;
         this.mappedEntries = 0;
         this.flushedLength = 0;
@@ -153,9 +154,13 @@ class MmapWritableIndex extends WritableIndex {
             return;
         }
         this.mmap.sync(this.mapBuffer);
+        // @riaskov/mmap-io currently has no explicit unmap() API, so we only call it when available.
+        if (typeof this.mmap.unmap === 'function') {
+            this.mmap.unmap(this.mapBuffer);
+        }
         this.mapBuffer = null;
     }
 }
 
 export default MmapWritableIndex;
-export { resolveMmapModule, getMmapPackageName };
+export { loadMmapModule, getMmapPackageName };

@@ -24,7 +24,7 @@ import path from 'path';
 import fs from 'fs';
 
 import EventStore, { LOCK_RECLAIM } from '../index.js';
-import MmapWritableIndex, { resolveMmapModule, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
+import MmapWritableIndex, { getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -48,10 +48,10 @@ console.log(`  maxWriteBufferDocuments    : ${stats.maxWriteBufferDocuments}`);
 const storageIndexOptions = {};
 
 try {
-    resolveMmapModule();
+    const packageName = getMmapPackageName();
     storageIndexOptions.IndexClass = MmapWritableIndex;
     storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
-    console.log(`  indexImplementation        : ${getMmapPackageName()}`);
+    console.log(`  indexImplementation        : ${packageName}`);
 } catch (e) {
     console.log(`  indexImplementation        : default (${e.message})`);
 }

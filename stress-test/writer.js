@@ -21,7 +21,7 @@ import path from 'path';
 import fs from 'fs';
 
 import EventStore, { LOCK_RECLAIM } from '../index.js';
-import MmapWritableIndex, { resolveMmapModule, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
+import MmapWritableIndex, { getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -39,10 +39,10 @@ const MAX_BATCH      = 3;      // maximum events per commit (see buildEvents)
 const storageIndexOptions = {};
 
 try {
-    resolveMmapModule();
+    const packageName = getMmapPackageName();
     storageIndexOptions.IndexClass = MmapWritableIndex;
     storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
-    console.log(`[writer] Using mmap index implementation: ${getMmapPackageName()}`);
+    console.log(`[writer] Using mmap index implementation: ${packageName}`);
 } catch (e) {
     console.log('[writer] Mmap index unavailable, using default index implementation:', e.message);
 }
