@@ -21,6 +21,7 @@ import path from 'path';
 import fs from 'fs';
 
 import EventStore, { LOCK_RECLAIM } from '../index.js';
+import MmapWritableIndex, { resolveMmapModule, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -35,6 +36,16 @@ const STREAM_NAMES   = ['orders', 'users', 'inventory', 'payments', 'notificatio
 const WRITE_BUFFER   = 4096;   // bytes – keep small to maximise crash-window visibility
 const MAX_DOCS       = 5;      // flush after at most this many docs in the buffer
 const MAX_BATCH      = 3;      // maximum events per commit (see buildEvents)
+const storageIndexOptions = {};
+
+try {
+    resolveMmapModule();
+    storageIndexOptions.IndexClass = MmapWritableIndex;
+    storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+    console.log(`[writer] Using mmap index implementation: ${getMmapPackageName()}`);
+} catch (e) {
+    console.log('[writer] Mmap index unavailable, using default index implementation:', e.message);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -93,6 +104,7 @@ const store = new EventStore('stress', {
     storageConfig: {
         writeBufferSize: WRITE_BUFFER,
         maxWriteBufferDocuments: MAX_DOCS,
+        indexOptions: storageIndexOptions,
     },
 });
 

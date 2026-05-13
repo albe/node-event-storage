@@ -529,7 +529,8 @@ class WritableStorage extends ReadableStorage {
      * @returns {{ index: WritableIndex, matcher: Matcher }}
      */
     createIndex(name, options = {}) {
-        const index = new WritableIndex(name, options);
+        const IndexClass = options.IndexClass || WritableIndex;
+        const index = new IndexClass(name, options);
         let matcher;
 
         // If the index contains a matcher (possibly a serialized function) we check HMAC

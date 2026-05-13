@@ -3,6 +3,7 @@ import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
 import { EventStore as Latest } from '../index.js';
+import MmapWritableIndex, { resolveMmapModule } from '../src/Index/MmapWritableIndex.js';
 
 const Suite = new Benchmark.Suite('read-scenarios');
 Suite.on('cycle', (event) => benchmarks.add(event.target));
@@ -14,6 +15,15 @@ const STREAM_1 = 'stream-1';
 const STREAM_2 = 'stream-2';
 // Keep each event document close to 512 bytes
 const EVENT_DOC = { type: 'SomeEvent', payload: 'x'.repeat(460) };
+const latestIndexOptions = {};
+
+try {
+    resolveMmapModule();
+    latestIndexOptions.IndexClass = MmapWritableIndex;
+    latestIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+} catch (e) {
+    console.log('Mmap index unavailable, using latest default index implementation:', e.message);
+}
 
 function countAll(iter) {
     let n = 0;
@@ -24,7 +34,10 @@ function countAll(iter) {
 function populateStore(EventStore, directory) {
     return new Promise((resolve, reject) => {
         fs.emptyDirSync(directory);
-        const store = new EventStore('bench', { storageDirectory: directory });
+        const config = EventStore === Latest
+            ? { storageDirectory: directory, storageConfig: { indexOptions: latestIndexOptions } }
+            : { storageDirectory: directory };
+        const store = new EventStore('bench', config);
         store.once('ready', () => {
             for (let i = 0; i < EVENTS; i++) {
                 store.commit(i % 2 === 0 ? STREAM_1 : STREAM_2, Object.assign({ seq: i }, EVENT_DOC));
@@ -38,7 +51,10 @@ function populateStore(EventStore, directory) {
 
 function openReadOnly(EventStore, directory) {
     return new Promise((resolve, reject) => {
-        const store = new EventStore('bench', { storageDirectory: directory, readOnly: true });
+        const config = EventStore === Latest
+            ? { storageDirectory: directory, readOnly: true, storageConfig: { indexOptions: latestIndexOptions } }
+            : { storageDirectory: directory, readOnly: true };
+        const store = new EventStore('bench', config);
         store.once('ready', () => resolve(store));
         store.once('error', reject);
     });

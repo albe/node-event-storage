@@ -40,8 +40,8 @@ import fs from 'fs';
 import os from 'os';
 
 import EventStore from '../index.js';
-import Index from '../src/Index.js';
 import Partition from '../src/Partition.js';
+import MmapWritableIndex, { resolveMmapModule, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -55,10 +55,19 @@ const WRITE_MILESTONES = [1000, 2000, 10000];
 
 // Events per commit batch (trade-off between callback overhead and accuracy).
 const BATCH_SIZE = 100;
+const storageIndexOptions = {};
 
 // How many times larger the growth at 10 000 events is allowed to be compared
 // to the growth at 1 000 events.  10 × events → ≤ GROWTH_RATIO × growth.
 const GROWTH_RATIO_LIMIT = 15;
+
+try {
+    resolveMmapModule();
+    storageIndexOptions.IndexClass = MmapWritableIndex;
+    storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+} catch (e) {
+    console.log('[memory] Mmap index unavailable, using default index implementation:', e.message);
+}
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -153,7 +162,10 @@ function runWritePhase(callback) {
 
     samples.push(sample('Before EventStore init'));
 
-    const store = new EventStore('memory-test', { storageDirectory: DATA_DIR });
+    const store = new EventStore('memory-test', {
+        storageDirectory: DATA_DIR,
+        storageConfig: { indexOptions: storageIndexOptions }
+    });
 
     store.on('ready', () => {
         samples.push(sample('After ready (write baseline)'));
@@ -208,6 +220,7 @@ function runReadPhase(callback) {
     const store = new EventStore('memory-test', {
         storageDirectory: DATA_DIR,
         readOnly: true,
+        storageConfig: { indexOptions: storageIndexOptions }
     });
 
     store.on('ready', () => {
@@ -403,7 +416,7 @@ function runLeakPhase(callback) {
     // immediately closes it again.
     // -----------------------------------------------------------------------
     const idxResult = runSyncCycles(() => {
-        const idx = new Index.ReadOnly(INDEX_FILE, { dataDirectory: STREAMS_DIR });
+        const idx = new MmapWritableIndex(INDEX_FILE, { dataDirectory: STREAMS_DIR });
         idx.close();
     });
     assertNoLeak('Index open/close', idxResult.before, idxResult.after);
@@ -428,7 +441,10 @@ function runLeakPhase(callback) {
     // -----------------------------------------------------------------------
     runAsyncCycles((i, done) => {
         const cycleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'es-strm-lk-'));
-        const store = new EventStore('s', { storageDirectory: cycleDir });
+        const store = new EventStore('s', {
+            storageDirectory: cycleDir,
+            storageConfig: { indexOptions: storageIndexOptions }
+        });
         store.on('ready', () => {
             store.commit('leak-stream', [{ type: 'LeakTest', i }], () => {
                 store.closeEventStream('leak-stream');
@@ -452,7 +468,10 @@ function runLeakPhase(callback) {
         // lock acquisition and index flushing.
         // -------------------------------------------------------------------
         runAsyncCycles((i, done) => {
-            const store = new EventStore('memory-test', { storageDirectory: DATA_DIR });
+            const store = new EventStore('memory-test', {
+                storageDirectory: DATA_DIR,
+                storageConfig: { indexOptions: storageIndexOptions }
+            });
             store.on('ready', () => {
                 store.close();
                 done();
@@ -476,6 +495,7 @@ function runLeakPhase(callback) {
                 const store = new EventStore('memory-test', {
                     storageDirectory: DATA_DIR,
                     readOnly: true,
+                    storageConfig: { indexOptions: storageIndexOptions }
                 });
                 store.on('ready', () => {
                     store.close();
@@ -504,6 +524,11 @@ console.log('='.repeat(66));
 console.log(`  Data directory    : ${DATA_DIR}`);
 console.log(`  Index entry size  : ${INDEX_ENTRY_BYTES} bytes`);
 console.log(`  GC exposed        : ${typeof global.gc === 'function' ? 'yes (--expose-gc)' : 'no'}`);
+if (storageIndexOptions.IndexClass) {
+    console.log(`  Index impl        : ${getMmapPackageName()} (mmap)`);
+} else {
+    console.log('  Index impl        : default');
+}
 console.log('='.repeat(66));
 
 runWritePhase((writeSamples) => {

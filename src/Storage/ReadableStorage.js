@@ -112,7 +112,8 @@ class ReadableStorage extends events.EventEmitter {
      */
     createIndex(name, options = {}) {
         /** @type ReadableIndex */
-        const index = new ReadOnlyIndex(name, options);
+        const IndexClass = options.ReadOnlyIndexClass || ReadOnlyIndex;
+        const index = new IndexClass(name, options);
         return { index };
     }
 

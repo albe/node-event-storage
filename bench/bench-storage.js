@@ -3,6 +3,7 @@ import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
 import { Storage as LatestStorage } from '../index.js';
+import MmapWritableIndex, { resolveMmapModule } from '../src/Index/MmapWritableIndex.js';
 
 const Suite = new Benchmark.Suite('storage');
 Suite.on('start', () => fs.emptyDirSync('data'));
@@ -11,6 +12,15 @@ Suite.on('complete', () => benchmarks.log());
 Suite.on('error', (e) => console.log(e.target.error));
 
 const WRITES = 1000;
+const latestIndexOptions = {};
+
+try {
+	resolveMmapModule();
+	latestIndexOptions.IndexClass = MmapWritableIndex;
+	latestIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+} catch (e) {
+	console.log('Mmap index unavailable, using latest default index implementation:', e.message);
+}
 
 function bench(storage) {
 	storage.open();
@@ -35,7 +45,10 @@ Suite.add('storage [stable]', function() {
 });
 
 Suite.add('storage [latest]', function() {
-	bench(new LatestStorage('storage-' + this.cycles, { dataDirectory: 'data/latest' }));
+	bench(new LatestStorage('storage-' + this.cycles, {
+		dataDirectory: 'data/latest',
+		indexOptions: latestIndexOptions
+	}));
 });
 
 Suite.run();

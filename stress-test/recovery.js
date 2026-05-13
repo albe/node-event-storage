@@ -24,6 +24,7 @@ import path from 'path';
 import fs from 'fs';
 
 import EventStore, { LOCK_RECLAIM } from '../index.js';
+import MmapWritableIndex, { resolveMmapModule, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -44,6 +45,16 @@ console.log('[recovery] Writer stats loaded:');
 console.log(`  Total written before crash : ${stats.totalWritten}`);
 console.log(`  writeBufferSize            : ${stats.writeBufferSize}`);
 console.log(`  maxWriteBufferDocuments    : ${stats.maxWriteBufferDocuments}`);
+const storageIndexOptions = {};
+
+try {
+    resolveMmapModule();
+    storageIndexOptions.IndexClass = MmapWritableIndex;
+    storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+    console.log(`  indexImplementation        : ${getMmapPackageName()}`);
+} catch (e) {
+    console.log(`  indexImplementation        : default (${e.message})`);
+}
 
 // ---------------------------------------------------------------------------
 // Open the store with LOCK_RECLAIM so torn writes are repaired automatically
@@ -54,6 +65,7 @@ const store = new EventStore('stress', {
     storageDirectory: dataDir,
     storageConfig: {
         lock: LOCK_RECLAIM,
+        indexOptions: storageIndexOptions,
     },
 });
 
