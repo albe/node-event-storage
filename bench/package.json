@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "bench": "node bench-index.js && node bench-storage.js && node bench-eventstore.js && node bench-read-scenarios.js"
+    "bench": "node bench-index.js && node bench-storage.js && node bench-eventstore.js && node bench-read-scenarios.js",
+    "bench:storage:forked": "node bench-storage-forked.js"
   },
   "dependencies": {
     "@riaskov/mmap-io": "^1.4.3",
