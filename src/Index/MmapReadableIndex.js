@@ -53,12 +53,14 @@ class MmapReadableIndex extends events.EventEmitter {
      * @param {object} options
      */
     initialize(options) {
+        this.data = [];
         this.fd = null;
         this.fileMode = 'r';
         this.EntryClass = options.EntryClass;
         this.dataDirectory = options.dataDirectory;
         this.fileName = path.resolve(options.dataDirectory, this.name);
         this.lengthValue = 0;
+        this.readUntil = -1;
         this.headerSize = 0;
         this.mmap = loadMmapModule();
         this.mapBuffer = null;
@@ -122,7 +124,12 @@ class MmapReadableIndex extends events.EventEmitter {
 
         const length = this.readFileLength();
         this.lengthValue = length;
+        this.data = new Array(length);
+        this.readUntil = -1;
         this.mapEntries(this.bytesForEntries(length), this.fileMode !== 'r');
+        if (length > 0) {
+            this.read(length);
+        }
 
         return true;
     }
@@ -132,7 +139,9 @@ class MmapReadableIndex extends events.EventEmitter {
      * @api
      */
     close() {
+        this.data = [];
         this.lengthValue = 0;
+        this.readUntil = -1;
         this.headerSize = 0;
         if (this.fd) {
             fs.closeSync(this.fd);
@@ -249,7 +258,16 @@ class MmapReadableIndex extends events.EventEmitter {
             return false;
         }
 
-        return this.readEntryAt(this.headerSize + index * this.EntryClass.size);
+        if (this.data[index]) {
+            return this.data[index];
+        }
+
+        const entry = this.readEntryAt(this.headerSize + index * this.EntryClass.size);
+        this.data[index] = entry;
+        if (index === this.readUntil + 1) {
+            this.readUntil++;
+        }
+        return entry;
     }
 
     /**
@@ -351,7 +369,15 @@ class MmapReadableIndex extends events.EventEmitter {
         // Forward: until=5 -> stopIndex=5; reverse: until=2 -> stopIndex=0.
         const stopIndex = until - 1 + step;
         for (let index = from - 1; index !== stopIndex; index += step) {
-            yield this.readEntryAt(this.headerSize + index * this.EntryClass.size);
+            let entry = this.data[index];
+            if (!entry) {
+                entry = this.readEntryAt(this.headerSize + index * this.EntryClass.size);
+                this.data[index] = entry;
+                if (index === this.readUntil + 1) {
+                    this.readUntil++;
+                }
+            }
+            yield entry;
         }
     }
 

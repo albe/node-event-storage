@@ -40,6 +40,10 @@ class MmapReadOnlyIndex extends watchesFile(MmapReadableIndex) {
         }
 
         this.lengthValue = nextLength;
+        this.data.length = nextLength;
+        if (this.readUntil >= nextLength) {
+            this.readUntil = nextLength - 1;
+        }
 
         if (nextLength > previousLength) {
             this.emit('append', previousLength, nextLength);

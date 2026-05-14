@@ -158,12 +158,17 @@ class MmapWritableIndex extends MmapReadableIndex {
         }
 
         const nextLength = this.lengthValue + 1;
+        const previousLength = this.lengthValue;
         this.mapEntriesForLength(nextLength);
 
         const offset = this.headerSize + (nextLength - 1) * this.EntryClass.size;
         entry.toBuffer(this.mapBuffer, offset);
 
         this.lengthValue = nextLength;
+        this.data[previousLength] = entry;
+        if (this.readUntil === previousLength - 1) {
+            this.readUntil++;
+        }
         this.lastNumber = entry.number;
         this.hasUnflushedWrites = true;
 
@@ -230,6 +235,10 @@ class MmapWritableIndex extends MmapReadableIndex {
 
         fs.ftruncateSync(this.fd, truncatePosition);
         this.lengthValue = after;
+        this.data.length = after;
+        if (this.readUntil >= after) {
+            this.readUntil = after - 1;
+        }
         this.lastNumber = after > 0 ? this.read(after).number : 0;
         this.mapEntries(truncatePosition, true);
     }
