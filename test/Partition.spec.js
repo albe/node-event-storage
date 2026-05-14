@@ -409,6 +409,18 @@ describe('Partition', function() {
             expect(data.buffer.toString('utf8', data.offset, data.offset + data.size)).to.be('foobar');
         });
 
+        it('can read large documents as raw buffer slices', function() {
+            partition = new Partition('.part', { dataDirectory, readBufferSize: 64 });
+            partition.open();
+            const blob = 'foobar'.repeat(100000);
+            const position = partition.write(blob);
+            partition.flush();
+            const data = partition.readBufferFrom(position);
+            expect(data).to.not.be(false);
+            expect(data.size).to.be(blob.length);
+            expect(data.buffer.toString('utf8', data.offset, data.offset + data.size)).to.be(blob);
+        });
+
     });
 
     describe('truncate', function() {

@@ -1218,6 +1218,55 @@ describe('Storage', function() {
         expect(storage.read(2)).to.be.eql(doc);
     });
 
+    it('falls back to serialize when serializer buffer hooks are incomplete', function() {
+        let serializeCalled = 0;
+        storage = createStorage({
+            serializer: {
+                serialize: (doc) => {
+                    serializeCalled++;
+                    return JSON.stringify(doc);
+                },
+                deserialize: JSON.parse,
+                serializeToBuffer: () => {
+                    throw new Error('serializeToBuffer should not be called');
+                }
+            }
+        });
+        storage.open();
+        const doc = { foo: 'bar' };
+        storage.write(doc);
+        expect(serializeCalled).to.be(1);
+        expect(storage.read(1)).to.be.eql(doc);
+    });
+
+    it('throws when buffered serializer reports wrong size', function() {
+        storage = createStorage({
+            writeBufferSize: 4096,
+            serializer: {
+                serialize: JSON.stringify,
+                deserialize: JSON.parse,
+                serializedSize: () => 64,
+                serializeToBuffer: () => 63
+            }
+        });
+        storage.open();
+        expect(() => storage.write({ foo: 'bar' })).to.throwError(/Serialized size mismatch/);
+    });
+
+    it('throws when unbuffered serializer reports wrong size', function() {
+        storage = createStorage({
+            writeBufferSize: 64,
+            serializer: {
+                serialize: JSON.stringify,
+                deserialize: JSON.parse,
+                serializedSize: () => 60,
+                serializeToBuffer: () => 59
+            }
+        });
+        storage.open();
+        expect(() => storage.write({ foo: 'bar' })).to.throwError(/Serialized size mismatch/);
+    });
+
     describe('concurrency', function() {
 
         it('allows multiple writers to different partitions', function () {

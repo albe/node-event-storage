@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { createRequire } from 'module';
 import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
 import { assert, alignTo } from '../util.js';
@@ -118,7 +119,7 @@ class WritablePartition extends ReadablePartition {
         assert(mmap, 'An mmap package is required for mmapWriteBuffer.');
         const fileName = path.join(
             this.dataDirectory,
-            `.${this.name.replace(/[\\/]/g, '_')}.${process.pid}.${Date.now()}.mmap-buffer`
+            `.${crypto.createHash('sha1').update(this.name).digest('hex').slice(0, 12)}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.mmap-buffer`
         );
         const fd = fs.openSync(fileName, 'w+');
         fs.ftruncateSync(fd, this.writeBufferSize);
