@@ -5,3 +5,4 @@ export { default as Index } from './src/Index.js';
 export { default as Consumer } from './src/Consumer.js';
 export { default as AppendOnlyMmapedFile } from './src/AppendOnlyMmapedFile.js';
 export { default as MmapIndex } from './src/MmapIndex.js';
+export { default as MmapPartition } from './src/MmapPartition.js';
