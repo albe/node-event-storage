@@ -46,6 +46,8 @@
     "src/util.js",
     "src/fsUtil.js",
     "src/metadataUtil.js",
+    "src/AppendOnlyMmapedFile.js",
+    "src/File/*.js",
     "index.js"
   ],
   "license": "MIT",
