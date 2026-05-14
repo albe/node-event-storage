@@ -1,12 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
+import mmap from '@riaskov/mmap-io';
 import WatchesFile from '../WatchesFile.js';
 import { ensureDirectory } from '../fsUtil.js';
 import { alignTo, assert } from '../util.js';
 
 const FILE_SIZE_MARKER_SIZE = 4;
-const DEFAULT_PAGE_SIZE = 4096;
+const DEFAULT_PAGE_SIZE = mmap.PAGESIZE || 4096;
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
 class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
@@ -58,11 +59,14 @@ class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
 
     map(size) {
         this.mappedSize = size;
-        this.mapBuffer = Buffer.allocUnsafeSlow(size);
-        this.mapBuffer.fill(0);
-        if (size > 0) {
-            fs.readSync(this.fd, this.mapBuffer, 0, size, 0);
+        if (size <= 0) {
+            this.mapBuffer = Buffer.alloc(0);
+            return;
         }
+        const protection = this.fileMode === 'r'
+            ? mmap.PROT_READ
+            : mmap.PROT_READ | mmap.PROT_WRITE;
+        this.mapBuffer = mmap.map(size, protection, mmap.MAP_SHARED, this.fd, 0);
     }
 
     unmap() {
@@ -134,7 +138,10 @@ class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
         if (!this.fd || this.dirtyFrom < 0) {
             return false;
         }
-        fs.writeSync(this.fd, this.mapBuffer, this.dirtyFrom, this.dirtyTo - this.dirtyFrom, this.dirtyFrom);
+        mmap.sync(this.mapBuffer, true);
+        const now = new Date();
+        fs.futimesSync(this.fd, now, now);
+        fs.fdatasyncSync(this.fd);
         this.clearDirtyRange();
         return true;
     }

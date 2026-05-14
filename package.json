@@ -61,6 +61,7 @@
     "node": ">=18.0"
   },
   "dependencies": {
+    "@riaskov/mmap-io": "^1.4.3",
     "mkdirp": "^3.0.1"
   },
   "devDependencies": {
