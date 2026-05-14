@@ -269,13 +269,13 @@ class MmapReadableIndex extends events.EventEmitter {
      * Read all index entries.
      *
      * @api
-     * @returns {Generator<EntryInterface>} A generator of all index entries.
+     * @returns {Array<EntryInterface>} An array of all index entries.
      */
     all() {
         if (this.length === 0) {
-            return this.iterateEmptyEntries();
+            return [];
         }
-        return this.iterateEntries(1, this.length, 1);
+        return this.range(1, this.length);
     }
 
     /**
@@ -315,7 +315,7 @@ class MmapReadableIndex extends events.EventEmitter {
      * @api
       * @param {number} from The 1-based index position from where to get entries from (inclusive). If < 0 will start at that position from end.
       * @param {number} [until] The 1-based index position until where to get entries to (inclusive). If < 0 will get until that position from the end. Defaults to this.length.
-     * @returns {Generator<Entry>|boolean} A generator of entries for the given range or false on error.
+     * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
     range(from, until = -1) {
         from = wrapAndCheck(from, this.length);
@@ -326,9 +326,24 @@ class MmapReadableIndex extends events.EventEmitter {
         }
 
         if (until >= from) {
-            return this.iterateEntries(from, until, 1);
+            for (let index = from - 1; index < until; index++) {
+                if (!this.data[index]) {
+                    this.data[index] = this.readEntryAt(this.headerSize + index * this.EntryClass.size);
+                    this.updateReadUntil(index);
+                }
+            }
+            return this.data.slice(from - 1, until);
         }
-        return this.iterateEntries(from, until, -1);
+
+        const result = [];
+        for (let index = from - 1; index >= until - 1; index--) {
+            if (!this.data[index]) {
+                this.data[index] = this.readEntryAt(this.headerSize + index * this.EntryClass.size);
+                this.updateReadUntil(index);
+            }
+            result.push(this.data[index]);
+        }
+        return result;
     }
 
     /**
@@ -351,30 +366,6 @@ class MmapReadableIndex extends events.EventEmitter {
         const [low, high] = binarySearch(number, Math.min(this.length, number), index => this.read(index).number);
         return min ? low : high;
     }
-
-    /**
-     * @private
-     * @param {number} from The 1-based index position from where to iterate from (inclusive).
-     * @param {number} until The 1-based index position until where to iterate to (inclusive).
-     * @param {number} step The direction and step (+1 or -1).
-     * @returns {Generator<Entry>}
-     */
-    *iterateEntries(from, until, step) {
-        // Stop one step after the inclusive `until` boundary.
-        // Forward: until=5 -> stopIndex=5; reverse: until=2 -> stopIndex=0.
-        const stopIndex = until - 1 + step;
-        for (let index = from - 1; index !== stopIndex; index += step) {
-            let entry = this.data[index];
-            if (!entry) {
-                entry = this.readEntryAt(this.headerSize + index * this.EntryClass.size);
-                this.data[index] = entry;
-                this.updateReadUntil(index);
-            }
-            yield entry;
-        }
-    }
-
-    *iterateEmptyEntries() {}
 
     readEntryAt(offset) {
         return this.EntryClass.fromBuffer(this.mapBuffer, offset);
