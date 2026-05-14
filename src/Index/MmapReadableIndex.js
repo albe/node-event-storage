@@ -127,9 +127,6 @@ class MmapReadableIndex extends events.EventEmitter {
         this.data = new Array(length);
         this.readUntil = -1;
         this.mapEntries(this.bytesForEntries(length), this.fileMode !== 'r');
-        if (length > 0) {
-            this.read(length);
-        }
 
         return true;
     }
@@ -264,9 +261,7 @@ class MmapReadableIndex extends events.EventEmitter {
 
         const entry = this.readEntryAt(this.headerSize + index * this.EntryClass.size);
         this.data[index] = entry;
-        if (index === this.readUntil + 1) {
-            this.readUntil++;
-        }
+        this.updateReadUntil(index);
         return entry;
     }
 
@@ -373,9 +368,7 @@ class MmapReadableIndex extends events.EventEmitter {
             if (!entry) {
                 entry = this.readEntryAt(this.headerSize + index * this.EntryClass.size);
                 this.data[index] = entry;
-                if (index === this.readUntil + 1) {
-                    this.readUntil++;
-                }
+                this.updateReadUntil(index);
             }
             yield entry;
         }
@@ -385,6 +378,17 @@ class MmapReadableIndex extends events.EventEmitter {
 
     readEntryAt(offset) {
         return this.EntryClass.fromBuffer(this.mapBuffer, offset);
+    }
+
+    updateReadUntil(index) {
+        // Keep track of the highest consecutively cached position from the beginning
+        // so callers can cheaply detect whether a full prefix is already materialized.
+        if (index !== this.readUntil + 1) {
+            return;
+        }
+        while (this.readUntil + 1 < this.data.length && this.data[this.readUntil + 1]) {
+            this.readUntil++;
+        }
     }
 
     bytesForEntries(length) {

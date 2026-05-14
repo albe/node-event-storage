@@ -166,9 +166,7 @@ class MmapWritableIndex extends MmapReadableIndex {
 
         this.lengthValue = nextLength;
         this.data[previousLength] = entry;
-        if (this.readUntil === previousLength - 1) {
-            this.readUntil++;
-        }
+        this.updateReadUntil(previousLength);
         this.lastNumber = entry.number;
         this.hasUnflushedWrites = true;
 
