@@ -129,7 +129,10 @@ class WritablePartition extends ReadablePartition {
         const mmap = loadMmapIo();
         assert(mmap, 'An mmap package is required for mmapWriteBuffer.');
         const pageSize = mmap.PAGESIZE || 4096;
-        assert(this.writeBufferSize > 0 && this.writeBufferSize % pageSize === 0, 'writeBufferSize needs to be a multiple of the mmap page size.');
+        assert(
+            this.writeBufferSize > 0 && this.writeBufferSize % pageSize === 0,
+            `writeBufferSize (${this.writeBufferSize}) needs to be a multiple of the mmap page size (${pageSize}).`
+        );
         this.mmapPageSize = pageSize;
         const minFileSize = this.headerSize + this.size;
         const mapSize = Math.max(alignTo(minFileSize, this.writeBufferSize), this.writeBufferSize);
