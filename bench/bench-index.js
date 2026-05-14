@@ -2,7 +2,7 @@ import Benchmark from 'benchmark';
 import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
-import { Index as LatestIndex } from '../index.js';
+import { Index as LatestIndex, MmapIndex } from '../index.js';
 
 const Suite = new Benchmark.Suite('index');
 Suite.on('start', () => fs.emptyDirSync('data'));
@@ -13,6 +13,7 @@ Suite.on('error', (e) => console.log(e.target.error));
 const WRITES = 1000;
 let stableCallCount = 0;
 let latestCallCount = 0;
+let mmapCallCount = 0;
 
 function bench(index) {
 	index.open();
@@ -36,6 +37,10 @@ Suite.add('index [stable]', function() {
 
 Suite.add('index [latest]', function() {
 	bench(new LatestIndex((latestCallCount++) + '.index', { dataDirectory: 'data/latest' }));
+});
+
+Suite.add('index [mmap]', function() {
+	bench(new MmapIndex((mmapCallCount++) + '.index', { dataDirectory: 'data/mmap' }));
 });
 
 Suite.run();

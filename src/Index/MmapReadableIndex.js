@@ -35,6 +35,7 @@ class MmapReadableIndex extends events.EventEmitter {
         this.name = name;
         this.EntryClass = options.EntryClass;
         this.headerSize = 0;
+        this.data = [];
         this.metadata = options.metadata
             ? Object.assign({ entryClass: options.EntryClass.name, entrySize: options.EntryClass.size }, options.metadata)
             : undefined;
@@ -72,12 +73,14 @@ class MmapReadableIndex extends events.EventEmitter {
         if (this.file.isOpen()) {
             return false;
         }
+        this.data = [];
         this.file.open();
         this.readMetadata();
         return true;
     }
 
     close() {
+        this.data = [];
         this.file.close();
     }
 
@@ -118,8 +121,13 @@ class MmapReadableIndex extends events.EventEmitter {
         if (index <= 0) {
             return false;
         }
+        if (this.data[index - 1]) {
+            return this.data[index - 1];
+        }
         const offset = this.headerSize + (index - 1) * this.EntryClass.size;
-        return this.EntryClass.fromBuffer(this.file.read(offset, this.EntryClass.size));
+        const entry = this.EntryClass.fromBuffer(this.file.read(offset, this.EntryClass.size));
+        this.data[index - 1] = entry;
+        return entry;
     }
 
     /**
@@ -137,13 +145,25 @@ class MmapReadableIndex extends events.EventEmitter {
             return false;
         }
         const count = until - from + 1;
-        const offset = this.headerSize + (from - 1) * this.EntryClass.size;
-        const buf = this.file.read(offset, count * this.EntryClass.size);
-        const result = [];
-        for (let i = 0; i < count; i++) {
-            result.push(this.EntryClass.fromBuffer(buf, i * this.EntryClass.size));
+
+        // Determine the contiguous uncached region to batch-read.
+        let readFrom = from;
+        let readUntil = until;
+        while (readUntil >= readFrom && this.data[readUntil - 1]) {
+            readUntil--;
         }
-        return result;
+
+        if (readFrom <= readUntil) {
+            const readCount = readUntil - readFrom + 1;
+            const offset = this.headerSize + (readFrom - 1) * this.EntryClass.size;
+            const buf = this.file.read(offset, readCount * this.EntryClass.size);
+            for (let i = 0; i < readCount; i++) {
+                const entry = this.EntryClass.fromBuffer(buf, i * this.EntryClass.size);
+                this.data[readFrom - 1 + i] = entry;
+            }
+        }
+
+        return this.data.slice(from - 1, until);
     }
 
     /**

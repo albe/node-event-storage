@@ -99,6 +99,7 @@ class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
         this.unmap();
         this.map(stat.size);
         const markedSize = this.readFileSizeMarker();
+        this.markerWasInvalid = markedSize < 0;
         this.fileSize = markedSize >= 0 ? markedSize : this.detectFileSize();
     }
 
@@ -123,6 +124,7 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         this.pageSize = mmap.PAGESIZE;
         this.writeBufferSize = Math.max(this.pageSize, options.writeBufferSize || DEFAULT_WRITE_BUFFER_SIZE);
         this.initialData = options.initialData ? Buffer.from(options.initialData) : null;
+        this.hasPendingData = false;
     }
 
     writeFileSizeMarker() {
@@ -137,10 +139,14 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         if (!this.fd || !this.mapBuffer) {
             return false;
         }
+        if (!this.hasPendingData) {
+            return false;
+        }
         mmap.sync(this.mapBuffer, true);
         const now = new Date();
         fs.futimesSync(this.fd, now, now);
         fs.fdatasyncSync(this.fd);
+        this.hasPendingData = false;
         return true;
     }
 
@@ -153,6 +159,7 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         this.mapBuffer.fill(0, size, this.fileSize);
         this.fileSize = size;
         this.writeFileSizeMarker();
+        this.hasPendingData = true;
         return true;
     }
 
@@ -171,6 +178,7 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
             this.initialData.copy(this.mapBuffer, 0);
         }
         this.writeFileSizeMarker();
+        this.hasPendingData = true;
         this.flush();
     }
 
@@ -197,9 +205,12 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         const wantedMappedSize = this.computeMappedSize(this.fileSize);
         if (this.mappedSize < wantedMappedSize) {
             this.grow(this.fileSize);
+        } else if (this.markerWasInvalid) {
+            // Crash-recovery: the marker was missing or corrupt; re-write and flush it.
+            this.writeFileSizeMarker();
+            this.hasPendingData = true;
+            this.flush();
         }
-        this.writeFileSizeMarker();
-        this.flush();
         return true;
     }
 
@@ -214,11 +225,26 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         this.map(nextMappedSize);
         this.fileSize = requiredFileSize;
         this.writeFileSizeMarker();
+        this.hasPendingData = true;
         return true;
     }
 
     write(data) {
         assert(this.mapBuffer !== null, 'File is not mapped.');
+        if (typeof data === 'number') {
+            // Reserve `data` bytes at the current write position and return the mapped slice
+            // so callers can serialise directly into the mmap buffer with no extra copy.
+            const size = data;
+            const writePosition = this.fileSize;
+            const endPosition = writePosition + size;
+            if (endPosition > this.mappedSize - FILE_SIZE_MARKER_SIZE) {
+                this.grow(endPosition);
+            }
+            this.fileSize = endPosition;
+            this.writeFileSizeMarker();
+            this.hasPendingData = true;
+            return this.mapBuffer.subarray(writePosition, endPosition);
+        }
         const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
         const writePosition = this.fileSize;
         const endPosition = writePosition + buffer.byteLength;
@@ -228,6 +254,7 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         buffer.copy(this.mapBuffer, writePosition);
         this.fileSize = endPosition;
         this.writeFileSizeMarker();
+        this.hasPendingData = true;
         return writePosition;
     }
 
