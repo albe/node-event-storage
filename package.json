@@ -47,6 +47,7 @@
     "src/fsUtil.js",
     "src/metadataUtil.js",
     "src/AppendOnlyMmapedFile.js",
+    "src/MmapIndex*.js",
     "src/File/*.js",
     "index.js"
   ],
