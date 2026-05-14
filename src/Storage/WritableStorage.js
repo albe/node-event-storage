@@ -471,11 +471,21 @@ class WritableStorage extends ReadableStorage {
         }
 
         const entries = this.index.range(after + 1);  // We need the first entry that is cut off
-        if (entries === false || entries.length === 0) {
+        if (entries === false) {
+            return;
+        }
+        const iterator = entries[Symbol.iterator]();
+        const first = iterator.next();
+        if (first.done) {
             return;
         }
 
-        this.forEachDistinctPartitionOf(entries, entry => this.getPartition(entry.partition).truncate(entry.position));
+        this.forEachDistinctPartitionOf({
+            [Symbol.iterator]: function* () {
+                yield first.value;
+                yield* iterator;
+            }
+        }, entry => this.getPartition(entry.partition).truncate(entry.position));
     }
 
     /**
