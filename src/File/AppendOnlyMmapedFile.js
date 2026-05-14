@@ -124,6 +124,7 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         this.pageSize = mmap.PAGESIZE;
         this.writeBufferSize = Math.max(this.pageSize, options.writeBufferSize || DEFAULT_WRITE_BUFFER_SIZE);
         this.initialData = options.initialData ? Buffer.from(options.initialData) : null;
+        this.syncOnFlush = !!options.syncOnFlush;
         this.hasPendingData = false;
     }
 
@@ -142,10 +143,12 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         if (!this.hasPendingData) {
             return false;
         }
-        mmap.sync(this.mapBuffer, true);
+        this.writeFileSizeMarker();
         const now = new Date();
         fs.futimesSync(this.fd, now, now);
-        fs.fdatasyncSync(this.fd);
+        if (this.syncOnFlush) {
+            fs.fdatasyncSync(this.fd);
+        }
         this.hasPendingData = false;
         return true;
     }
@@ -240,7 +243,6 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         }
         buffer.copy(this.mapBuffer, writePosition);
         this.fileSize = endPosition;
-        this.writeFileSizeMarker();
         this.hasPendingData = true;
         return writePosition;
     }
@@ -262,7 +264,6 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
             this.grow(endPosition);
         }
         this.fileSize = endPosition;
-        this.writeFileSizeMarker();
         this.hasPendingData = true;
         return this.mapBuffer.subarray(writePosition, endPosition);
     }
