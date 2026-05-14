@@ -10,7 +10,7 @@ import ReadablePartition, {
 } from './ReadablePartition.js';
 import { assert } from '../util.js';
 
-const NES_EPOCH = new Date('2020-01-01T00:00:00');
+const NODE_EVENT_STORE_EPOCH = new Date('2020-01-01T00:00:00');
 
 class MmapReadablePartition extends ReadablePartition {
 
@@ -70,7 +70,7 @@ class MmapReadablePartition extends ReadablePartition {
         const metadata = this.file.readString(12, metadataSize).trim();
         try {
             this.metadata = JSON.parse(metadata);
-            this.metadata.epoch = this.metadata.epoch || NES_EPOCH.getTime();
+            this.metadata.epoch = this.metadata.epoch || NODE_EVENT_STORE_EPOCH.getTime();
         } catch (e) {
             throw new Error('Invalid metadata.');
         }

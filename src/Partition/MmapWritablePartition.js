@@ -25,13 +25,16 @@ class MmapWritablePartition extends MmapReadablePartition {
             clock: Clock,
             flushDelay: 0
         };
-        config.metadata = Object.assign(defaults.metadata, config.metadata);
-        config = Object.assign(defaults, config);
+        const metadata = Object.assign({}, defaults.metadata, config.metadata);
+        config = Object.assign({}, defaults, config, { metadata });
         super(name, config);
 
         this.syncOnFlush = !!config.syncOnFlush;
         this.flushDelay = config.flushDelay >>> 0; // jshint ignore:line
-        assert(typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function', 'Clock needs to implement the method time()');
+        assert(
+            typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function',
+            'Clock constructor prototype needs to implement the method time().'
+        );
         this.ClockConstructor = config.clock;
     }
 

@@ -1,9 +1,11 @@
 import expect from 'expect.js';
+import os from 'os';
+import path from 'path';
 import fs from 'fs-extra';
 import MmapPartition, { ReadOnly as MmapReadOnlyPartition } from '../src/MmapPartition.js';
 
 describe('MmapPartition', function () {
-    const dataDirectory = '/tmp/event-store-mmap-partition-tests';
+    const dataDirectory = path.join(os.tmpdir(), 'event-store-mmap-partition-tests');
 
     beforeEach(function () {
         fs.emptyDirSync(dataDirectory);
