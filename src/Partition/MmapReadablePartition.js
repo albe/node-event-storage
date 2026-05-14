@@ -55,12 +55,12 @@ class MmapReadablePartition extends ReadablePartition {
 
         const headerBuffer = this.file.read(0, 8 + 4);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
-        assert(headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6), `Invalid file header in partition ${this.name}.`);
+        assert(headerMagic.slice(0, 6) === HEADER_MAGIC.slice(0, 6), `Invalid file header in partition ${this.name}.`);
 
         this.header = headerMagic;
         assert(
             headerMagic === HEADER_MAGIC,
-            `Invalid file version. The partition ${this.name} was created with a different library version (${headerMagic.substr(6)}).`
+            `Invalid file version. The partition ${this.name} was created with a different library version (${headerMagic.slice(6)}).`
         );
 
         const metadataSize = headerBuffer.readUInt32BE(8);
