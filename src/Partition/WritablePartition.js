@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { createRequire } from 'module';
 import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
 import { assert, alignTo } from '../util.js';
@@ -115,13 +116,24 @@ class WritablePartition extends ReadablePartition {
         }
         const mmap = loadMmapIo();
         assert(mmap, 'An mmap package is required for mmapWriteBuffer.');
-        return mmap.map(
-            this.writeBufferSize,
-            mmap.PROT_READ | mmap.PROT_WRITE,
-            mmap.MAP_PRIVATE | mmap.MAP_ANON,
-            -1,
-            0
+        const fileName = path.join(
+            this.dataDirectory,
+            `.${this.name.replace(/[\\/]/g, '_')}.${process.pid}.${Date.now()}.mmap-buffer`
         );
+        const fd = fs.openSync(fileName, 'w+');
+        fs.ftruncateSync(fd, this.writeBufferSize);
+        try {
+            return mmap.map(
+                this.writeBufferSize,
+                mmap.PROT_READ | mmap.PROT_WRITE,
+                mmap.MAP_SHARED,
+                fd,
+                0
+            );
+        } finally {
+            fs.closeSync(fd);
+            fs.unlinkSync(fileName);
+        }
     }
 
     /**
