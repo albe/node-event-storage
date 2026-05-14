@@ -21,7 +21,6 @@ class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
         this.name = name;
         this.dataDirectory = path.resolve(config.dataDirectory);
         this.fileName = path.resolve(this.dataDirectory, name);
-        this.pageSize = mmap.PAGESIZE;
 
         this.fileMode = 'r';
         this.fd = null;
@@ -121,7 +120,8 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
     constructor(name, options = {}) {
         super(name, options);
         this.fileMode = 'r+';
-        this.writeBufferSize = Math.max(this.pageSize, (options.writeBufferSize >>> 0) || DEFAULT_WRITE_BUFFER_SIZE); // jshint ignore:line
+        this.pageSize = mmap.PAGESIZE;
+        this.writeBufferSize = Math.max(this.pageSize, options.writeBufferSize || DEFAULT_WRITE_BUFFER_SIZE);
         this.initialData = options.initialData ? Buffer.from(options.initialData) : null;
     }
 
