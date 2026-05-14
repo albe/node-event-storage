@@ -35,10 +35,6 @@ class MmapReadablePartition extends ReadablePartition {
         this.file.open();
         this.fd = this.file.fd;
 
-        this.readBuffer = Buffer.allocUnsafeSlow(this.readBufferSize);
-        this.readBufferPos = -1;
-        this.readBufferLength = 0;
-
         this.headerSize = 0;
         this.size = this.readFileSize();
         if (this.size <= 0) {
@@ -47,6 +43,7 @@ class MmapReadablePartition extends ReadablePartition {
         }
 
         this.size -= this.readMetadata();
+        this.updateReadPointer();
         return true;
     }
 
@@ -86,24 +83,37 @@ class MmapReadablePartition extends ReadablePartition {
     close() {
         this.file.close();
         this.fd = null;
-        if (this.readBuffer) {
-            this.readBuffer = null;
-            this.readBufferPos = -1;
-            this.readBufferLength = 0;
-        }
+        this.readBuffer = null;
+        this.readBufferPos = -1;
+        this.readBufferLength = 0;
     }
 
-    fillBuffer(from = 0) {
-        const available = Math.max(0, Math.min(this.readBuffer.byteLength, this.size - from));
-        if (available === 0) {
-            this.readBufferLength = 0;
-            this.readBufferPos = from;
-            return;
+    updateReadPointer() {
+        this.readBuffer = this.file.mapBuffer;
+        this.readBufferPos = -this.headerSize;
+        this.readBufferLength = this.headerSize + this.size;
+    }
+
+    prepareReadBuffer(position) {
+        if (position + DOCUMENT_HEADER_SIZE >= this.size) {
+            return { buffer: null, cursor: 0, length: 0 };
         }
-        const source = this.file.read(this.headerSize + from, available);
-        source.copy(this.readBuffer, 0, 0, available);
-        this.readBufferLength = available;
-        this.readBufferPos = from;
+        return {
+            buffer: this.readBuffer,
+            cursor: position - this.readBufferPos,
+            length: this.readBufferLength
+        };
+    }
+
+    prepareReadBufferBackwards(position) {
+        if (position < 0) {
+            return { buffer: null, cursor: 0, length: 0 };
+        }
+        return {
+            buffer: this.readBuffer,
+            cursor: position - this.readBufferPos,
+            length: this.readBufferLength
+        };
     }
 
     readFrom(position, size = 0, headerOut = null) {
@@ -126,16 +136,6 @@ class MmapReadablePartition extends ReadablePartition {
         const writeSize = this.documentWriteSize(dataSize);
         if (position + writeSize > this.size) {
             throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
-        }
-
-        if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
-            const absoluteDataPosition = this.headerSize + position + DOCUMENT_HEADER_SIZE;
-            return this.file.readString(absoluteDataPosition, dataSize);
-        }
-
-        if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
-            this.fillBuffer(position);
-            dataPosition = DOCUMENT_HEADER_SIZE;
         }
 
         return reader.buffer.toString('utf8', dataPosition, dataPosition + dataSize);

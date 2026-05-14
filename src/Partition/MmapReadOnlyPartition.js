@@ -11,6 +11,7 @@ class MmapReadOnlyPartition extends MmapReadablePartition {
             const nextSize = Math.max(0, newFileSize - this.headerSize);
             if (nextSize > prevSize) {
                 this.size = nextSize;
+                this.updateReadPointer();
                 this.emit('append', prevSize, nextSize);
             }
         });
@@ -20,6 +21,7 @@ class MmapReadOnlyPartition extends MmapReadablePartition {
             const nextSize = Math.max(0, newFileSize - this.headerSize);
             if (nextSize < prevSize) {
                 this.size = nextSize;
+                this.updateReadPointer();
                 this.emit('truncate', prevSize, nextSize);
             }
         });

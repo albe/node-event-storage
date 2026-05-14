@@ -120,6 +120,7 @@ class MmapWritablePartition extends MmapReadablePartition {
         const dataPosition = this.size;
         const bytesToWrite = this.documentWriteSize(dataSize);
         const target = this.file.reserve(bytesToWrite);
+        this.updateReadPointer();
 
         let bytesWritten = 0;
         bytesWritten += this.writeDocumentHeader(target, bytesWritten, dataSize, sequenceNumber);
@@ -142,15 +143,6 @@ class MmapWritablePartition extends MmapReadablePartition {
             this.scheduleFlush();
         }
         return dataPosition;
-    }
-
-    truncateReadBuffer(after) {
-        if (this.readBufferPos >= after) {
-            this.readBufferPos = -1;
-            this.readBufferLength = 0;
-        } else if (this.readBufferPos + this.readBufferLength > after) {
-            this.readBufferLength -= (this.readBufferPos + this.readBufferLength) - after;
-        }
     }
 
     truncateAfterSequence(after) {
@@ -187,8 +179,8 @@ class MmapWritablePartition extends MmapReadablePartition {
 
         this.file.truncate(this.headerSize + after);
         this.flush();
-        this.truncateReadBuffer(after);
         this.size = after;
+        this.updateReadPointer();
         this.emit('truncated', after);
     }
 }
