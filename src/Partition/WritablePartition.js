@@ -161,11 +161,8 @@ class WritablePartition extends ReadablePartition {
             return;
         }
         const mmap = loadMmapIo();
-        while (this.mappedFileSize < requiredFileSize) {
-            this.mappedFileSize += this.writeBufferSize;
-        }
+        this.mappedFileSize = alignTo(requiredFileSize, this.writeBufferSize);
         fs.ftruncateSync(this.fd, this.mappedFileSize);
-        mmap.sync(this.writeBufferMapping, this.syncOnFlush);
         this.writeBufferMapping = mmap.map(
             this.mappedFileSize,
             mmap.PROT_READ | mmap.PROT_WRITE,
@@ -183,7 +180,7 @@ class WritablePartition extends ReadablePartition {
      */
     close() {
         if (this.fd) {
-            if (this.mmapWriteBuffer || this.writeBufferCursor > 0) {
+            if ((this.mmapWriteBuffer && this.writeBufferMapping) || (!this.mmapWriteBuffer && this.writeBufferCursor > 0)) {
                 this.flush();
             }
             fs.fsyncSync(this.fd);
