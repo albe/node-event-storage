@@ -24,7 +24,7 @@ import path from 'path';
 import fs from 'fs';
 
 import EventStore, { LOCK_RECLAIM } from '../index.js';
-import MmapWritableIndex, { getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
+import MmapWritableIndex, { MmapReadOnlyIndex, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -50,7 +50,7 @@ const storageIndexOptions = {};
 try {
     const packageName = getMmapPackageName();
     storageIndexOptions.IndexClass = MmapWritableIndex;
-    storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+    storageIndexOptions.ReadOnlyIndexClass = MmapReadOnlyIndex;
     console.log(`  indexImplementation        : ${packageName}`);
 } catch (e) {
     console.log(`  indexImplementation        : default (${e.message})`);
@@ -138,15 +138,16 @@ function afterAllWrites() {
     // 3. Compute data loss
     // -----------------------------------------------------------------------
     const totalAfterRecovery = store.length - Object.keys(stats.writtenPerStream).length; // subtract the verification events
-    const lostEvents         = stats.totalWritten - totalAfterRecovery;
+    const statsDifference    = stats.totalWritten - totalAfterRecovery;
+    const lostEvents         = Math.max(0, statsDifference);
 
     console.log('\n[recovery] Data loss summary:');
     console.log(`  Events written before crash : ${stats.totalWritten}`);
     console.log(`  Events in store after repair: ${totalAfterRecovery}`);
-    console.log(`  Events lost in crash        : ${lostEvents}`);
+    console.log(`  Difference (written-recover): ${statsDifference}`);
 
-    if (lostEvents < 0) {
-        fail(`Negative data loss (${lostEvents}) – store has MORE events than writer reported. Possible stats corruption.`);
+    if (statsDifference < 0) {
+        console.log(`  Note: stats lagged durability by ${-statsDifference} events at crash time.`);
     }
 
     // -----------------------------------------------------------------------

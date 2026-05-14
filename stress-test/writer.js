@@ -21,7 +21,7 @@ import path from 'path';
 import fs from 'fs';
 
 import EventStore, { LOCK_RECLAIM } from '../index.js';
-import MmapWritableIndex, { getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
+import MmapWritableIndex, { MmapReadOnlyIndex, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -41,7 +41,7 @@ const storageIndexOptions = {};
 try {
     const packageName = getMmapPackageName();
     storageIndexOptions.IndexClass = MmapWritableIndex;
-    storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+    storageIndexOptions.ReadOnlyIndexClass = MmapReadOnlyIndex;
     console.log(`[writer] Using mmap index implementation: ${packageName}`);
 } catch (e) {
     console.log('[writer] Mmap index unavailable, using default index implementation:', e.message);

@@ -1,64 +1,90 @@
 import fs from 'fs';
-import { createRequire } from 'module';
-import WritableIndex from './WritableIndex.js';
+import { buildMetadataHeader } from '../metadataUtil.js';
+import { ensureDirectory } from '../fsUtil.js';
+import MmapReadableIndex from './MmapReadableIndex.js';
+import MmapReadOnlyIndex from './MmapReadOnlyIndex.js';
+import { loadMmapModule, getMmapPackageName } from './MmapModule.js';
 
-const require = createRequire(import.meta.url);
+const HEADER_MAGIC = 'nesidx01';
 
-let mmapModule = null;
-let mmapPackageName = null;
-const supportedMmapPackages = ['@riaskov/mmap-io', 'mmap-io', '@fayzanx/mmap-io'];
-
-function loadMmapModule() {
-    if (mmapModule) {
-        return mmapModule;
-    }
-    let hasError = false;
-    for (const packageName of supportedMmapPackages) {
-        try {
-            mmapModule = require(packageName);
-            mmapPackageName = packageName;
-            return mmapModule;
-        } catch (e) {
-            hasError = true;
-        }
-    }
-    const attempted = supportedMmapPackages.join(', ');
-    if (hasError) {
-        throw new Error(`No compatible mmap-io implementation installed. Tried: ${attempted}`);
-    }
-    throw new Error('No compatible mmap-io implementation installed.');
-}
-
-function getMmapPackageName() {
-    loadMmapModule();
-    return mmapPackageName;
-}
-
-class MmapWritableIndex extends WritableIndex {
+class MmapWritableIndex extends MmapReadableIndex {
     initialize(options) {
         super.initialize(options);
-        this.mmap = loadMmapModule();
-        this.mapBuffer = null;
-        this.mappedEntries = 0;
-        this.flushedLength = 0;
+        ensureDirectory(options.dataDirectory);
+        this.fileMode = 'a+';
+        this.syncOnFlush = !!options.syncOnFlush;
+        this.flushDelay = (options.flushDelay === undefined ? 100 : options.flushDelay) >>> 0;
+        this.flushTimeout = null;
+        this.hasUnflushedWrites = false;
+    }
+
+    checkFile() {
+        const stat = fs.fstatSync(this.fd);
+        if (stat.size === 0) {
+            this.writeMetadata();
+            return 0;
+        }
+        const dataBytes = stat.size - this.readMetadata();
+        if (dataBytes < 0) {
+            throw new Error('Invalid index file!');
+        }
+        const length = Math.floor(dataBytes / this.EntryClass.size);
+        const validBytes = length * this.EntryClass.size;
+        if (validBytes !== dataBytes) {
+            fs.ftruncateSync(this.fd, this.headerSize + validBytes);
+        }
+        return length;
     }
 
     open() {
+        if (this.flushTimeout) {
+            clearTimeout(this.flushTimeout);
+            this.flushTimeout = null;
+        }
+        this.hasUnflushedWrites = false;
         const opened = super.open();
-        this.flushedLength = this.length;
-        this.mapEntries(this.flushedLength);
+        this.mapEntries(this.bytesForEntries(this.lengthValue), true);
         return opened;
     }
 
-    close() {
-        if (this.fd) {
-            this.flush();
-            fs.ftruncateSync(this.fd, this.headerSize + this.length * this.EntryClass.size);
+    mapEntriesForLength(length) {
+        const requiredMapSize = this.bytesForEntries(length);
+        if (requiredMapSize <= this.mappedSize && this.mapBuffer) {
+            return;
         }
-        super.close();
-        this.unmapEntries();
-        this.flushedLength = 0;
-        this.mappedEntries = 0;
+        const chunk = this.mapGrowthBytes;
+        const grownSize = Math.max(requiredMapSize, this.mappedSize + chunk);
+        fs.ftruncateSync(this.fd, grownSize);
+        this.mapEntries(grownSize, true);
+    }
+
+    add(entry, callback) {
+        const number = entry.number ?? entry[0];
+        const position = entry.position ?? entry[1];
+        const size = entry.size ?? entry[2] ?? 0;
+        const partition = entry.partition ?? entry[3] ?? 0;
+        if (this.lastNumber >= number) {
+            throw new Error(`Consistency error. Tried to add entry ${number} but last entry is ${this.lastNumber}.`);
+        }
+
+        const nextLength = this.lengthValue + 1;
+        this.mapEntriesForLength(nextLength);
+        const offset = this.headerSize + this.lengthValue * this.EntryClass.size;
+        this.mapBuffer.writeUInt32LE(number, offset);
+        this.mapBuffer.writeUInt32LE(position, offset + 4);
+        this.mapBuffer.writeUInt32LE(size, offset + 8);
+        this.mapBuffer.writeUInt32LE(partition, offset + 12);
+
+        this.lengthValue = nextLength;
+        this.lastNumber = number;
+        this.hasUnflushedWrites = true;
+        if (!this.flushTimeout && this.syncOnFlush) {
+            this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
+        }
+        if (typeof callback === 'function') {
+            callback(this.lengthValue);
+        }
+        return this.lengthValue;
     }
 
     flush() {
@@ -69,98 +95,66 @@ class MmapWritableIndex extends WritableIndex {
             clearTimeout(this.flushTimeout);
             this.flushTimeout = null;
         }
-        if (this.writeBufferCursor === 0) {
+        if (!this.hasUnflushedWrites) {
             return false;
         }
-
-        const entrySize = this.EntryClass.size;
-        const pendingEntries = this.writeBufferCursor / entrySize;
-        const flushUntil = this.flushedLength + pendingEntries;
-        this.mapEntries(flushUntil);
-
-        const writeOffset = this.headerSize + this.flushedLength * entrySize;
-        this.writeBuffer.copy(this.mapBuffer, writeOffset, 0, this.writeBufferCursor);
         if (this.syncOnFlush) {
             this.mmap.sync(this.mapBuffer);
+            fs.fsyncSync(this.fd);
         }
-
-        this.flushedLength = flushUntil;
-        this.writeBufferCursor = 0;
-        const callbacks = this.flushCallbacks;
-        this.flushCallbacks = [];
-        for (let i = 0; i < callbacks.length; i += 2) callbacks[i](callbacks[i + 1]);
+        this.hasUnflushedWrites = false;
         return true;
     }
 
     truncate(after) {
-        super.truncate(after);
-        this.flushedLength = this.length;
-        this.mapEntries(this.flushedLength);
-    }
-
-    read(index) {
-        index = Number(index) - 1;
-        if (!this.mapBuffer || index < 0 || index >= this.flushedLength) {
-            return super.read(index + 1);
-        }
-        const offset = this.headerSize + index * this.EntryClass.size;
-        if (index === this.readUntil + 1) {
-            this.readUntil++;
-        }
-        this.data[index] = this.EntryClass.fromBuffer(this.mapBuffer, offset);
-        return this.data[index];
-    }
-
-    readRange(from, until) {
-        if (!this.mapBuffer || until > this.flushedLength) {
-            return super.readRange(from, until);
-        }
-        if (until === from) {
-            return [this.read(from)];
-        }
-
-        from--;
-        until--;
-
-        const readFrom = Math.max(this.readUntil + 1, from);
-        for (let index = readFrom; index <= until; index++) {
-            const offset = this.headerSize + index * this.EntryClass.size;
-            this.data[index] = this.EntryClass.fromBuffer(this.mapBuffer, offset);
-        }
-        if (from <= this.readUntil + 1) {
-            this.readUntil = Math.max(this.readUntil, until);
-        }
-        return this.data.slice(from, until + 1);
-    }
-
-    mapEntries(length) {
         if (!this.fd) {
             return;
         }
-        if (length === this.mappedEntries && this.mapBuffer) {
+        if (after < 0) {
+            after = 0;
+        }
+        this.hasUnflushedWrites = false;
+        if (this.flushTimeout) {
+            clearTimeout(this.flushTimeout);
+            this.flushTimeout = null;
+        }
+
+        const truncatePosition = this.bytesForEntries(after);
+        const stat = fs.statSync(this.fileName);
+        if (truncatePosition >= stat.size && after >= this.lengthValue) {
             return;
         }
-        const mapSize = this.headerSize + length * this.EntryClass.size;
-        fs.ftruncateSync(this.fd, mapSize);
-        this.unmapEntries();
-        if (length > 0) {
-            this.mapBuffer = this.mmap.map(mapSize, this.mmap.PROT_READ | this.mmap.PROT_WRITE, this.mmap.MAP_SHARED, this.fd, 0);
-        }
-        this.mappedEntries = length;
+        fs.ftruncateSync(this.fd, truncatePosition);
+        this.lengthValue = after;
+        this.lastNumber = after > 0 ? this.readEntryAt(this.headerSize + (after - 1) * this.EntryClass.size).number : 0;
+        this.mapEntries(truncatePosition, true);
     }
 
-    unmapEntries() {
-        if (!this.mapBuffer) {
-            return;
+    writeMetadata() {
+        if (!this.metadata) {
+            this.metadata = { entryClass: this.EntryClass.name, entrySize: this.EntryClass.size };
         }
-        this.mmap.sync(this.mapBuffer);
-        // @riaskov/mmap-io currently has no explicit unmap() API, so we only call it when available.
-        if (typeof this.mmap.unmap === 'function') {
-            this.mmap.unmap(this.mapBuffer);
+        const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
+        fs.writeSync(this.fd, metadataBuffer, 0, metadataBuffer.byteLength, 0);
+        this.headerSize = metadataBuffer.byteLength;
+    }
+
+    close() {
+        if (this.fd) {
+            this.flush();
+            const finalSize = this.bytesForEntries(this.lengthValue);
+            fs.ftruncateSync(this.fd, finalSize);
         }
-        this.mapBuffer = null;
+        super.close();
+    }
+
+    destroy() {
+        this.close();
+        fs.unlinkSync(this.fileName);
     }
 }
 
+MmapWritableIndex.ReadOnly = MmapReadOnlyIndex;
+
 export default MmapWritableIndex;
-export { loadMmapModule, getMmapPackageName };
+export { MmapReadableIndex, MmapReadOnlyIndex, loadMmapModule, getMmapPackageName };

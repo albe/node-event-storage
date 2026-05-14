@@ -42,7 +42,7 @@ import os from 'os';
 import EventStore from '../index.js';
 import Index from '../src/Index.js';
 import Partition from '../src/Partition.js';
-import MmapWritableIndex, { getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
+import MmapWritableIndex, { MmapReadOnlyIndex, getMmapPackageName } from '../src/Index/MmapWritableIndex.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -66,7 +66,7 @@ const GROWTH_RATIO_LIMIT = 15;
 try {
     mmapIndexPackageName = getMmapPackageName();
     storageIndexOptions.IndexClass = MmapWritableIndex;
-    storageIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+    storageIndexOptions.ReadOnlyIndexClass = MmapReadOnlyIndex;
 } catch (e) {
     console.log('[memory] Mmap index unavailable, using default index implementation:', e.message);
 }

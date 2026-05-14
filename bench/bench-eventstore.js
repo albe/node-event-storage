@@ -3,7 +3,7 @@ import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
 import { EventStore as Latest } from '../index.js';
-import MmapWritableIndex, { loadMmapModule } from '../src/Index/MmapWritableIndex.js';
+import MmapWritableIndex, { MmapReadOnlyIndex, loadMmapModule } from '../src/Index/MmapWritableIndex.js';
 
 const Suite = new Benchmark.Suite('eventstore');
 Suite.on('start', () => fs.emptyDirSync('data'));
@@ -17,7 +17,7 @@ const latestIndexOptions = {};
 try {
 	loadMmapModule();
 	latestIndexOptions.IndexClass = MmapWritableIndex;
-	latestIndexOptions.ReadOnlyIndexClass = MmapWritableIndex;
+	latestIndexOptions.ReadOnlyIndexClass = MmapReadOnlyIndex;
 } catch (e) {
 	console.log('Mmap index unavailable, using latest default index implementation:', e.message);
 }
