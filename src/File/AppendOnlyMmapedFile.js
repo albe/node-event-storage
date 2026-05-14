@@ -143,10 +143,13 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         if (!this.hasPendingData) {
             return false;
         }
+        // Written once per flush instead of per write to avoid touching a second OS page on every append.
+        // truncate() still writes immediately so concurrent readers see the correct truncated size.
         this.writeFileSizeMarker();
         const now = new Date();
         fs.futimesSync(this.fd, now, now);
         if (this.syncOnFlush) {
+            // syncOnFlush: false (default) skips fdatasync for throughput; set true when strict durability is required.
             fs.fdatasyncSync(this.fd);
         }
         this.hasPendingData = false;
