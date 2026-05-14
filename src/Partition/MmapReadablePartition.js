@@ -4,6 +4,7 @@ import ReadablePartition, {
     InvalidDataSizeError,
     HEADER_MAGIC,
     DOCUMENT_ALIGNMENT,
+    DOCUMENT_SEPARATOR,
     DOCUMENT_HEADER_SIZE,
     DOCUMENT_FOOTER_SIZE
 } from './ReadablePartition.js';
@@ -142,4 +143,4 @@ class MmapReadablePartition extends ReadablePartition {
 }
 
 export default MmapReadablePartition;
-export { CorruptFileError, InvalidDataSizeError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE };
+export { CorruptFileError, InvalidDataSizeError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE };
