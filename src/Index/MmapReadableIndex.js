@@ -50,7 +50,7 @@ class MmapReadableIndex extends events.EventEmitter {
 
     // Protected hook called after createFile() and before open(), so subclasses can
     // initialise their own state before the file is opened.
-    initIndex(options) {} // eslint-disable-line no-unused-vars
+    initIndex(options) {}
 
     get length() {
         if (!this.isOpen() || this.file.fileSize <= this.headerSize) {

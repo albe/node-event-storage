@@ -46,9 +46,7 @@ class MmapWritableIndex extends MmapReadableIndex {
     }
 
     close() {
-        if (this.file.isOpen()) {
-            this.flush();
-        }
+        this.flush();
         this.file.close();
     }
 
