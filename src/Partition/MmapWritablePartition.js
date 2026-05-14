@@ -74,10 +74,6 @@ class MmapWritablePartition extends MmapReadablePartition {
             return false;
         }
 
-        if (this.syncOnFlush && this.fd) {
-            this.file.flush();
-        }
-
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
         for (let i = 0; i < callbacks.length; i++) {
@@ -126,7 +122,7 @@ class MmapWritablePartition extends MmapReadablePartition {
         bytesWritten += this.writeDocumentHeader(target, bytesWritten, dataSize, sequenceNumber);
         bytesWritten += target.write(data, bytesWritten, 'utf8');
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
-        bytesWritten += target.write(DOCUMENT_PAD.substr(0, padSize), bytesWritten, 'utf8');
+        bytesWritten += target.write(DOCUMENT_PAD.slice(0, padSize), bytesWritten, 'utf8');
         target.writeUInt32BE(dataSize, bytesWritten);
         bytesWritten += 4;
         bytesWritten += target.write(DOCUMENT_SEPARATOR, bytesWritten, 'utf8');
@@ -137,7 +133,11 @@ class MmapWritablePartition extends MmapReadablePartition {
         if (typeof callback === 'function') {
             this.flushCallbacks.push(callback);
         }
-        this.scheduleFlush();
+        if (this.syncOnFlush) {
+            this.flush();
+        } else {
+            this.scheduleFlush();
+        }
         return dataPosition;
     }
 
