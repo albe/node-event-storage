@@ -261,6 +261,24 @@ class ReadablePartition extends events.EventEmitter {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readFrom(position, size = 0, headerOut = null) {
+        const data = this.readBufferFrom(position, size, headerOut);
+        if (data === false) {
+            return false;
+        }
+        return data.buffer.toString('utf8', data.offset, data.offset + data.size);
+    }
+
+    /**
+     * Read raw document data from the given position as a buffer slice descriptor.
+     *
+     * @api
+     * @param {number} position The file position to read from.
+     * @param {number} [size] The expected byte size of the document at the given position.
+     * @param {object|null} [headerOut] Optional object to populate with the document header fields
+     *   (`dataSize`, `sequenceNumber`, `time64`). Pass an existing object to avoid extra allocation.
+     * @returns {{ buffer: Buffer, offset: number, size: number }|boolean}
+     */
+    readBufferFrom(position, size = 0, headerOut = null) {
         assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
@@ -284,10 +302,9 @@ class ReadablePartition extends events.EventEmitter {
         }
 
         if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
-            //console.log('sync read for large document size', dataLength, 'at position', position);
             const tempReadBuffer = Buffer.allocUnsafe(dataSize);
             fs.readSync(this.fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
-            return tempReadBuffer.toString('utf8');
+            return { buffer: tempReadBuffer, offset: 0, size: dataSize };
         }
 
         if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
@@ -295,7 +312,7 @@ class ReadablePartition extends events.EventEmitter {
             dataPosition = DOCUMENT_HEADER_SIZE;
         }
 
-        return reader.buffer.toString('utf8', dataPosition, dataPosition + dataSize);
+        return { buffer: reader.buffer, offset: dataPosition, size: dataSize };
     }
 
     /**

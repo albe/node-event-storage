@@ -3,6 +3,7 @@ import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
 import { Storage as LatestStorage } from '../index.js';
+import { createMsgpackSerializer } from './msgpackSerializer.js';
 
 const Suite = new Benchmark.Suite('storage');
 Suite.on('start', () => fs.emptyDirSync('data'));
@@ -36,6 +37,14 @@ Suite.add('storage [stable]', function() {
 
 Suite.add('storage [latest]', function() {
 	bench(new LatestStorage('storage-' + this.cycles, { dataDirectory: 'data/latest' }));
+});
+
+Suite.add('storage [latest+msgpack+mmap]', function() {
+	bench(new LatestStorage('storage-' + this.cycles, {
+		dataDirectory: 'data/latest-msgpack-mmap',
+		mmapWriteBuffer: true,
+		serializer: createMsgpackSerializer()
+	}));
 });
 
 Suite.run();

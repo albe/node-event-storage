@@ -51,9 +51,10 @@ class ReadableStorage extends events.EventEmitter {
     /**
      * @param {string} [storageName] The name of the storage.
      * @param {object} [config] An object with storage parameters.
-     * @param {object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
-     * @param {function(object): string} config.serializer.serialize Default is JSON.stringify.
-     * @param {function(string): object} config.serializer.deserialize Default is JSON.parse.
+     * @param {object} [config.serializer] A serializer object.
+     * @param {function(object): string|Buffer} [config.serializer.serialize] Default is JSON.stringify.
+     * @param {function(string): object} [config.serializer.deserialize] Default is JSON.parse.
+     * @param {function(Buffer, number, number): object} [config.serializer.deserializeBuffer] Optional buffer-based deserializer.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {string} [config.indexDirectory] The path where the indexes should be stored. Defaults to dataDirectory.
      * @param {string} [config.indexFile] The name of the primary index. Default '{storageName}.index'.
@@ -291,6 +292,13 @@ class ReadableStorage extends events.EventEmitter {
         const partition = this.getPartition(partitionId);
         if (this.listenerCount('preRead') > 0) {
             this.emit('preRead', position, partition.metadata);
+        }
+        if (typeof this.serializer.deserializeBuffer === 'function' && typeof partition.readBufferFrom === 'function') {
+            const data = partition.readBufferFrom(position, size);
+            if (data === false) {
+                return false;
+            }
+            return this.serializer.deserializeBuffer(data.buffer, data.offset, data.size);
         }
         const data = partition.readFrom(position, size);
         return this.serializer.deserialize(data);

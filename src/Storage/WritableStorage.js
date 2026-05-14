@@ -24,12 +24,28 @@ class StorageLockedError extends Error {}
  */
 class WritableStorage extends ReadableStorage {
 
+    static serializedDataSize(data) {
+        if (Buffer.isBuffer(data)) {
+            return data.byteLength;
+        }
+        if (typeof data === 'string') {
+            return Buffer.byteLength(data, 'utf8');
+        }
+        if (ArrayBuffer.isView(data)) {
+            return data.byteLength;
+        }
+        return Buffer.byteLength(String(data), 'utf8');
+    }
+
     /**
      * @param {string} [storageName] The name of the storage.
      * @param {object} [config] An object with storage parameters.
-     * @param {object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
-     * @param {function(object): string} config.serializer.serialize Default is JSON.stringify.
-     * @param {function(string): object} config.serializer.deserialize Default is JSON.parse.
+     * @param {object} [config.serializer] A serializer object.
+     * @param {function(object): string|Buffer} [config.serializer.serialize] Default is JSON.stringify.
+     * @param {function(string): object} [config.serializer.deserialize] Default is JSON.parse.
+     * @param {function(object): number} [config.serializer.serializedSize] Optional size calculator for `serializeToBuffer`.
+     * @param {function(object, Buffer, number): number|void} [config.serializer.serializeToBuffer]
+     *   Optional writer that serializes directly into `(buffer, offset)`.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {string} [config.indexDirectory] The path where the indexes should be stored. Defaults to dataDirectory.
      * @param {string} [config.indexFile] The name of the primary index. Default '{storageName}.index'.
@@ -349,15 +365,29 @@ class WritableStorage extends ReadableStorage {
      * @returns {number} The 1-based document sequence number in the storage.
      */
     write(document, callback) {
-        const data = this.serializer.serialize(document).toString();
-        const dataSize = Buffer.byteLength(data, 'utf8');
-
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
         if (this.listenerCount('preCommit') > 0) {
             this.emit('preCommit', document, partition.metadata);
         }
-        const position = partition.write(data, this.length, callback);
+
+        let position;
+        let dataSize;
+        if (typeof this.serializer.serializedSize === 'function'
+            && typeof this.serializer.serializeToBuffer === 'function'
+            && typeof partition.writeSerialized === 'function') {
+            dataSize = this.serializer.serializedSize(document);
+            position = partition.writeSerialized(
+                dataSize,
+                (buffer, offset) => this.serializer.serializeToBuffer(document, buffer, offset),
+                this.length,
+                callback
+            );
+        } else {
+            const data = this.serializer.serialize(document);
+            dataSize = WritableStorage.serializedDataSize(data);
+            position = partition.write(data, this.length, callback);
+        }
 
         assert(position !== false, 'Error writing document.');
 

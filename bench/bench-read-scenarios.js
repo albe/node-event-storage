@@ -3,6 +3,7 @@ import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
 import { EventStore as Latest } from '../index.js';
+import { createMsgpackSerializer } from './msgpackSerializer.js';
 
 const Suite = new Benchmark.Suite('read-scenarios');
 Suite.on('cycle', (event) => benchmarks.add(event.target));
@@ -21,10 +22,10 @@ function countAll(iter) {
     return n;
 }
 
-function populateStore(EventStore, directory) {
+function populateStore(EventStore, directory, config = {}) {
     return new Promise((resolve, reject) => {
         fs.emptyDirSync(directory);
-        const store = new EventStore('bench', { storageDirectory: directory });
+        const store = new EventStore('bench', Object.assign({ storageDirectory: directory }, config));
         store.once('ready', () => {
             for (let i = 0; i < EVENTS; i++) {
                 store.commit(i % 2 === 0 ? STREAM_1 : STREAM_2, Object.assign({ seq: i }, EVENT_DOC));
@@ -36,9 +37,9 @@ function populateStore(EventStore, directory) {
     });
 }
 
-function openReadOnly(EventStore, directory) {
+function openReadOnly(EventStore, directory, config = {}) {
     return new Promise((resolve, reject) => {
-        const store = new EventStore('bench', { storageDirectory: directory, readOnly: true });
+        const store = new EventStore('bench', Object.assign({ storageDirectory: directory, readOnly: true }, config));
         store.once('ready', () => resolve(store));
         store.once('error', reject);
     });
@@ -46,23 +47,33 @@ function openReadOnly(EventStore, directory) {
 
 populateStore(Stable, 'data/stable')
     .then(() => populateStore(Latest, 'data/latest'))
+    .then(() => populateStore(Latest, 'data/latest-msgpack-mmap', {
+        storageConfig: { mmapWriteBuffer: true, serializer: createMsgpackSerializer() }
+    }))
     .then(() => Promise.all([
         openReadOnly(Stable, 'data/stable'),
         openReadOnly(Latest, 'data/latest'),
+        openReadOnly(Latest, 'data/latest-msgpack-mmap', {
+            storageConfig: { mmapWriteBuffer: true, serializer: createMsgpackSerializer() }
+        }),
     ]))
-    .then(([stableStore, latestStore]) => {
+    .then(([stableStore, latestStore, latestMsgpackMmap]) => {
         const third = Math.ceil(EVENTS / 3);
         const twoThirds = Math.floor(2 * EVENTS / 3);
 
         Suite
             .add('1 - forward full scan [stable]',   () => countAll(stableStore.getAllEvents()))
             .add('1 - forward full scan [latest]',   () => countAll(latestStore.getAllEvents()))
+            .add('1 - forward full scan [latest+msgpack+mmap]', () => countAll(latestMsgpackMmap.getAllEvents()))
             .add('2 - backwards full scan [stable]', () => countAll(stableStore.getAllEvents(-1, 1)))
             .add('2 - backwards full scan [latest]', () => countAll(latestStore.getAllEvents(-1, 1)))
+            .add('2 - backwards full scan [latest+msgpack+mmap]', () => countAll(latestMsgpackMmap.getAllEvents(-1, 1)))
             .add('3 - join stream [stable]',         () => countAll(stableStore.fromStreams('join', [STREAM_1, STREAM_2])))
             .add('3 - join stream [latest]',         () => countAll(latestStore.fromStreams('join', [STREAM_1, STREAM_2])))
+            .add('3 - join stream [latest+msgpack+mmap]', () => countAll(latestMsgpackMmap.fromStreams('join', [STREAM_1, STREAM_2])))
             .add('4 - range scan [stable]',          () => countAll(stableStore.getAllEvents(third, twoThirds)))
             .add('4 - range scan [latest]',          () => countAll(latestStore.getAllEvents(third, twoThirds)))
+            .add('4 - range scan [latest+msgpack+mmap]', () => countAll(latestMsgpackMmap.getAllEvents(third, twoThirds)))
             .run();
     })
     .catch((e) => { console.error(e); process.exit(1); });

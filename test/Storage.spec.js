@@ -1199,6 +1199,25 @@ describe('Storage', function() {
         expect(storage.read(2)).to.be.eql(doc);
     });
 
+    it('supports serializer buffer hooks with mmap write buffer', function() {
+        storage = createStorage({
+            mmapWriteBuffer: true,
+            serializer: {
+                serialize: JSON.stringify,
+                deserialize: JSON.parse,
+                serializedSize: (doc) => Buffer.byteLength(JSON.stringify(doc), 'utf8'),
+                serializeToBuffer: (doc, buffer, offset) => buffer.write(JSON.stringify(doc), offset, 'utf8'),
+                deserializeBuffer: (buffer, offset, size) => JSON.parse(buffer.toString('utf8', offset, offset + size))
+            }
+        });
+        storage.open();
+        const doc = { foo: 'bar', value: 42, payload: 'x'.repeat(128) };
+        storage.write(doc);
+        storage.write(doc);
+        expect(storage.read(1)).to.be.eql(doc);
+        expect(storage.read(2)).to.be.eql(doc);
+    });
+
     describe('concurrency', function() {
 
         it('allows multiple writers to different partitions', function () {

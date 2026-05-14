@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { createRequire } from 'module';
 import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
 import { assert, alignTo } from '../util.js';
 import { buildMetadataHeader } from '../metadataUtil.js';
@@ -7,6 +8,25 @@ import Clock from '../Clock.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
+const DOCUMENT_SEPARATOR_BUFFER = Buffer.from(DOCUMENT_SEPARATOR, 'ascii');
+const require = createRequire(import.meta.url);
+
+let mmapIo = null;
+function loadMmapIo() {
+    if (mmapIo !== null) {
+        return mmapIo;
+    }
+    try {
+        mmapIo = require('@riaskov/mmap-io');
+    } catch (primaryError) {
+        try {
+            mmapIo = require('mmap-io');
+        } catch (fallbackError) {
+            mmapIo = false;
+        }
+    }
+    return mmapIo;
+}
 
 /**
  * A partition is a single file where the storage will write documents to depending on some partitioning rules.
@@ -23,6 +43,7 @@ class WritablePartition extends ReadablePartition {
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
+     * @param {boolean} [config.mmapWriteBuffer] If true, allocate the write buffer with mmap.
      * @param {object} [config.metadata] A metadata object that will be written to the file header.
      * @param {typeof Clock} [config.clock] The constructor to a clock interface
      */
@@ -32,6 +53,7 @@ class WritablePartition extends ReadablePartition {
             maxWriteBufferDocuments: 0,
             syncOnFlush: false,
             dirtyReads: true,
+            mmapWriteBuffer: false,
             metadata: {
                 epoch: Date.now()
             },
@@ -46,6 +68,7 @@ class WritablePartition extends ReadablePartition {
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0; // jshint ignore:line
         this.syncOnFlush = !!config.syncOnFlush;
         this.dirtyReads = !!config.dirtyReads;
+        this.mmapWriteBuffer = !!config.mmapWriteBuffer;
         this.metadata = config.metadata;
         assert(typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function', 'Clock needs to implement the method time()');
         this.ClockConstructor = config.clock;
@@ -72,7 +95,7 @@ class WritablePartition extends ReadablePartition {
             success = super.open();
         }
 
-        this.writeBuffer = success && Buffer.allocUnsafeSlow(this.writeBufferSize);
+        this.writeBuffer = success && this.createWriteBuffer();
         // Where inside the write buffer the next write is added
         this.writeBufferCursor = 0;
         // How many documents are currently in the write buffer
@@ -84,6 +107,21 @@ class WritablePartition extends ReadablePartition {
         this.clock = new this.ClockConstructor(this.metadata.epoch);
 
         return success;
+    }
+
+    createWriteBuffer() {
+        if (!this.mmapWriteBuffer) {
+            return Buffer.allocUnsafeSlow(this.writeBufferSize);
+        }
+        const mmap = loadMmapIo();
+        assert(mmap, 'An mmap package is required for mmapWriteBuffer.');
+        return mmap.map(
+            this.writeBufferSize,
+            mmap.PROT_READ | mmap.PROT_WRITE,
+            mmap.MAP_PRIVATE | mmap.MAP_ANON,
+            -1,
+            0
+        );
     }
 
     /**
@@ -208,7 +246,11 @@ class WritablePartition extends ReadablePartition {
 
         let bytesWritten = 0;
         bytesWritten += fs.writeSync(this.fd, this.writeMetaBuffer, 0, DOCUMENT_HEADER_SIZE);
-        bytesWritten += fs.writeSync(this.fd, data);
+        if (Buffer.isBuffer(data)) {
+            bytesWritten += fs.writeSync(this.fd, data, 0, dataSize);
+        } else {
+            bytesWritten += fs.writeSync(this.fd, data);
+        }
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
         bytesWritten += fs.writeSync(this.fd, DOCUMENT_PAD.substr(0, padSize));
         this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
@@ -235,12 +277,19 @@ class WritablePartition extends ReadablePartition {
 
         let bytesWritten = 0;
         bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
-        bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
+        if (Buffer.isBuffer(data)) {
+            data.copy(this.writeBuffer, this.writeBufferCursor + bytesWritten, 0, dataSize);
+            bytesWritten += dataSize;
+        } else {
+            bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
+        }
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
-        bytesWritten += this.writeBuffer.write(DOCUMENT_PAD.substr(0, padSize), this.writeBufferCursor + bytesWritten, 'utf8');
+        this.writeBuffer.fill(0x20, this.writeBufferCursor + bytesWritten, this.writeBufferCursor + bytesWritten + padSize);
+        bytesWritten += padSize;
         this.writeBuffer.writeUInt32BE(dataSize, this.writeBufferCursor + bytesWritten);
         bytesWritten += 4;
-        bytesWritten += this.writeBuffer.write(DOCUMENT_SEPARATOR, this.writeBufferCursor + bytesWritten, 'utf8');
+        DOCUMENT_SEPARATOR_BUFFER.copy(this.writeBuffer, this.writeBufferCursor + bytesWritten);
+        bytesWritten += DOCUMENT_SEPARATOR_BUFFER.byteLength;
         this.writeBufferCursor += bytesWritten;
         this.writeBufferDocuments++;
         if (typeof callback === 'function') {
@@ -248,6 +297,58 @@ class WritablePartition extends ReadablePartition {
         }
         this.flushIfWriteBufferDocumentsFull();
         return bytesWritten;
+    }
+
+    writeBufferedSerialized(dataSize, serializeToBuffer, sequenceNumber, callback) {
+        const bytesToWrite = this.documentWriteSize(dataSize);
+        this.flushIfWriteBufferTooSmall(bytesToWrite);
+
+        let bytesWritten = 0;
+        bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
+        const payloadOffset = this.writeBufferCursor + bytesWritten;
+        const serializedSize = serializeToBuffer(this.writeBuffer, payloadOffset);
+        if (serializedSize !== undefined) {
+            assert(serializedSize === dataSize, `Serialized size mismatch: expected ${dataSize}, got ${serializedSize}.`);
+        }
+        bytesWritten += dataSize;
+        const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
+        this.writeBuffer.fill(0x20, this.writeBufferCursor + bytesWritten, this.writeBufferCursor + bytesWritten + padSize);
+        bytesWritten += padSize;
+        this.writeBuffer.writeUInt32BE(dataSize, this.writeBufferCursor + bytesWritten);
+        bytesWritten += 4;
+        DOCUMENT_SEPARATOR_BUFFER.copy(this.writeBuffer, this.writeBufferCursor + bytesWritten);
+        bytesWritten += DOCUMENT_SEPARATOR_BUFFER.byteLength;
+        this.writeBufferCursor += bytesWritten;
+        this.writeBufferDocuments++;
+        if (typeof callback === 'function') {
+            this.flushCallbacks.push(callback);
+        }
+        this.flushIfWriteBufferDocumentsFull();
+        return bytesWritten;
+    }
+
+    writeSerialized(dataSize, serializeToBuffer, sequenceNumber, callback) {
+        assert(this.fd, 'Partition is not opened.');
+        if (typeof sequenceNumber === 'function') {
+            callback = sequenceNumber;
+            sequenceNumber = null;
+        }
+        assert(typeof serializeToBuffer === 'function', 'serializeToBuffer needs to be a function.');
+        assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
+
+        const dataPosition = this.size;
+        if (dataSize + DOCUMENT_HEADER_SIZE >= this.writeBuffer.byteLength * 4 / 5) {
+            const temp = Buffer.allocUnsafe(dataSize);
+            const serializedSize = serializeToBuffer(temp, 0);
+            if (serializedSize !== undefined) {
+                assert(serializedSize === dataSize, `Serialized size mismatch: expected ${dataSize}, got ${serializedSize}.`);
+            }
+            this.size += this.writeUnbuffered(temp, dataSize, sequenceNumber, callback);
+        } else {
+            this.size += this.writeBufferedSerialized(dataSize, serializeToBuffer, sequenceNumber, callback);
+        }
+        assert(this.size >= dataPosition + dataSize + DOCUMENT_HEADER_SIZE, `Error while writing document at position ${dataPosition}.`);
+        return dataPosition;
     }
 
     /**
@@ -263,7 +364,7 @@ class WritablePartition extends ReadablePartition {
             callback = sequenceNumber;
             sequenceNumber = null;
         }
-        const dataSize = Buffer.byteLength(data, 'utf8');
+        const dataSize = Buffer.isBuffer(data) ? data.byteLength : Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
         const dataPosition = this.size;

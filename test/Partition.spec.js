@@ -401,6 +401,14 @@ describe('Partition', function() {
             expect(read).to.be(blob);
         });
 
+        it('can read raw buffer slices', function() {
+            partition.open();
+            const position = partition.write('foobar');
+            const data = partition.readBufferFrom(position);
+            expect(data).to.not.be(false);
+            expect(data.buffer.toString('utf8', data.offset, data.offset + data.size)).to.be('foobar');
+        });
+
     });
 
     describe('truncate', function() {
