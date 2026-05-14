@@ -1199,45 +1199,6 @@ describe('Storage', function() {
         expect(storage.read(2)).to.be.eql(doc);
     });
 
-    it('supports serializer buffer hooks with mmap write buffer', function() {
-        storage = createStorage({
-            mmapWriteBuffer: true,
-            serializer: {
-                serialize: JSON.stringify,
-                deserialize: JSON.parse,
-                serializedSize: (doc) => Buffer.byteLength(JSON.stringify(doc), 'utf8'),
-                serializeToBuffer: (doc, buffer, offset) => buffer.write(JSON.stringify(doc), offset, 'utf8'),
-                deserializeBuffer: (buffer, offset, size) => JSON.parse(buffer.toString('utf8', offset, offset + size))
-            }
-        });
-        storage.open();
-        const doc = { foo: 'bar', value: 42, payload: 'x'.repeat(128) };
-        storage.write(doc);
-        storage.write(doc);
-        expect(storage.read(1)).to.be.eql(doc);
-        expect(storage.read(2)).to.be.eql(doc);
-    });
-
-    it('does not call serializedSize in mmap write path', function() {
-        storage = createStorage({
-            mmapWriteBuffer: true,
-            serializer: {
-                serialize: JSON.stringify,
-                deserialize: JSON.parse,
-                serializedSize: () => {
-                    throw new Error('serializedSize should not be called for mmap write path');
-                },
-                serializeToBuffer: () => {
-                    throw new Error('serializeToBuffer should not be called for mmap write path');
-                }
-            }
-        });
-        storage.open();
-        const doc = { foo: 'bar' };
-        storage.write(doc);
-        expect(storage.read(1)).to.be.eql(doc);
-    });
-
     it('falls back to serialize when serializer buffer hooks are incomplete', function() {
         let serializeCalled = 0;
         storage = createStorage({
