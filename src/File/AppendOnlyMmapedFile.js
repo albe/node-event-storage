@@ -7,7 +7,6 @@ import { ensureDirectory } from '../fsUtil.js';
 import { alignTo, assert } from '../util.js';
 
 const FILE_SIZE_MARKER_SIZE = 4;
-const DEFAULT_PAGE_SIZE = mmap.PAGESIZE || 4096;
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
 class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
@@ -17,23 +16,18 @@ class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
         assert(typeof name === 'string' && name !== '', 'Must specify a file name.');
         const config = Object.assign({
             dataDirectory: '.',
-            pageSize: DEFAULT_PAGE_SIZE,
-            writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE
         }, options);
 
         this.name = name;
         this.dataDirectory = path.resolve(config.dataDirectory);
         this.fileName = path.resolve(this.dataDirectory, name);
-        this.pageSize = Math.max(4, config.pageSize >>> 0); // jshint ignore:line
-        this.writeBufferSize = Math.max(4, config.writeBufferSize >>> 0); // jshint ignore:line
+        this.pageSize = mmap.PAGESIZE;
 
         this.fileMode = 'r';
         this.fd = null;
         this.fileSize = 0;
         this.mappedSize = 0;
         this.mapBuffer = null;
-        this.dirtyFrom = -1;
-        this.dirtyTo = -1;
     }
 
     isOpen() {
@@ -72,7 +66,6 @@ class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
     unmap() {
         this.mapBuffer = null;
         this.mappedSize = 0;
-        this.clearDirtyRange();
     }
 
     readFileSizeMarker() {
@@ -110,42 +103,6 @@ class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
         this.fileSize = markedSize >= 0 ? markedSize : this.detectFileSize();
     }
 
-    writeFileSizeMarker() {
-        assert(this.mapBuffer !== null, 'File is not mapped.');
-        assert(this.fileSize <= this.mappedSize - FILE_SIZE_MARKER_SIZE, 'Invalid file size marker range.');
-        const markerPos = this.mappedSize - FILE_SIZE_MARKER_SIZE;
-        const backwardsOffset = this.mappedSize - this.fileSize;
-        this.mapBuffer.writeUInt32BE(backwardsOffset >>> 0, markerPos); // jshint ignore:line
-        this.markDirty(markerPos, markerPos + FILE_SIZE_MARKER_SIZE);
-    }
-
-    markDirty(from, to) {
-        if (this.dirtyFrom === -1) {
-            this.dirtyFrom = from;
-            this.dirtyTo = to;
-            return;
-        }
-        this.dirtyFrom = Math.min(this.dirtyFrom, from);
-        this.dirtyTo = Math.max(this.dirtyTo, to);
-    }
-
-    clearDirtyRange() {
-        this.dirtyFrom = -1;
-        this.dirtyTo = -1;
-    }
-
-    flush() {
-        if (!this.fd || this.dirtyFrom < 0) {
-            return false;
-        }
-        mmap.sync(this.mapBuffer, true);
-        const now = new Date();
-        fs.futimesSync(this.fd, now, now);
-        fs.fdatasyncSync(this.fd);
-        this.clearDirtyRange();
-        return true;
-    }
-
     read(position, length) {
         assert(this.mapBuffer !== null, 'File is not mapped.');
         assert(position >= 0, 'Position must be >= 0.');
@@ -157,20 +114,6 @@ class ReadableAppendOnlyMmapedFile extends events.EventEmitter {
     readString(position, length, encoding = 'utf8') {
         return this.read(position, length).toString(encoding);
     }
-
-    truncate(size) {
-        assert(this.mapBuffer !== null, 'File is not mapped.');
-        size = Math.max(0, size);
-        if (size >= this.fileSize) {
-            return false;
-        }
-        const previousSize = this.fileSize;
-        this.mapBuffer.fill(0, size, this.fileSize);
-        this.fileSize = size;
-        this.markDirty(size, previousSize);
-        this.writeFileSizeMarker();
-        return true;
-    }
 }
 
 class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
@@ -178,7 +121,39 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
     constructor(name, options = {}) {
         super(name, options);
         this.fileMode = 'r+';
+        this.writeBufferSize = Math.max(this.pageSize, (options.writeBufferSize >>> 0) || DEFAULT_WRITE_BUFFER_SIZE); // jshint ignore:line
         this.initialData = options.initialData ? Buffer.from(options.initialData) : null;
+    }
+
+    writeFileSizeMarker() {
+        assert(this.mapBuffer !== null, 'File is not mapped.');
+        assert(this.fileSize <= this.mappedSize - FILE_SIZE_MARKER_SIZE, 'Invalid file size marker range.');
+        const markerPos = this.mappedSize - FILE_SIZE_MARKER_SIZE;
+        const backwardsOffset = this.mappedSize - this.fileSize;
+        this.mapBuffer.writeUInt32BE(backwardsOffset >>> 0, markerPos); // jshint ignore:line
+    }
+
+    flush() {
+        if (!this.fd || !this.mapBuffer) {
+            return false;
+        }
+        mmap.sync(this.mapBuffer, true);
+        const now = new Date();
+        fs.futimesSync(this.fd, now, now);
+        fs.fdatasyncSync(this.fd);
+        return true;
+    }
+
+    truncate(size) {
+        assert(this.mapBuffer !== null, 'File is not mapped.');
+        size = Math.max(0, size);
+        if (size >= this.fileSize) {
+            return false;
+        }
+        this.mapBuffer.fill(0, size, this.fileSize);
+        this.fileSize = size;
+        this.writeFileSizeMarker();
+        return true;
     }
 
     computeMappedSize(actualSize) {
@@ -194,7 +169,6 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         this.map(this.mappedSize);
         if (this.initialData && this.initialData.byteLength > 0) {
             this.initialData.copy(this.mapBuffer, 0);
-            this.markDirty(0, this.initialData.byteLength);
         }
         this.writeFileSizeMarker();
         this.flush();
@@ -253,7 +227,6 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         }
         buffer.copy(this.mapBuffer, writePosition);
         this.fileSize = endPosition;
-        this.markDirty(writePosition, endPosition);
         this.writeFileSizeMarker();
         return writePosition;
     }
