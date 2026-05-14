@@ -41,13 +41,24 @@ function bench({ IndexClass, dataDirectory, id, readers }) {
 	for (const index of readIndexes) {
 		index.close();
 		index.open();
+	}
+
+	for (let reader = 0; reader < readIndexes.length; reader++) {
+		const index = readIndexes[reader];
+		const start = Math.floor((reader * WRITES) / readers) + 1;
+		const end = Math.floor(((reader + 1) * WRITES) / readers);
+		const expectedLength = end - start + 1;
 		let number = 0;
-		const entries = index.range(-WRITES + 1) || [];
+		const entries = index.range(start, end) || [];
 		for (const entry of entries) {
 			number = entry.number;
 		}
-		if (number < WRITES) {
-			throw new Error('Not all entries were written! Last entry was ' + number);
+		if (entries.length !== expectedLength || number !== end) {
+			throw new Error(
+				'Split read range failed for reader ' + reader +
+				': expected [' + start + ',' + end + '] but got last=' + number +
+				' length=' + entries.length
+			);
 		}
 	}
 
