@@ -373,7 +373,11 @@ class WritableStorage extends ReadableStorage {
 
         let position;
         let dataSize;
-        if (typeof this.serializer.serializedSize === 'function'
+        if (partition.mmapWriteBuffer && typeof this.serializer.serialize === 'function') {
+            const data = this.serializer.serialize(document);
+            dataSize = WritableStorage.serializedDataSize(data);
+            position = partition.write(data, this.length, callback);
+        } else if (typeof this.serializer.serializedSize === 'function'
             && typeof this.serializer.serializeToBuffer === 'function'
             && typeof partition.writeSerialized === 'function') {
             dataSize = this.serializer.serializedSize(document);

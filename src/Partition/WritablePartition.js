@@ -1,6 +1,4 @@
 import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
 import { createRequire } from 'module';
 import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
 import { assert, alignTo } from '../util.js';
@@ -72,6 +70,13 @@ class WritablePartition extends ReadablePartition {
         this.dirtyReads = !!config.dirtyReads;
         this.mmapWriteBuffer = !!config.mmapWriteBuffer;
         this.metadata = config.metadata;
+        this.writeBuffer = null;
+        this.writeBufferMapping = null;
+        this.writeBufferMapDelta = 0;
+        this.writeBufferCursor = 0;
+        this.writeBufferDocuments = 0;
+        this.flushCallbacks = [];
+        this.writeMetaBuffer = null;
         assert(typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function', 'Clock needs to implement the method time()');
         this.ClockConstructor = config.clock;
     }
@@ -97,7 +102,7 @@ class WritablePartition extends ReadablePartition {
             success = super.open();
         }
 
-        this.writeBuffer = success && this.createWriteBuffer();
+        this.writeBuffer = success && (!this.mmapWriteBuffer ? this.createWriteBuffer(this.size) : null);
         // Where inside the write buffer the next write is added
         this.writeBufferCursor = 0;
         // How many documents are currently in the write buffer
@@ -111,30 +116,37 @@ class WritablePartition extends ReadablePartition {
         return success;
     }
 
-    createWriteBuffer() {
+    createWriteBuffer(filePosition = this.size) {
         if (!this.mmapWriteBuffer) {
             return Buffer.allocUnsafeSlow(this.writeBufferSize);
         }
         const mmap = loadMmapIo();
         assert(mmap, 'An mmap package is required for mmapWriteBuffer.');
-        const fileName = path.join(
-            this.dataDirectory,
-            `.${crypto.createHash('sha1').update(this.name).digest('hex').slice(0, 12)}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.mmap-buffer`
+        const pageSize = mmap.PAGESIZE || 4096;
+        const fileOffset = this.headerSize + filePosition;
+        const mapOffset = fileOffset - (fileOffset % pageSize);
+        const mapDelta = fileOffset - mapOffset;
+        const mapLength = mapDelta + this.writeBufferSize;
+        fs.ftruncateSync(this.fd, fileOffset + this.writeBufferSize);
+        this.writeBufferMapping = mmap.map(
+            mapLength,
+            mmap.PROT_READ | mmap.PROT_WRITE,
+            mmap.MAP_SHARED,
+            this.fd,
+            mapOffset
         );
-        const fd = fs.openSync(fileName, 'w+');
-        fs.ftruncateSync(fd, this.writeBufferSize);
-        try {
-            return mmap.map(
-                this.writeBufferSize,
-                mmap.PROT_READ | mmap.PROT_WRITE,
-                mmap.MAP_SHARED,
-                fd,
-                0
-            );
-        } finally {
-            fs.closeSync(fd);
-            fs.unlinkSync(fileName);
+        this.writeBufferMapDelta = mapDelta;
+        return this.writeBufferMapping.subarray(mapDelta, mapDelta + this.writeBufferSize);
+    }
+
+    ensureWriteBuffer() {
+        if (!this.writeBuffer) {
+            this.writeBuffer = this.createWriteBuffer(this.size - this.writeBufferCursor);
         }
+    }
+
+    getWriteBufferCapacity() {
+        return this.writeBuffer ? this.writeBuffer.byteLength : this.writeBufferSize;
     }
 
     /**
@@ -144,11 +156,15 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     close() {
-        if (this.fd && this.writeBuffer) {
-            this.flush();
+        if (this.fd) {
+            if (this.writeBufferCursor > 0) {
+                this.flush();
+            }
             fs.fsyncSync(this.fd);
 
             this.writeBuffer = null;
+            this.writeBufferMapping = null;
+            this.writeBufferMapDelta = 0;
             this.writeBufferCursor = 0;
             this.writeBufferDocuments = 0;
             this.writeMetaBuffer = null;
@@ -178,11 +194,20 @@ class WritablePartition extends ReadablePartition {
         if (!this.fd) {
             return false;
         }
-        if (this.writeBufferCursor === 0) {
+        if (!this.writeBuffer || this.writeBufferCursor === 0) {
             return false;
         }
 
-        fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferCursor);
+        if (this.mmapWriteBuffer) {
+            const mmap = loadMmapIo();
+            mmap.sync(this.writeBufferMapping, this.syncOnFlush);
+            fs.ftruncateSync(this.fd, this.headerSize + this.size);
+            this.writeBuffer = null;
+            this.writeBufferMapping = null;
+            this.writeBufferMapDelta = 0;
+        } else {
+            fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferCursor);
+        }
         if (this.syncOnFlush) {
             fs.fsyncSync(this.fd);
         }
@@ -285,6 +310,7 @@ class WritablePartition extends ReadablePartition {
      * @returns {number} Number of bytes written.
      */
     writeBuffered(data, dataSize, sequenceNumber, callback) {
+        this.ensureWriteBuffer();
         const bytesToWrite = this.documentWriteSize(dataSize);
         this.flushIfWriteBufferTooSmall(bytesToWrite);
 
@@ -313,6 +339,7 @@ class WritablePartition extends ReadablePartition {
     }
 
     writeBufferedSerialized(dataSize, serializeToBuffer, sequenceNumber, callback) {
+        this.ensureWriteBuffer();
         const bytesToWrite = this.documentWriteSize(dataSize);
         this.flushIfWriteBufferTooSmall(bytesToWrite);
 
@@ -350,7 +377,7 @@ class WritablePartition extends ReadablePartition {
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
         const dataPosition = this.size;
-        if (dataSize + DOCUMENT_HEADER_SIZE >= this.writeBuffer.byteLength * 4 / 5) {
+        if (dataSize + DOCUMENT_HEADER_SIZE >= this.getWriteBufferCapacity() * 4 / 5) {
             const temp = Buffer.allocUnsafe(dataSize);
             const serializedSize = serializeToBuffer(temp, 0);
             if (serializedSize !== undefined) {
@@ -381,7 +408,7 @@ class WritablePartition extends ReadablePartition {
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
         const dataPosition = this.size;
-        if (dataSize + DOCUMENT_HEADER_SIZE >= this.writeBuffer.byteLength * 4 / 5) {
+        if (dataSize + DOCUMENT_HEADER_SIZE >= this.getWriteBufferCapacity() * 4 / 5) {
             this.size += this.writeUnbuffered(data, dataSize, sequenceNumber, callback);
         } else {
             this.size += this.writeBuffered(data, dataSize, sequenceNumber, callback);
