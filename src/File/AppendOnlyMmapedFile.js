@@ -207,6 +207,7 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
             this.grow(this.fileSize);
         } else if (this.markerWasInvalid) {
             // Crash-recovery: the marker was missing or corrupt; re-write and flush it.
+            this.markerWasInvalid = false;
             this.writeFileSizeMarker();
             this.hasPendingData = true;
             this.flush();
@@ -231,20 +232,6 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
 
     write(data) {
         assert(this.mapBuffer !== null, 'File is not mapped.');
-        if (typeof data === 'number') {
-            // Reserve `data` bytes at the current write position and return the mapped slice
-            // so callers can serialise directly into the mmap buffer with no extra copy.
-            const size = data;
-            const writePosition = this.fileSize;
-            const endPosition = writePosition + size;
-            if (endPosition > this.mappedSize - FILE_SIZE_MARKER_SIZE) {
-                this.grow(endPosition);
-            }
-            this.fileSize = endPosition;
-            this.writeFileSizeMarker();
-            this.hasPendingData = true;
-            return this.mapBuffer.subarray(writePosition, endPosition);
-        }
         const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
         const writePosition = this.fileSize;
         const endPosition = writePosition + buffer.byteLength;
@@ -256,6 +243,28 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         this.writeFileSizeMarker();
         this.hasPendingData = true;
         return writePosition;
+    }
+
+    /**
+     * Reserve `size` bytes at the current write position and return the mapped
+     * buffer slice, allowing callers to serialise directly into the mmap region
+     * with no extra copy.  Equivalent to `write(Buffer.allocUnsafe(size))` but
+     * without the intermediate allocation.
+     *
+     * @param {number} size Number of bytes to reserve.
+     * @returns {Buffer} A view into the mmap buffer at the reserved region.
+     */
+    reserve(size) {
+        assert(this.mapBuffer !== null, 'File is not mapped.');
+        const writePosition = this.fileSize;
+        const endPosition = writePosition + size;
+        if (endPosition > this.mappedSize - FILE_SIZE_MARKER_SIZE) {
+            this.grow(endPosition);
+        }
+        this.fileSize = endPosition;
+        this.writeFileSizeMarker();
+        this.hasPendingData = true;
+        return this.mapBuffer.subarray(writePosition, endPosition);
     }
 
     close() {

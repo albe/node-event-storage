@@ -101,7 +101,7 @@ class MmapWritableIndex extends MmapReadableIndex {
             throw new Error('Consistency error. Tried to add an index that should come before existing last entry.');
         }
 
-        entry.toBuffer(this.file.write(this.EntryClass.size), 0);
+        entry.toBuffer(this.file.reserve(this.EntryClass.size), 0);
         this.data[this.length - 1] = entry;
 
         this.onFlush(callback, this.length);

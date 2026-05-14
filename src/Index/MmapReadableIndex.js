@@ -146,8 +146,11 @@ class MmapReadableIndex extends events.EventEmitter {
         }
         const count = until - from + 1;
 
-        // Determine the contiguous uncached region to batch-read.
+        // Trim the range to skip entries that are already cached at both ends.
         let readFrom = from;
+        while (readFrom <= until && this.data[readFrom - 1]) {
+            readFrom++;
+        }
         let readUntil = until;
         while (readUntil >= readFrom && this.data[readUntil - 1]) {
             readUntil--;
