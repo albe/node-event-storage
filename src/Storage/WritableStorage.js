@@ -480,12 +480,16 @@ class WritableStorage extends ReadableStorage {
             return;
         }
 
-        this.forEachDistinctPartitionOf({
-            [Symbol.iterator]: function* () {
-                yield first.value;
+        this.forEachDistinctPartitionOf(this.iterableWithFirst(first.value, iterator), entry => this.getPartition(entry.partition).truncate(entry.position));
+    }
+
+    iterableWithFirst(firstValue, iterator) {
+        return {
+            [Symbol.iterator]: function*() {
+                yield firstValue;
                 yield* iterator;
             }
-        }, entry => this.getPartition(entry.partition).truncate(entry.position));
+        };
     }
 
     /**

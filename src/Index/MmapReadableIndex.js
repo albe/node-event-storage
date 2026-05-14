@@ -260,7 +260,7 @@ class MmapReadableIndex extends events.EventEmitter {
      */
     all() {
         if (this.length === 0) {
-            return (function*() {})();
+            return this.iterateEmptyEntries();
         }
         return this.iterateEntries(1, this.length, 1);
     }
@@ -308,7 +308,7 @@ class MmapReadableIndex extends events.EventEmitter {
         from = wrapAndCheck(from, this.length);
         until = wrapAndCheck(until, this.length);
 
-        if (from <= 0 || until <= 0) {
+        if (from <= 0 || from > this.length || until <= 0 || until > this.length) {
             return false;
         }
 
@@ -347,10 +347,15 @@ class MmapReadableIndex extends events.EventEmitter {
      * @returns {Generator<Entry>}
      */
     *iterateEntries(from, until, step) {
-        for (let index = from - 1; index !== until - 1 + step; index += step) {
+        // Stop one step after the inclusive `until` boundary.
+        // Forward: until=5 -> stopIndex=5; reverse: until=2 -> stopIndex=0.
+        const stopIndex = until - 1 + step;
+        for (let index = from - 1; index !== stopIndex; index += step) {
             yield this.readEntryAt(this.headerSize + index * this.EntryClass.size);
         }
     }
+
+    *iterateEmptyEntries() {}
 
     readEntryAt(offset) {
         return this.EntryClass.fromBuffer(this.mapBuffer, offset);
