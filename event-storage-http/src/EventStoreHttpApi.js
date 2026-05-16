@@ -516,7 +516,9 @@ class EventStoreHttpApi {
         const consumer = this.eventStore.getConsumer(stream, identifier, initialState, from);
         const exists = fs.existsSync(consumer.fileName);
         if (!exists) {
+            const persisted = once(consumer, 'persisted');
             consumer.reset(initialState, from);
+            await persisted;
         }
         sendJson(response, exists ? 200 : 201, {
             identifier,

@@ -171,6 +171,13 @@ test('GET /query returns NDJSON and exposes a serialized commit condition header
 test('PUT /consumers/:identifier/stream/:stream and GET /consumers endpoints expose durable consumers', async () => {
     const fixture = await createFixture();
     try {
+        const streamResponse = await fetch(`${fixture.baseUrl}/streams/orders-1`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ stream: 'orders-1' })
+        });
+        assert.equal(streamResponse.status, 201);
+
         const createResponse = await fetch(`${fixture.baseUrl}/consumers/orders-reader/stream/orders-1/from/1`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
