@@ -1,18 +1,8 @@
-import fs from 'fs/promises';
 import { CommitCondition, ExpectedVersion } from '../../../index.js';
 import { matches } from '../../../src/metadataUtil.js';
 import { HttpError } from './errors.js';
 
 const readOptionNames = new Set(['from', 'until', 'forwards', 'backwards']);
-
-async function fileExists(pathname) {
-    try {
-        await fs.access(pathname);
-        return true;
-    } catch {
-        return false;
-    }
-}
 
 function parseJson(raw, what) {
     try {
@@ -293,7 +283,6 @@ export {
     consumerNameToStream,
     createPayloadMetadataPredicate,
     ensureReady,
-    fileExists,
     getQueryValues,
     parseCondition,
     parseExpectedVersion,

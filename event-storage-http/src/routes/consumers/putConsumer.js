@@ -1,6 +1,6 @@
 import { once } from 'events';
 import { HttpError, sendJson } from '../../http/errors.js';
-import { fileExists, splitConsumerStreamPath } from '../../http/routeUtils.js';
+import { scanConsumersAsync, splitConsumerStreamPath } from '../../http/routeUtils.js';
 
 function registerPutConsumerRoute(app, eventStore) {
     app.put(/^\/consumers\/([^/]+)\/stream\/(.+)$/, async (request, response) => {
@@ -11,8 +11,11 @@ function registerPutConsumerRoute(app, eventStore) {
             throw new HttpError(400, 'Consumer payload must be a JSON object.');
         }
 
+        const consumerName = stream === '_all'
+            ? `_all.${identifier}`
+            : `stream-${stream}.${identifier}`;
+        const exists = (await scanConsumersAsync(eventStore)).includes(consumerName);
         const consumer = eventStore.getConsumer(stream, identifier, initialState, from);
-        const exists = await fileExists(consumer.fileName);
         if (!exists) {
             const persisted = once(consumer, 'persisted');
             consumer.reset(initialState, from);
