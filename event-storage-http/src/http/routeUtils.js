@@ -112,11 +112,15 @@ function parsePositiveInteger(value, name) {
     return parsed;
 }
 
+function hasEmptyPathSegment(value) {
+    return value.split('/').some(segment => segment === '');
+}
+
 function parseStreamName(value, source = 'stream') {
     if (typeof value !== 'string' || value === '') {
         throw new HttpError(400, `${source} must not be empty.`);
     }
-    if (!validStreamNamePattern.test(value) || value.split('/').some(segment => segment === '')) {
+    if (!validStreamNamePattern.test(value) || hasEmptyPathSegment(value)) {
         throw new HttpError(400, `${source} may only contain letters, numbers, "-", "_" and "/".`);
     }
     return value;
