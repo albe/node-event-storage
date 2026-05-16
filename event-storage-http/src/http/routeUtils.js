@@ -3,7 +3,7 @@ import { matches } from '../../../src/metadataUtil.js';
 import { HttpError } from './errors.js';
 
 const readOptionNames = new Set(['from', 'until', 'forwards', 'backwards']);
-const validStreamNamePattern = /^[A-Za-z0-9/_-]+$/;
+const validStreamNamePattern = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;
 const validConsumerIdentifierPattern = /^[A-Za-z0-9_-]+$/;
 
 function parseJson(raw, what) {
@@ -112,15 +112,11 @@ function parsePositiveInteger(value, name) {
     return parsed;
 }
 
-function hasEmptyPathSegment(value) {
-    return value.split('/').some(segment => segment === '');
-}
-
 function parseStreamName(value, source = 'stream') {
     if (typeof value !== 'string' || value === '') {
         throw new HttpError(400, `${source} must not be empty.`);
     }
-    if (!validStreamNamePattern.test(value) || hasEmptyPathSegment(value)) {
+    if (!validStreamNamePattern.test(value)) {
         throw new HttpError(400, `${source} may only contain letters, numbers, "-", "_" and "/".`);
     }
     return value;

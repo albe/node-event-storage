@@ -1,10 +1,9 @@
 import { writeNdjson } from '../../http/ndjson.js';
-import { applyMatcher, buildReadWindow, parseMatcher, parseStreamName, splitReadStreamPath } from '../../http/routeUtils.js';
+import { applyMatcher, buildReadWindow, parseMatcher, splitReadStreamPath } from '../../http/routeUtils.js';
 
 function registerGetCategoryRoute(app, eventStore) {
     app.get(/^\/streams\/category\/(.+)$/, (request, response) => {
-        const { resourceName, options } = splitReadStreamPath(request.params[0]);
-        const category = parseStreamName(resourceName, 'category');
+        const { resourceName: category, options } = splitReadStreamPath(request.params[0]);
         const filter = parseMatcher(request.query.filter, 'filter');
         const categoryStream = eventStore.getEventStreamForCategory(category);
         const { from, until } = buildReadWindow(categoryStream.streamIndex.length, options);
