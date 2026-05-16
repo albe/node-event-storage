@@ -1,0 +1,17 @@
+{
+  "name": "event-storage-http",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP API layer for node-event-storage",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "benchmark": "node ./bench/compare-readable-partitions.js",
+    "test": "node --test ./test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.0"
+  }
+}
