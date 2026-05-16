@@ -1920,6 +1920,14 @@ describe('EventStore', function() {
             });
         });
 
+        it('accepts dotted type stream names when they match the stream-name rules', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'Order.Placed', orderId: 1 }], () => {
+                expect(eventstore.getStreamVersion('Order.Placed')).to.be(1);
+                done();
+            });
+        });
+
         it('creates type streams for all event types in a multi-event commit', function(done) {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
             eventstore.commit('order-1', [
@@ -1930,6 +1938,18 @@ describe('EventStore', function() {
                 expect(eventstore.getStreamVersion('OrderShipped')).to.be(1);
                 done();
             });
+        });
+
+        it('throws when typeAccessor returns a non-string value', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            expect(() => eventstore.commit('s', [{ type: 42 }])).to.throwError(/typeAccessor must return a string/);
+            expect(eventstore.length).to.be(0);
+        });
+
+        it('throws when typeAccessor returns a string that is not a valid stream name', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            expect(() => eventstore.commit('s', [{ type: 'Order..Placed' }])).to.throwError(/typeAccessor must return a valid stream name/);
+            expect(eventstore.length).to.be(0);
         });
 
         it('silently skips type stream creation when typeAccessor returns a falsy value', function(done) {

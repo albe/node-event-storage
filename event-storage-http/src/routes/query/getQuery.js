@@ -1,10 +1,10 @@
 import { HttpError } from '../../http/errors.js';
 import { writeNdjson } from '../../http/ndjson.js';
-import { createPayloadMetadataPredicate, getQueryValues, parseMatcher, parseRevision, resolveBoundary, serializeCondition } from '../../http/routeUtils.js';
+import { createPayloadMetadataPredicate, getQueryValues, parseMatcher, parseRevision, parseStreamName, resolveBoundary, serializeCondition } from '../../http/routeUtils.js';
 
 function registerGetQueryRoute(app, eventStore) {
     app.get(['/query', '/query/from/:revision'], (request, response) => {
-        const types = getQueryValues(request.query.types);
+        const types = getQueryValues(request.query.types).map(type => parseStreamName(type, 'types'));
         if (types.length === 0) {
             throw new HttpError(400, 'types query parameter is required.');
         }

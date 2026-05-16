@@ -86,7 +86,7 @@ test('POST /streams/:stream/commit stores events and GET /streams/:stream/versio
 test('HTTP API validates stream names and consumer identifiers', async () => {
     const fixture = await createFixture();
     try {
-        const validCommitResponse = await fetch(`${fixture.baseUrl}/streams/orders_us/eu-1/commit`, {
+        const validCommitResponse = await fetch(`${fixture.baseUrl}/streams/orders.v1/eu-1/commit`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
@@ -95,10 +95,13 @@ test('HTTP API validates stream names and consumer identifiers', async () => {
         });
         assert.equal(validCommitResponse.status, 201);
 
-        const validVersionResponse = await fetch(`${fixture.baseUrl}/streams/orders_us/eu-1/version`);
+        const validVersionResponse = await fetch(`${fixture.baseUrl}/streams/orders.v1/eu-1/version`);
         assert.equal(validVersionResponse.status, 200);
 
-        const invalidStreamResponse = await fetch(`${fixture.baseUrl}/streams/orders.1/commit`, {
+        const dottedTypeQueryResponse = await fetch(`${fixture.baseUrl}/query?types=Order.Placed`);
+        assert.equal(dottedTypeQueryResponse.status, 200);
+
+        const invalidStreamResponse = await fetch(`${fixture.baseUrl}/streams/orders..1/commit`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
@@ -107,13 +110,16 @@ test('HTTP API validates stream names and consumer identifiers', async () => {
         });
         assert.equal(invalidStreamResponse.status, 400);
         assert.deepEqual(await invalidStreamResponse.json(), {
-            error: 'stream may only contain letters, numbers, "-", "_" and "/".'
+            error: 'stream must use segments that start with a letter or number and may contain letters, numbers, "-", "_", ".", and "/".'
         });
 
-        const invalidJoinResponse = await fetch(`${fixture.baseUrl}/streams/join?streams=orders.1`);
+        const invalidJoinResponse = await fetch(`${fixture.baseUrl}/streams/join?streams=orders..1`);
         assert.equal(invalidJoinResponse.status, 400);
 
-        const invalidConsumerResponse = await fetch(`${fixture.baseUrl}/consumers/reader%2F1/stream/orders_us/eu-1`, {
+        const invalidQueryResponse = await fetch(`${fixture.baseUrl}/query?types=Order..Placed`);
+        assert.equal(invalidQueryResponse.status, 400);
+
+        const invalidConsumerResponse = await fetch(`${fixture.baseUrl}/consumers/reader%2F1/stream/orders.v1/eu-1`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ lastSeen: null })

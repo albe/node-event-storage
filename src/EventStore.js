@@ -19,6 +19,7 @@ const ExpectedVersion = {
  * Default matcher property paths mirroring the Storage default, used for index optimization.
  */
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
+const streamNamePattern = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/.-][A-Za-z0-9][A-Za-z0-9_]*)*$/;
 
 class OptimisticConcurrencyError extends Error {}
 
@@ -403,7 +404,7 @@ class EventStore extends events.EventEmitter {
     ensureTypeStreams(events) {
         if (!this.typeAccessor) return;
         for (const event of events) {
-            const type = this.typeAccessor(event);
+            const type = this.resolveTypeStreamName(event);
             if (type && !(type in this.streams)) {
                 const matcher = this.typeMatcherFn
                     ? this.typeMatcherFn(type)
@@ -411,6 +412,16 @@ class EventStore extends events.EventEmitter {
                 this.createEventStream(type, matcher, false);
             }
         }
+    }
+
+    resolveTypeStreamName(event) {
+        const type = this.typeAccessor(event);
+        if (type === undefined || type === null || type === '') {
+            return null;
+        }
+        assert(typeof type === 'string', 'typeAccessor must return a string.');
+        assert(streamNamePattern.test(type), 'typeAccessor must return a valid stream name.');
+        return type;
     }
 
     /**
