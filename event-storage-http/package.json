@@ -9,6 +9,7 @@
   },
   "scripts": {
     "benchmark": "node ./bench/compare-readable-partitions.js",
+    "benchmark:streaming": "node ./bench/bench-raw-vs-ndjson-streaming.js",
     "test": "node --test ./test/*.test.js"
   },
   "engines": {
