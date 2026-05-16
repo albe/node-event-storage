@@ -3,6 +3,8 @@ import { matches } from '../../../src/metadataUtil.js';
 import { HttpError } from './errors.js';
 
 const readOptionNames = new Set(['from', 'until', 'forwards', 'backwards']);
+const validStreamNamePattern = /^[A-Za-z0-9/_-]+$/;
+const validConsumerIdentifierPattern = /^[A-Za-z0-9_-]+$/;
 
 function parseJson(raw, what) {
     try {
@@ -110,6 +112,26 @@ function parsePositiveInteger(value, name) {
     return parsed;
 }
 
+function parseStreamName(value, source = 'stream') {
+    if (typeof value !== 'string' || value === '') {
+        throw new HttpError(400, `${source} must not be empty.`);
+    }
+    if (!validStreamNamePattern.test(value) || value.split('/').some(segment => segment === '')) {
+        throw new HttpError(400, `${source} may only contain letters, numbers, "-", "_" and "/".`);
+    }
+    return value;
+}
+
+function parseConsumerIdentifier(value, source = 'identifier') {
+    if (typeof value !== 'string' || value === '') {
+        throw new HttpError(400, `${source} must not be empty.`);
+    }
+    if (!validConsumerIdentifierPattern.test(value)) {
+        throw new HttpError(400, `${source} may only contain letters, numbers, "-" and "_".`);
+    }
+    return value;
+}
+
 function parseSegmentOptions(segments, startIndex = 0) {
     const options = {};
     for (let index = startIndex; index < segments.length; index += 2) {
@@ -200,7 +222,7 @@ function splitReadStreamPath(rawPath) {
         throw new HttpError(404, 'Unknown route.');
     }
     return {
-        resourceName,
+        resourceName: parseStreamName(resourceName),
         options: parseSegmentOptions(segments.slice(optionStart))
     };
 }
@@ -212,7 +234,7 @@ function splitConsumerStreamPath(rawPath) {
         from = parsePositiveInteger(segments[segments.length - 1], 'from');
         segments.splice(-2, 2);
     }
-    const resourceName = segments.join('/');
+    const resourceName = parseStreamName(segments.join('/'));
     if (!resourceName) {
         throw new HttpError(404, 'Unknown route.');
     }
@@ -293,8 +315,10 @@ export {
     parseExpectedVersion,
     parseMatcher,
     parseReadOptions,
+    parseConsumerIdentifier,
     parseRevision,
     parseSegmentOptions,
+    parseStreamName,
     resolveBoundary,
     scanConsumersAsync,
     serializeCondition,

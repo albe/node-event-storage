@@ -1,9 +1,9 @@
 import { HttpError, sendJson } from '../../http/errors.js';
-import { commitAsync, parseCondition, parseExpectedVersion } from '../../http/routeUtils.js';
+import { commitAsync, parseCondition, parseExpectedVersion, parseStreamName } from '../../http/routeUtils.js';
 
 function registerPostCommitRoute(app, eventStore) {
     app.post(/^\/streams\/(.+)\/commit$/, async (request, response) => {
-        const streamName = decodeURIComponent(request.params[0]);
+        const streamName = parseStreamName(decodeURIComponent(request.params[0]));
         const body = request.body ?? {};
         if (!body || typeof body !== 'object' || Array.isArray(body)) {
             throw new HttpError(400, 'Commit payload must be a JSON object.');

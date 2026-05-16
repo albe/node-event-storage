@@ -83,6 +83,50 @@ test('POST /streams/:stream/commit stores events and GET /streams/:stream/versio
     }
 });
 
+test('HTTP API accepts safe stream names and rejects invalid stream or consumer names', async () => {
+    const fixture = await createFixture();
+    try {
+        const validCommitResponse = await fetch(`${fixture.baseUrl}/streams/orders_us/eu-1/commit`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                events: [{ type: 'OrderPlaced', orderId: 'safe-1' }]
+            })
+        });
+        assert.equal(validCommitResponse.status, 201);
+
+        const validVersionResponse = await fetch(`${fixture.baseUrl}/streams/orders_us/eu-1/version`);
+        assert.equal(validVersionResponse.status, 200);
+
+        const invalidStreamResponse = await fetch(`${fixture.baseUrl}/streams/orders.1/commit`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                events: [{ type: 'OrderPlaced', orderId: 'unsafe-1' }]
+            })
+        });
+        assert.equal(invalidStreamResponse.status, 400);
+        assert.deepEqual(await invalidStreamResponse.json(), {
+            error: 'stream may only contain letters, numbers, "-", "_" and "/".'
+        });
+
+        const invalidJoinResponse = await fetch(`${fixture.baseUrl}/streams/join?streams=orders.1`);
+        assert.equal(invalidJoinResponse.status, 400);
+
+        const invalidConsumerResponse = await fetch(`${fixture.baseUrl}/consumers/reader%2F1/stream/orders_us/eu-1`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ lastSeen: null })
+        });
+        assert.equal(invalidConsumerResponse.status, 400);
+        assert.deepEqual(await invalidConsumerResponse.json(), {
+            error: 'identifier may only contain letters, numbers, "-" and "_".'
+        });
+    } finally {
+        await destroyFixture(fixture);
+    }
+});
+
 test('PUT /streams/:stream creates matcher streams and GET /streams/:stream returns filtered NDJSON', async () => {
     const fixture = await createFixture();
     try {

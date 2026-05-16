@@ -1,12 +1,12 @@
 import { HttpError } from '../../http/errors.js';
 import { writeNdjson } from '../../http/ndjson.js';
-import { applyMatcher, buildReadWindow, getQueryValues, parseMatcher, parseReadOptions } from '../../http/routeUtils.js';
+import { applyMatcher, buildReadWindow, getQueryValues, parseMatcher, parseReadOptions, parseStreamName } from '../../http/routeUtils.js';
 
 function registerGetJoinRoute(app, eventStore) {
     app.get(/^\/streams\/join(?:\/(.*))?$/, (request, response) => {
         const rawOptions = request.params[0] || '';
         const filter = parseMatcher(request.query.filter, 'filter');
-        const streamNames = getQueryValues(request.query.streams);
+        const streamNames = getQueryValues(request.query.streams).map(streamName => parseStreamName(streamName, 'streams'));
         if (streamNames.length === 0) {
             throw new HttpError(400, 'streams query parameter is required.');
         }

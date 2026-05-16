@@ -1,10 +1,10 @@
 import { once } from 'events';
 import { HttpError, sendJson } from '../../http/errors.js';
-import { buildConsumerName, scanConsumersAsync, splitConsumerStreamPath } from '../../http/routeUtils.js';
+import { buildConsumerName, parseConsumerIdentifier, scanConsumersAsync, splitConsumerStreamPath } from '../../http/routeUtils.js';
 
 function registerPutConsumerRoute(app, eventStore) {
     app.put(/^\/consumers\/([^/]+)\/stream\/(.+)$/, async (request, response) => {
-        const identifier = decodeURIComponent(request.params[0]);
+        const identifier = parseConsumerIdentifier(decodeURIComponent(request.params[0]));
         const { resourceName: stream, from } = splitConsumerStreamPath(request.params[1]);
         const initialState = request.body === undefined ? {} : request.body;
         if (!initialState || typeof initialState !== 'object' || Array.isArray(initialState)) {
