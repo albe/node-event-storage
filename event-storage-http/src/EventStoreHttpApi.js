@@ -1,4 +1,4 @@
-import fs from 'fs';
+import fs from 'fs/promises';
 import http from 'http';
 import { once } from 'events';
 import { CommitCondition, ExpectedVersion, OptimisticConcurrencyError } from '../../index.js';
@@ -13,6 +13,15 @@ class HttpError extends Error {
         super(message);
         this.status = status;
         this.details = details;
+    }
+}
+
+async function fileExists(pathname) {
+    try {
+        await fs.access(pathname);
+        return true;
+    } catch {
+        return false;
     }
 }
 
@@ -477,8 +486,8 @@ class EventStoreHttpApi {
         const filter = parseMatcher(url.searchParams.get('filter'), 'filter');
         const categoryStream = this.eventStore.getEventStreamForCategory(category);
         const { from, until } = buildReadWindow(categoryStream.streamIndex.length, options);
-        const stream = this.eventStore.getEventStreamForCategory(category, from, until);
-        writeNdjson(response, stream, filter, {
+        categoryStream.from(from).until(until);
+        writeNdjson(response, categoryStream, filter, {
             'x-event-store-category': category
         });
     }
@@ -517,7 +526,7 @@ class EventStoreHttpApi {
         }
 
         const consumer = this.eventStore.getConsumer(stream, identifier, initialState, from);
-        const exists = fs.existsSync(consumer.fileName);
+        const exists = await fileExists(consumer.fileName);
         if (!exists) {
             const persisted = once(consumer, 'persisted');
             consumer.reset(initialState, from);
