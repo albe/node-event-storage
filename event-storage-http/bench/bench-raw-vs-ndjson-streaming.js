@@ -50,14 +50,12 @@ async function createPartitionData(readStore) {
     }
 
     const partitionBuffers = {};
-    const partitionSizes = {};
     for (const [partitionId, info] of Object.entries(partitions)) {
         const buffer = await fs.readFile(info.fileName);
         partitionBuffers[partitionId] = buffer;
-        partitionSizes[partitionId] = buffer.byteLength;
     }
 
-    return { partitions, partitionBuffers, partitionSizes };
+    return { partitions, partitionBuffers };
 }
 
 function collectEntries(index, from = 1, until = -1) {
@@ -157,14 +155,14 @@ async function main() {
 
     try {
         const readStore = await createFixture(storageDirectory, streamCount, eventsPerStream, payloadSize);
-        const { partitions, partitionBuffers, partitionSizes } = await createPartitionData(readStore);
+        const { partitions, partitionBuffers } = await createPartitionData(readStore);
         const allEntries = collectEntries(readStore.storage.index);
         const firstPartitionId = allEntries[0].partition;
         const singlePartitionEntries = allEntries.filter(entry => entry.partition === firstPartitionId);
         const firstPartitionBuffer = partitionBuffers[firstPartitionId];
         const firstPartitionHeader = partitions[firstPartitionId].headerSize;
 
-        const docsRaw = singlePartitionEntries.length * passes;
+        const docsRawPartition = singlePartitionEntries.length * passes;
         const docsSingleNdjson = singlePartitionEntries.length * passes;
         const docsMixedNdjson = allEntries.length * passes;
 
@@ -182,9 +180,6 @@ async function main() {
             passes
         );
 
-        const rawBytesEmitted = partitionSizes[firstPartitionId] * passes;
-        rawResult.bytes = rawBytesEmitted;
-
         const output = {
             parameters: {
                 streamCount,
@@ -194,7 +189,7 @@ async function main() {
                 passes
             },
             results: [
-                toMetrics('raw-full-file-format (single partition)', docsRaw, rawResult),
+                toMetrics('raw-full-file-format (single partition)', docsRawPartition, rawResult),
                 toMetrics('ndjson-buffer-sections (single partition)', docsSingleNdjson, singleNdjsonResult),
                 toMetrics('ndjson-buffer-sections (mixed partitions interleaved)', docsMixedNdjson, mixedNdjsonResult)
             ]
