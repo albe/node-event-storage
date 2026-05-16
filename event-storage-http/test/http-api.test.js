@@ -113,11 +113,13 @@ test('PUT /streams/:stream creates matcher streams and GET /streams/:stream retu
     }
 });
 
-test('GET /streams/join and /streams/category return joined NDJSON output', async () => {
+test('GET /streams/join and /streams/category return joined NDJSON output, including nested categories', async () => {
     const fixture = await createFixture();
     try {
         await commitAsync(fixture.eventStore, 'orders-1', [{ type: 'OrderPlaced', orderId: '1' }]);
         await commitAsync(fixture.eventStore, 'orders-2', [{ type: 'OrderPlaced', orderId: '2' }]);
+        await commitAsync(fixture.eventStore, 'orders/eu/1', [{ type: 'OrderPlaced', orderId: '3' }]);
+        await commitAsync(fixture.eventStore, 'orders/eu/2', [{ type: 'OrderPlaced', orderId: '4' }]);
 
         const joinResponse = await fetch(`${fixture.baseUrl}/streams/join?streams=orders-1,orders-2`);
         assert.equal(joinResponse.status, 200);
@@ -127,7 +129,12 @@ test('GET /streams/join and /streams/category return joined NDJSON output', asyn
         const categoryResponse = await fetch(`${fixture.baseUrl}/streams/category/orders`);
         assert.equal(categoryResponse.status, 200);
         const categoryEvents = await parseNdjson(categoryResponse);
-        assert.equal(categoryEvents.length, 2);
+        assert.equal(categoryEvents.length, 4);
+
+        const nestedCategoryResponse = await fetch(`${fixture.baseUrl}/streams/category/orders/eu`);
+        assert.equal(nestedCategoryResponse.status, 200);
+        const nestedCategoryEvents = await parseNdjson(nestedCategoryResponse);
+        assert.deepEqual(nestedCategoryEvents.map(event => event.stream), ['orders/eu/1', 'orders/eu/2']);
     } finally {
         await destroyFixture(fixture);
     }
