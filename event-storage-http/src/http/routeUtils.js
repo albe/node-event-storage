@@ -3,8 +3,8 @@ import { matches } from '../../../src/metadataUtil.js';
 import { HttpError } from './errors.js';
 
 const readOptionNames = new Set(['from', 'until', 'forwards', 'backwards']);
-const validStreamNamePattern = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;
-const validConsumerIdentifierPattern = /^[A-Za-z0-9_-]+$/;
+const streamNamePattern = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;
+const consumerIdentifierPattern = /^[A-Za-z0-9_-]+$/;
 
 function parseJson(raw, what) {
     try {
@@ -116,7 +116,7 @@ function parseStreamName(value, source = 'stream') {
     if (typeof value !== 'string' || value === '') {
         throw new HttpError(400, `${source} must not be empty.`);
     }
-    if (!validStreamNamePattern.test(value)) {
+    if (!streamNamePattern.test(value)) {
         throw new HttpError(400, `${source} may only contain letters, numbers, "-", "_" and "/".`);
     }
     return value;
@@ -126,7 +126,7 @@ function parseConsumerIdentifier(value, source = 'identifier') {
     if (typeof value !== 'string' || value === '') {
         throw new HttpError(400, `${source} must not be empty.`);
     }
-    if (!validConsumerIdentifierPattern.test(value)) {
+    if (!consumerIdentifierPattern.test(value)) {
         throw new HttpError(400, `${source} may only contain letters, numbers, "-" and "_".`);
     }
     return value;

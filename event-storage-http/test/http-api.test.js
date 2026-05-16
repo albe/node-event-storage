@@ -83,7 +83,7 @@ test('POST /streams/:stream/commit stores events and GET /streams/:stream/versio
     }
 });
 
-test('HTTP API accepts safe stream names and rejects invalid stream or consumer names', async () => {
+test('HTTP API validates stream names and consumer identifiers', async () => {
     const fixture = await createFixture();
     try {
         const validCommitResponse = await fetch(`${fixture.baseUrl}/streams/orders_us/eu-1/commit`, {
