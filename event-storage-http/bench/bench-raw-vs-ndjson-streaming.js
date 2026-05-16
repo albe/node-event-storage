@@ -68,14 +68,19 @@ function collectEntries(index, from = 1, until = -1) {
     return index.range(from, max);
 }
 
-function benchmarkRawFullPartition(buffer, passes) {
+function benchmarkRawFullPartition(buffer, passes, chunkSize = 64 * 1024) {
     let bytes = 0;
     let checksum = 0;
     const startedAt = performance.now();
     for (let pass = 0; pass < passes; pass++) {
-        bytes += buffer.byteLength;
-        checksum ^= buffer[0] || 0;
-        checksum ^= buffer[buffer.byteLength - 1] || 0;
+        for (let offset = 0; offset < buffer.byteLength; offset += chunkSize) {
+            const end = Math.min(offset + chunkSize, buffer.byteLength);
+            const chunk = buffer.subarray(offset, end);
+            bytes += chunk.byteLength;
+            checksum ^= chunk[0] || 0;
+            checksum ^= chunk[chunk.byteLength - 1] || 0;
+            checksum ^= chunk[(chunk.byteLength >> 1)] || 0;
+        }
     }
     return {
         bytes,
