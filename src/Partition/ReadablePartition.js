@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
+import { Readable } from 'stream';
 import { assert, alignTo, hash, binarySearch } from '../util.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
@@ -209,6 +210,46 @@ class ReadablePartition extends events.EventEmitter {
         return ({ dataSize, sequenceNumber, time64 });
     }
 
+    readDocumentBuffer(position, size = 0, headerOut = null, validateSize = false) {
+        assert(this.fd, 'Partition is not opened.');
+        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
+
+        const reader = this.prepareReadBuffer(position);
+        if (reader.length < DOCUMENT_HEADER_SIZE) {
+            return false;
+        }
+
+        let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
+        let dataSize = size;
+        if (dataSize === 0 || validateSize || headerOut !== null) {
+            const header = this.readDocumentHeader(reader.buffer, reader.cursor, position, validateSize ? size : 0);
+            dataSize = header.dataSize;
+            if (headerOut !== null) {
+                headerOut.dataSize = header.dataSize;
+                headerOut.sequenceNumber = header.sequenceNumber;
+                headerOut.time64 = header.time64;
+            }
+        }
+
+        const writeSize = this.documentWriteSize(dataSize);
+        if (position + writeSize > this.size) {
+            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
+        }
+
+        if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
+            const tempReadBuffer = Buffer.allocUnsafe(dataSize);
+            fs.readSync(this.fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
+            return tempReadBuffer;
+        }
+
+        if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
+            this.fillBuffer(position);
+            dataPosition = DOCUMENT_HEADER_SIZE;
+        }
+
+        return Buffer.from(reader.buffer.subarray(dataPosition, dataPosition + dataSize));
+    }
+
     /**
      * Prepare the read buffer for reading from the specified position.
      *
@@ -261,41 +302,11 @@ class ReadablePartition extends events.EventEmitter {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readFrom(position, size = 0, headerOut = null) {
-        assert(this.fd, 'Partition is not opened.');
-        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
-
-        const reader = this.prepareReadBuffer(position);
-        if (reader.length < size + DOCUMENT_HEADER_SIZE) {
+        const buffer = this.readDocumentBuffer(position, size, headerOut, true);
+        if (buffer === false) {
             return false;
         }
-
-        let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
-        const { dataSize, sequenceNumber, time64 } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
-        if (headerOut !== null) {
-            headerOut.dataSize = dataSize;
-            headerOut.sequenceNumber = sequenceNumber;
-            headerOut.time64 = time64;
-        }
-
-        // TODO: This should only be checked on opening
-        const writeSize = this.documentWriteSize(dataSize);
-        if (position + writeSize > this.size) {
-            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
-        }
-
-        if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
-            //console.log('sync read for large document size', dataLength, 'at position', position);
-            const tempReadBuffer = Buffer.allocUnsafe(dataSize);
-            fs.readSync(this.fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
-            return tempReadBuffer.toString('utf8');
-        }
-
-        if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
-            this.fillBuffer(position);
-            dataPosition = DOCUMENT_HEADER_SIZE;
-        }
-
-        return reader.buffer.toString('utf8', dataPosition, dataPosition + dataSize);
+        return buffer.toString('utf8');
     }
 
     /**
@@ -450,6 +461,56 @@ class ReadablePartition extends events.EventEmitter {
             const data = this.readFrom(position);
             yield data;
         }
+    }
+
+    *iterateFileBuffers() {
+        assert(this.fd, 'Partition is not opened.');
+        const totalSize = this.headerSize + this.size;
+        let filePosition = 0;
+        while (filePosition < totalSize) {
+            const bytesRead = fs.readSync(
+                this.fd,
+                this.readBuffer,
+                0,
+                Math.min(this.readBuffer.byteLength, totalSize - filePosition),
+                filePosition
+            );
+            if (bytesRead <= 0) {
+                return;
+            }
+            filePosition += bytesRead;
+            yield Buffer.from(this.readBuffer.subarray(0, bytesRead));
+        }
+    }
+
+    createFileReadStream() {
+        return Readable.from(this.iterateFileBuffers());
+    }
+
+    *iterateDocumentBuffers(entries = null) {
+        assert(this.fd, 'Partition is not opened.');
+        if (entries === null) {
+            const headerOut = {};
+            let position = 0;
+            let data;
+            while ((data = this.readDocumentBuffer(position, 0, headerOut)) !== false) {
+                yield data;
+                position += this.documentWriteSize(headerOut.dataSize);
+            }
+            return;
+        }
+
+        for (const entry of entries) {
+            const data = this.readDocumentBuffer(entry.position, entry.size);
+            if (data === false) {
+                return;
+            }
+            yield data;
+        }
+    }
+
+    createDocumentReadStream(entries = null) {
+        return Readable.from(this.iterateDocumentBuffers(entries));
     }
 }
 

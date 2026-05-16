@@ -1,9 +1,10 @@
 import fs from 'fs/promises';
+import http from 'http';
 import os from 'os';
 import path from 'path';
 import { once } from 'events';
+import { performance } from 'perf_hooks';
 import EventStore from '../../index.js';
-import { DOCUMENT_HEADER_SIZE } from '../../src/Partition/ReadablePartition.js';
 
 function toNumber(value, fallback) {
     const num = Number(value);
@@ -39,25 +40,6 @@ async function createFixture(storageDirectory, streamCount, eventsPerStream, pay
     return readStore;
 }
 
-async function createPartitionData(readStore) {
-    const partitions = {};
-    for (const partition of readStore.storage.partitions.values()) {
-        partition.open();
-        partitions[partition.id] = {
-            fileName: partition.fileName,
-            headerSize: partition.headerSize
-        };
-    }
-
-    const partitionBuffers = {};
-    for (const [partitionId, info] of Object.entries(partitions)) {
-        const buffer = await fs.readFile(info.fileName);
-        partitionBuffers[partitionId] = buffer;
-    }
-
-    return { partitions, partitionBuffers };
-}
-
 function collectEntries(index, from = 1, until = -1) {
     const max = until < 0 ? index.length : until;
     if (max < from) {
@@ -66,66 +48,114 @@ function collectEntries(index, from = 1, until = -1) {
     return index.range(from, max);
 }
 
-function benchmarkRawFullPartition(buffer, passes, chunkSize = 64 * 1024) {
-    let bytes = 0;
-    let checksum = 0;
-    const startedAt = performance.now();
-    for (let pass = 0; pass < passes; pass++) {
-        for (let offset = 0; offset < buffer.byteLength; offset += chunkSize) {
-            const end = Math.min(offset + chunkSize, buffer.byteLength);
-            const chunk = buffer.subarray(offset, end);
-            bytes += chunk.byteLength;
-            checksum ^= chunk[0] || 0;
-            checksum ^= chunk[chunk.byteLength - 1] || 0;
-            checksum ^= chunk[(chunk.byteLength >> 1)] || 0;
+function groupEntriesByPartition(entries) {
+    const grouped = new Map();
+    for (const entry of entries) {
+        if (!grouped.has(entry.partition)) {
+            grouped.set(entry.partition, []);
         }
+        grouped.get(entry.partition).push(entry);
     }
-    return {
-        bytes,
-        checksum,
-        durationMs: performance.now() - startedAt
-    };
+    return grouped;
 }
 
-function benchmarkNdjsonSectionsSingleFile(buffer, headerSize, entries, passes) {
-    let bytes = 0;
-    let checksum = 0;
-    const startedAt = performance.now();
-    for (let pass = 0; pass < passes; pass++) {
-        for (const entry of entries) {
-            const start = headerSize + entry.position + DOCUMENT_HEADER_SIZE;
-            const end = start + entry.size;
-            const slice = buffer.subarray(start, end);
-            bytes += slice.byteLength + 1;
-            checksum ^= slice[0] || 0;
-            checksum ^= slice[slice.byteLength - 1] || 0;
-            checksum ^= 10;
-        }
+async function writeChunk(response, chunk) {
+    if (response.write(chunk)) {
+        return;
     }
-    return {
-        bytes,
-        checksum,
-        durationMs: performance.now() - startedAt
-    };
+    await once(response, 'drain');
 }
 
-function benchmarkNdjsonSectionsMixedFiles(entries, partitionBuffers, partitions, passes) {
-    let bytes = 0;
-    let checksum = 0;
-    const startedAt = performance.now();
-    for (let pass = 0; pass < passes; pass++) {
-        for (const entry of entries) {
-            const buffer = partitionBuffers[entry.partition];
-            const headerSize = partitions[entry.partition].headerSize;
-            const start = headerSize + entry.position + DOCUMENT_HEADER_SIZE;
-            const end = start + entry.size;
-            const slice = buffer.subarray(start, end);
-            bytes += slice.byteLength + 1;
-            checksum ^= slice[0] || 0;
-            checksum ^= slice[slice.byteLength - 1] || 0;
-            checksum ^= 10;
+async function streamResponse(response, source, appendNewline = false, endResponse = true) {
+    for await (const chunk of source) {
+        await writeChunk(response, chunk);
+        if (appendNewline) {
+            await writeChunk(response, '\n');
         }
     }
+    if (endResponse) {
+        response.end();
+    }
+}
+
+async function *interleavePartitionStreams(entries, partitionsById) {
+    const iterators = new Map();
+    for (const [partitionId, partitionEntries] of groupEntriesByPartition(entries)) {
+        iterators.set(
+            partitionId,
+            partitionsById.get(partitionId).createDocumentReadStream(partitionEntries)[Symbol.asyncIterator]()
+        );
+    }
+
+    for (const entry of entries) {
+        const iterator = iterators.get(entry.partition);
+        const next = await iterator.next();
+        if (next.done) {
+            return;
+        }
+        yield next.value;
+    }
+}
+
+function createBenchmarkServer(partitionsById, firstPartition, singlePartitionEntries, allEntries) {
+    return http.createServer((request, response) => {
+        const requestUrl = new URL(request.url, 'http://127.0.0.1');
+        const passes = toNumber(requestUrl.searchParams.get('passes'), 1);
+
+        const handle = async () => {
+            switch (requestUrl.pathname) {
+            case '/raw':
+                response.writeHead(200, { 'content-type': 'application/octet-stream' });
+                for (let pass = 0; pass < passes; pass++) {
+                    await streamResponse(response, firstPartition.createFileReadStream(), false, pass === passes - 1);
+                }
+                break;
+            case '/ndjson-single':
+                response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8' });
+                for (let pass = 0; pass < passes; pass++) {
+                    await streamResponse(response, firstPartition.createDocumentReadStream(singlePartitionEntries), true, pass === passes - 1);
+                }
+                break;
+            case '/ndjson-mixed':
+                response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8' });
+                for (let pass = 0; pass < passes; pass++) {
+                    await streamResponse(response, interleavePartitionStreams(allEntries, partitionsById), true, pass === passes - 1);
+                }
+                break;
+            default:
+                response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+                response.end('Not found');
+            }
+        };
+
+        void handle().catch((error) => {
+            response.statusCode = 500;
+            response.end(String(error?.stack || error));
+        });
+    });
+}
+
+async function measureDownload(url) {
+    const startedAt = performance.now();
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Unexpected status ${response.status} for ${url}`);
+    }
+
+    let bytes = 0;
+    let checksum = 0;
+    const reader = response.body.getReader();
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
+        }
+        bytes += value.byteLength;
+        checksum ^= value[0] || 0;
+        checksum ^= value[value.byteLength - 1] || 0;
+        checksum ^= value[value.byteLength >> 1] || 0;
+    }
+
     return {
         bytes,
         checksum,
@@ -155,32 +185,34 @@ async function main() {
 
     try {
         const readStore = await createFixture(storageDirectory, streamCount, eventsPerStream, payloadSize);
-        const { partitions, partitionBuffers } = await createPartitionData(readStore);
         const allEntries = collectEntries(readStore.storage.index);
         const firstPartitionId = allEntries[0].partition;
         const singlePartitionEntries = allEntries.filter(entry => entry.partition === firstPartitionId);
-        const firstPartitionBuffer = partitionBuffers[firstPartitionId];
-        const firstPartitionHeader = partitions[firstPartitionId].headerSize;
 
-        const docsRawPartition = singlePartitionEntries.length * passes;
-        const docsSingleNdjson = singlePartitionEntries.length * passes;
-        const docsMixedNdjson = allEntries.length * passes;
+        const partitionsById = new Map();
+        for (const partition of readStore.storage.partitions.values()) {
+            partition.open();
+            partitionsById.set(partition.id, partition);
+        }
 
-        const rawResult = benchmarkRawFullPartition(firstPartitionBuffer, passes);
-        const singleNdjsonResult = benchmarkNdjsonSectionsSingleFile(
-            firstPartitionBuffer,
-            firstPartitionHeader,
-            singlePartitionEntries,
-            passes
-        );
-        const mixedNdjsonResult = benchmarkNdjsonSectionsMixedFiles(
-            allEntries,
-            partitionBuffers,
-            partitions,
-            passes
-        );
+        const firstPartition = partitionsById.get(firstPartitionId);
+        const server = createBenchmarkServer(partitionsById, firstPartition, singlePartitionEntries, allEntries);
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        const baseUrl = `http://127.0.0.1:${address.port}`;
 
-        const output = {
+        const rawDocs = singlePartitionEntries.length * passes;
+        const singlePartitionDocs = singlePartitionEntries.length * passes;
+        const mixedPartitionDocs = allEntries.length * passes;
+
+        const rawResult = await measureDownload(`${baseUrl}/raw?passes=${passes}`);
+        const singleNdjsonResult = await measureDownload(`${baseUrl}/ndjson-single?passes=${passes}`);
+        const mixedNdjsonResult = await measureDownload(`${baseUrl}/ndjson-mixed?passes=${passes}`);
+
+        await new Promise(resolve => server.close(resolve));
+        readStore.close();
+
+        console.log(JSON.stringify({
             parameters: {
                 streamCount,
                 eventsPerStream,
@@ -189,14 +221,11 @@ async function main() {
                 passes
             },
             results: [
-                toMetrics('raw-full-file-format (single partition)', docsRawPartition, rawResult),
-                toMetrics('ndjson-buffer-sections (single partition)', docsSingleNdjson, singleNdjsonResult),
-                toMetrics('ndjson-buffer-sections (mixed partitions interleaved)', docsMixedNdjson, mixedNdjsonResult)
+                toMetrics('raw-full-file-format (single partition)', rawDocs, rawResult),
+                toMetrics('ndjson-buffer-sections (single partition)', singlePartitionDocs, singleNdjsonResult),
+                toMetrics('ndjson-buffer-sections (mixed partitions interleaved)', mixedPartitionDocs, mixedNdjsonResult)
             ]
-        };
-
-        console.log(JSON.stringify(output, null, 2));
-        readStore.close();
+        }, null, 2));
     } finally {
         await fs.rm(storageDirectory, { recursive: true, force: true });
     }

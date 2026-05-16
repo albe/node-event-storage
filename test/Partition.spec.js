@@ -44,6 +44,14 @@ describe('Partition', function() {
         return lastPosition;
     }
 
+    async function collectBuffers(stream) {
+        const buffers = [];
+        for await (const chunk of stream) {
+            buffers.push(Buffer.from(chunk));
+        }
+        return buffers;
+    }
+
     it('creates the storage directory if it does not exist', function() {
         fs.removeSync(dataDirectory);
         partition = new Partition('.part', { dataDirectory });
@@ -303,6 +311,41 @@ describe('Partition', function() {
             expect(i).to.be(0);
         });
 
+    });
+
+    describe('streaming', function() {
+
+        it('streams the full file format in buffered chunks', async function() {
+            partition.open();
+            fillPartition(20, i => 'file-doc-' + i.toString().padStart(2, '0'));
+            partition.close();
+
+            const reader = createReader({ readBufferSize: 32 });
+            reader.open();
+            const expected = fs.readFileSync(reader.fileName);
+            const streamed = Buffer.concat(await collectBuffers(reader.createFileReadStream()));
+            expect(streamed.equals(expected)).to.be(true);
+        });
+
+        it('streams document buffers from indexed entry positions', async function() {
+            partition.open();
+            const documents = [
+                'small-1',
+                'x'.repeat(90),
+                'tail-3'
+            ];
+            const entries = documents.map((document, index) => ({
+                position: partition.write(document, index + 1),
+                size: Buffer.byteLength(document, 'utf8')
+            }));
+            partition.flush();
+            partition.close();
+
+            const reader = createReader({ readBufferSize: 48 });
+            reader.open();
+            const streamed = await collectBuffers(reader.createDocumentReadStream(entries));
+            expect(streamed.map(buffer => buffer.toString('utf8'))).to.eql(documents);
+        });
     });
 
     describe('readFrom', function() {
