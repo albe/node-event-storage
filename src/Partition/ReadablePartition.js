@@ -210,7 +210,10 @@ class ReadablePartition extends events.EventEmitter {
         return ({ dataSize, sequenceNumber, time64 });
     }
 
-    readDocumentBuffer(position, size = 0, headerOut = null, validateSize = false) {
+    /**
+     * Ensures sync reads and streaming reads stay on identical buffer management rules.
+     */
+    extractDocumentPayload(position, size = 0, headerOut = null, validateSize = false) {
         assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
@@ -302,7 +305,7 @@ class ReadablePartition extends events.EventEmitter {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readFrom(position, size = 0, headerOut = null) {
-        const buffer = this.readDocumentBuffer(position, size, headerOut, true);
+        const buffer = this.extractDocumentPayload(position, size, headerOut, true);
         if (buffer === false) {
             return false;
         }
@@ -463,6 +466,9 @@ class ReadablePartition extends events.EventEmitter {
         }
     }
 
+    /**
+     * Exists so higher layers can forward raw partition files without loading them into memory first.
+     */
     *iterateFileBuffers() {
         assert(this.fd, 'Partition is not opened.');
         const totalSize = this.headerSize + this.size;
@@ -483,17 +489,23 @@ class ReadablePartition extends events.EventEmitter {
         }
     }
 
+    /**
+     * Adapts raw file iteration to Node streams so HTTP responses can pipe the on-disk format directly.
+     */
     createFileReadStream() {
         return Readable.from(this.iterateFileBuffers());
     }
 
+    /**
+     * Enables payload-only streaming for APIs that should skip headers and padding without reparsing the file format elsewhere.
+     */
     *iterateDocumentBuffers(entries = null) {
         assert(this.fd, 'Partition is not opened.');
         if (entries === null) {
             const headerOut = {};
             let position = 0;
             let data;
-            while ((data = this.readDocumentBuffer(position, 0, headerOut)) !== false) {
+            while ((data = this.extractDocumentPayload(position, 0, headerOut)) !== false) {
                 yield data;
                 position += this.documentWriteSize(headerOut.dataSize);
             }
@@ -501,7 +513,7 @@ class ReadablePartition extends events.EventEmitter {
         }
 
         for (const entry of entries) {
-            const data = this.readDocumentBuffer(entry.position, entry.size);
+            const data = this.extractDocumentPayload(entry.position, entry.size);
             if (data === false) {
                 return;
             }
@@ -509,6 +521,9 @@ class ReadablePartition extends events.EventEmitter {
         }
     }
 
+    /**
+     * Adapts payload iteration to Node streams so HTTP layers can emit NDJSON without per-document serialization work.
+     */
     createDocumentReadStream(entries = null) {
         return Readable.from(this.iterateDocumentBuffers(entries));
     }

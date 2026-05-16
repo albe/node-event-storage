@@ -78,6 +78,9 @@ async function streamResponse(response, source, appendNewline = false, endRespon
     }
 }
 
+/**
+ * Mirrors mixed-partition HTTP reads where the server must switch partitions frequently without giving up each partition's sequential buffer locality.
+ */
 async function *interleavePartitionStreams(entries, partitionsById) {
     const iterators = new Map();
     for (const [partitionId, partitionEntries] of groupEntriesByPartition(entries)) {
@@ -102,7 +105,7 @@ function createBenchmarkServer(partitionsById, firstPartition, singlePartitionEn
         const requestUrl = new URL(request.url, 'http://127.0.0.1');
         const passes = toNumber(requestUrl.searchParams.get('passes'), 1);
 
-        const handle = async () => {
+        const handleRequest = async () => {
             switch (requestUrl.pathname) {
             case '/raw':
                 response.writeHead(200, { 'content-type': 'application/octet-stream' });
@@ -128,7 +131,7 @@ function createBenchmarkServer(partitionsById, firstPartition, singlePartitionEn
             }
         };
 
-        void handle().catch((error) => {
+        void handleRequest().catch((error) => {
             response.statusCode = 500;
             response.end(String(error?.stack || error));
         });

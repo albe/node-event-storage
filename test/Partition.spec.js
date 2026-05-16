@@ -44,7 +44,7 @@ describe('Partition', function() {
         return lastPosition;
     }
 
-    async function collectBuffers(stream) {
+    async function consumeStreamToBuffers(stream) {
         const buffers = [];
         for await (const chunk of stream) {
             buffers.push(Buffer.from(chunk));
@@ -323,7 +323,7 @@ describe('Partition', function() {
             const reader = createReader({ readBufferSize: 32 });
             reader.open();
             const expected = fs.readFileSync(reader.fileName);
-            const streamed = Buffer.concat(await collectBuffers(reader.createFileReadStream()));
+            const streamed = Buffer.concat(await consumeStreamToBuffers(reader.createFileReadStream()));
             expect(streamed.equals(expected)).to.be(true);
         });
 
@@ -343,7 +343,7 @@ describe('Partition', function() {
 
             const reader = createReader({ readBufferSize: 48 });
             reader.open();
-            const streamed = await collectBuffers(reader.createDocumentReadStream(entries));
+            const streamed = await consumeStreamToBuffers(reader.createDocumentReadStream(entries));
             expect(streamed.map(buffer => buffer.toString('utf8'))).to.eql(documents);
         });
     });
