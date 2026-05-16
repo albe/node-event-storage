@@ -2,7 +2,7 @@ import http from 'http';
 import express from 'express';
 import { once } from 'events';
 import { HttpError, sendError } from './http/errors.js';
-import { ensureReady } from './http/routeUtils.js';
+import { waitForReadyMiddleware } from './http/routeUtils.js';
 import registerGetConsumerRoute from './routes/consumers/getConsumer.js';
 import registerGetConsumersRoute from './routes/consumers/getConsumers.js';
 import registerPutConsumerRoute from './routes/consumers/putConsumer.js';
@@ -33,7 +33,7 @@ class EventStoreHttpApi {
         const app = express();
         app.disable('x-powered-by');
         app.use(express.json({ limit: '1mb' }));
-        app.use((request, response, next) => ensureReady(this.ready, request, response, next));
+        app.use((request, response, next) => waitForReadyMiddleware(this.ready, request, response, next));
 
         registerGetConsumersRoute(app, this.eventStore);
         registerGetConsumerRoute(app, this.eventStore);

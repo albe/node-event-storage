@@ -1,6 +1,6 @@
 import { once } from 'events';
 import { HttpError, sendJson } from '../../http/errors.js';
-import { scanConsumersAsync, splitConsumerStreamPath } from '../../http/routeUtils.js';
+import { buildConsumerName, scanConsumersAsync, splitConsumerStreamPath } from '../../http/routeUtils.js';
 
 function registerPutConsumerRoute(app, eventStore) {
     app.put(/^\/consumers\/([^/]+)\/stream\/(.+)$/, async (request, response) => {
@@ -11,9 +11,7 @@ function registerPutConsumerRoute(app, eventStore) {
             throw new HttpError(400, 'Consumer payload must be a JSON object.');
         }
 
-        const consumerName = stream === '_all'
-            ? `_all.${identifier}`
-            : `stream-${stream}.${identifier}`;
+        const consumerName = buildConsumerName(stream, identifier);
         const exists = (await scanConsumersAsync(eventStore)).includes(consumerName);
         const consumer = eventStore.getConsumer(stream, identifier, initialState, from);
         if (!exists) {

@@ -110,7 +110,7 @@ function parsePositiveInteger(value, name) {
     return parsed;
 }
 
-function applyNamedSegments(segments, startIndex = 0) {
+function parseSegmentOptions(segments, startIndex = 0) {
     const options = {};
     for (let index = startIndex; index < segments.length; index += 2) {
         const name = segments[index];
@@ -186,7 +186,7 @@ function splitPathSegments(rawPath = '') {
 }
 
 function parseReadOptions(rawPath = '') {
-    return applyNamedSegments(splitPathSegments(rawPath));
+    return parseSegmentOptions(splitPathSegments(rawPath));
 }
 
 function splitReadStreamPath(rawPath) {
@@ -201,7 +201,7 @@ function splitReadStreamPath(rawPath) {
     }
     return {
         resourceName,
-        options: applyNamedSegments(segments.slice(optionStart))
+        options: parseSegmentOptions(segments.slice(optionStart))
     };
 }
 
@@ -266,7 +266,7 @@ function getQueryValues(value) {
     return String(value).split(',').map(item => item.trim()).filter(Boolean);
 }
 
-async function ensureReady(promise, request, response, next) {
+async function waitForReadyMiddleware(promise, request, response, next) {
     try {
         await promise;
         next();
@@ -275,23 +275,30 @@ async function ensureReady(promise, request, response, next) {
     }
 }
 
+function buildConsumerName(stream, identifier) {
+    return stream === '_all'
+        ? `_all.${identifier}`
+        : `stream-${stream}.${identifier}`;
+}
+
 export {
     applyMatcher,
-    applyNamedSegments,
     buildReadWindow,
+    buildConsumerName,
     commitAsync,
     consumerNameToStream,
     createPayloadMetadataPredicate,
-    ensureReady,
     getQueryValues,
     parseCondition,
     parseExpectedVersion,
     parseMatcher,
     parseReadOptions,
     parseRevision,
+    parseSegmentOptions,
     resolveBoundary,
     scanConsumersAsync,
     serializeCondition,
     splitConsumerStreamPath,
-    splitReadStreamPath
+    splitReadStreamPath,
+    waitForReadyMiddleware
 };
