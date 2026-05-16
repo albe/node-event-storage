@@ -309,12 +309,13 @@ class EventStoreHttpApi {
         if (!eventStore) {
             throw new Error('eventStore is required.');
         }
+        const storage = eventStore.storage;
         this.eventStore = eventStore;
         this.options = options;
         this.server = null;
-        this.ready = eventStore.storage?.initialized === true
+        this.ready = storage?.initialized === true
             ? Promise.resolve()
-            : once(eventStore.storage, 'opened').then(() => undefined);
+            : (storage ? once(storage, 'opened') : once(eventStore, 'ready')).then(() => undefined);
     }
 
     createServer() {

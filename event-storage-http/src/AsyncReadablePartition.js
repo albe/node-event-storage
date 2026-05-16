@@ -94,7 +94,7 @@ class AsyncReadablePartition extends ReadablePartition {
         return { buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength };
     }
 
-    async readFrom(position, size = 0, headerOut = null) {
+    async readFrom(position, size = 0, headerState = null) {
         if (!this.fileHandle) {
             throw new Error('Partition is not opened.');
         }
@@ -109,10 +109,10 @@ class AsyncReadablePartition extends ReadablePartition {
 
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
         const { dataSize, sequenceNumber, time64 } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
-        if (headerOut !== null) {
-            headerOut.dataSize = dataSize;
-            headerOut.sequenceNumber = sequenceNumber;
-            headerOut.time64 = time64;
+        if (headerState !== null) {
+            headerState.dataSize = dataSize;
+            headerState.sequenceNumber = sequenceNumber;
+            headerState.time64 = time64;
         }
 
         const writeSize = this.documentWriteSize(dataSize);
@@ -134,13 +134,13 @@ class AsyncReadablePartition extends ReadablePartition {
         return reader.buffer.toString('utf8', dataPosition, dataPosition + dataSize);
     }
 
-    async *readAll(after = 0, headerOut = null) {
+    async *readAll(after = 0, headerState = null) {
         let position = after < 0 ? this.size + after + 1 : after;
-        const internalHeader = headerOut !== null ? headerOut : {};
+        const internalHeader = headerState !== null ? headerState : {};
         let data;
         while ((data = await this.readFrom(position, 0, internalHeader)) !== false) {
-            if (headerOut !== null) {
-                headerOut.position = position;
+            if (headerState !== null) {
+                headerState.position = position;
             }
             yield data;
             position += this.documentWriteSize(internalHeader.dataSize);

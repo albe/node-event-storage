@@ -7,6 +7,16 @@ import { once } from 'events';
 import EventStore from '../../index.js';
 import EventStoreHttpApi from '../src/EventStoreHttpApi.js';
 
+function commitAsync(eventStore, streamName, events) {
+    return new Promise((resolve, reject) => {
+        try {
+            eventStore.commit(streamName, events, resolve);
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
 async function createFixture() {
     const storageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'event-storage-http-test-'));
     const eventStore = new EventStore({
@@ -76,16 +86,10 @@ test('POST /streams/:stream/commit stores events and GET /streams/:stream/versio
 test('PUT /streams/:stream creates matcher streams and GET /streams/:stream returns filtered NDJSON', async () => {
     const fixture = await createFixture();
     try {
-        await new Promise((resolve, reject) => {
-            try {
-                fixture.eventStore.commit('users-1', [
-                    { type: 'UserCreated', userId: '1' },
-                    { type: 'UserEmailUpdated', userId: '1' }
-                ], resolve);
-            } catch (error) {
-                reject(error);
-            }
-        });
+        await commitAsync(fixture.eventStore, 'users-1', [
+            { type: 'UserCreated', userId: '1' },
+            { type: 'UserEmailUpdated', userId: '1' }
+        ]);
 
         const createResponse = await fetch(`${fixture.baseUrl}/streams/users`, {
             method: 'PUT',
@@ -112,15 +116,8 @@ test('PUT /streams/:stream creates matcher streams and GET /streams/:stream retu
 test('GET /streams/join and /streams/category return joined NDJSON output', async () => {
     const fixture = await createFixture();
     try {
-        await new Promise((resolve, reject) => {
-            try {
-                fixture.eventStore.commit('orders-1', [{ type: 'OrderPlaced', orderId: '1' }], () => {
-                    fixture.eventStore.commit('orders-2', [{ type: 'OrderPlaced', orderId: '2' }], resolve);
-                });
-            } catch (error) {
-                reject(error);
-            }
-        });
+        await commitAsync(fixture.eventStore, 'orders-1', [{ type: 'OrderPlaced', orderId: '1' }]);
+        await commitAsync(fixture.eventStore, 'orders-2', [{ type: 'OrderPlaced', orderId: '2' }]);
 
         const joinResponse = await fetch(`${fixture.baseUrl}/streams/join?streams=orders-1,orders-2`);
         assert.equal(joinResponse.status, 200);
@@ -139,16 +136,10 @@ test('GET /streams/join and /streams/category return joined NDJSON output', asyn
 test('GET /query returns NDJSON and exposes a serialized commit condition header', async () => {
     const fixture = await createFixture();
     try {
-        await new Promise((resolve, reject) => {
-            try {
-                fixture.eventStore.commit('orders-1', [
-                    { type: 'OrderPlaced', orderId: '1' },
-                    { type: 'OrderPlaced', orderId: '2' }
-                ], resolve);
-            } catch (error) {
-                reject(error);
-            }
-        });
+        await commitAsync(fixture.eventStore, 'orders-1', [
+            { type: 'OrderPlaced', orderId: '1' },
+            { type: 'OrderPlaced', orderId: '2' }
+        ]);
 
         const filter = encodeURIComponent(JSON.stringify({ payload: { orderId: '2' } }));
         const response = await fetch(`${fixture.baseUrl}/query?types=OrderPlaced&filter=${filter}`);
