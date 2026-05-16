@@ -312,7 +312,9 @@ class EventStoreHttpApi {
         this.eventStore = eventStore;
         this.options = options;
         this.server = null;
-        this.ready = eventStore.storage?.initialized === true ? Promise.resolve() : once(eventStore, 'ready').then(() => undefined);
+        this.ready = eventStore.storage?.initialized === true
+            ? Promise.resolve()
+            : once(eventStore.storage, 'opened').then(() => undefined);
     }
 
     createServer() {
