@@ -13,7 +13,7 @@ class RawEventStream extends Readable {
      *   {@link ReadableStorage#readRangeBuffers}).
      */
     constructor(bufferIterator) {
-        super();
+        super({ objectMode: false });
         this.bufferIterator = bufferIterator;
     }
 
