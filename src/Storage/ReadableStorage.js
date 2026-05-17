@@ -559,19 +559,26 @@ class ReadableStorage extends events.EventEmitter {
 
     /**
      * Read a raw document Buffer from the given partition and position, firing the preRead hook.
+     * When `headerOut` is provided, also populates `headerOut.globalTime` with the absolute timestamp
+     * (`partition.metadata.epoch + time64`), allowing callers to order entries across partitions.
      *
      * @protected
      * @param {number} partitionId
      * @param {number} position
      * @param {number} [size]
+     * @param {object|null} [headerOut] Optional — populated with `dataSize`, `sequenceNumber`, `time64`, and `globalTime`.
      * @returns {Buffer|false}
      */
-    readBufferFrom(partitionId, position, size) {
+    readBufferFrom(partitionId, position, size, headerOut = null) {
         const partition = this.getPartition(partitionId);
         if (this.listenerCount('preRead') > 0) {
             this.emit('preRead', position, partition.metadata);
         }
-        return partition.readFrom(position, size);
+        const buffer = partition.readFrom(position, size, headerOut);
+        if (headerOut !== null && buffer !== false) {
+            headerOut.globalTime = partition.metadata.epoch + headerOut.time64;
+        }
+        return buffer;
     }
 
     /**
@@ -601,6 +608,43 @@ class ReadableStorage extends events.EventEmitter {
             for (let i = entries.length - 1; i >= 0; i--) {
                 const buffer = this.readBufferFrom(entries[i].partition, entries[i].position, entries[i].size);
                 if (buffer !== false) yield buffer;
+            }
+        }
+    }
+
+    /**
+     * Iterate raw document Buffers with header metadata for the given index range.
+     * Yields `{ buffer, globalTime, sequenceNumber }` per document, where `globalTime`
+     * is `partition.metadata.epoch + time64` — a denormalized absolute timestamp that is
+     * comparable across partitions with different epochs.
+     * Used by `JoinEventStream` so it can merge streams by time without deserializing JSON.
+     *
+     * @protected
+     * @param {number} from 1-based index position (inclusive).
+     * @param {number} until 1-based index position (inclusive). May be less than `from` for reverse order.
+     * @param {ReadableIndex|null} index
+     * @returns {Generator<{buffer: Buffer, globalTime: number, sequenceNumber: number}>}
+     */
+    *iterateRangeWithHeaders(from, until, index) {
+        const idx = index || this.index;
+        if (!idx.isOpen()) {
+            idx.open();
+        }
+        const ascending = from <= until;
+        const lo = ascending ? from : until;
+        const hi = ascending ? until : from;
+        const entries = idx.range(lo, hi);
+        if (!entries) return;
+        const headerOut = {};
+        if (ascending) {
+            for (const entry of entries) {
+                const buffer = this.readBufferFrom(entry.partition, entry.position, entry.size, headerOut);
+                if (buffer !== false) yield { buffer, globalTime: headerOut.globalTime, sequenceNumber: headerOut.sequenceNumber };
+            }
+        } else {
+            for (let i = entries.length - 1; i >= 0; i--) {
+                const buffer = this.readBufferFrom(entries[i].partition, entries[i].position, entries[i].size, headerOut);
+                if (buffer !== false) yield { buffer, globalTime: headerOut.globalTime, sequenceNumber: headerOut.sequenceNumber };
             }
         }
     }

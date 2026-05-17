@@ -1,8 +1,10 @@
 import EventStream from './EventStream.js';
-import { wrapAndCheck } from './util.js';
 
 /** Reusable sentinel used for missing or empty per-stream iterators. */
 const emptyIterator = Object.freeze({ next() { return { done: true }; } });
+
+/** Appended to each raw buffer chunk to form a newline-delimited JSON stream. */
+const NDJSON_NEWLINE = Buffer.from('\n');
 
 /**
  * Calculate the actual version number from a possibly relative (negative) version number.
@@ -29,7 +31,8 @@ class JoinEventStream extends EventStream {
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @param {function(object, object): boolean|null} [predicate] An optional filter function
      *   `(payload, metadata) => boolean`.  Only events for which this returns truthy are yielded.
-     * @param {boolean} [raw] When true, emits raw NDJSON Buffers (re-serialized from merged events).
+     * @param {boolean} [raw] When true, emits raw NDJSON Buffers. Ordering uses the document header's
+     *   `time64` (denormalized by partition epoch) so no JSON deserialization is needed.
      */
     constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
         super(name, eventStore, minRevision, maxRevision, predicate, raw);
@@ -38,6 +41,7 @@ class JoinEventStream extends EventStream {
         }
 
         this.streamIndex = eventStore.storage.index;
+        this.serializer = eventStore.storage.serializer;
         // Translate revisions to index numbers (1-based) and wrap around negatives
         this.minRevision = normalizeVersion(minRevision, eventStore.length);
         this.maxRevision = normalizeVersion(maxRevision, eventStore.length);
@@ -55,7 +59,7 @@ class JoinEventStream extends EventStream {
                     // (e.g. minRevision > all entries, or maxRevision < all entries).
                     return emptyIterator;
                 }
-                return eventStore.storage.readRange(from, until, streamIndex);
+                return eventStore.storage.iterateRangeWithHeaders(from, until, streamIndex);
             });
         }
         this._iterator = null;
@@ -72,18 +76,32 @@ class JoinEventStream extends EventStream {
     }
 
     /**
+     * Returns true if `first` follows `second` in the read direction, meaning `second` should be yielded first.
+     * Compares by `globalTime` (denormalized partition-epoch + time64) with `sequenceNumber` as tiebreaker.
      * @private
-     * @param {number} first
-     * @param {number} second
-     * @returns {boolean} If the first item follows after the second in the given read order determined by this.minRevision and this.maxRevision.
+     * @param {{ globalTime: number, sequenceNumber: number }} first
+     * @param {{ globalTime: number, sequenceNumber: number }} second
+     * @returns {boolean}
      */
     follows(first, second) {
-        return (this.minRevision > this.maxRevision ? first < second : first > second);
+        if (this.minRevision > this.maxRevision) {
+            // Descending: the event with the smaller globalTime comes later in the reverse scan.
+            if (first.globalTime !== second.globalTime) return first.globalTime < second.globalTime;
+            return first.sequenceNumber < second.sequenceNumber;
+        }
+        // Ascending: the event with the larger globalTime follows (comes after) the smaller one.
+        if (first.globalTime !== second.globalTime) return first.globalTime > second.globalTime;
+        return first.sequenceNumber > second.sequenceNumber;
     }
 
     /**
-     * @private
-     * @returns {object|boolean} The next event or false if no more events in the stream.
+     * Returns the next event in merge order. Ordering is by `globalTime` (epoch-denormalized `time64`)
+     * with `sequenceNumber` as a tiebreaker, read directly from the binary document header without
+     * deserializing the JSON body.
+     *
+     * In object mode: returns a deserialized `{ stream, payload, metadata }` document.
+     * In raw mode: returns `{ buffer, globalTime, sequenceNumber }` — no JSON deserialization.
+     * @returns {object|{buffer:Buffer,globalTime:number,sequenceNumber:number}|false}
      */
     next() {
         if (!this._iterator) {
@@ -98,7 +116,7 @@ class JoinEventStream extends EventStream {
                 if (value === false) {
                     return;
                 }
-                if (nextIndex === -1 || this.follows(this._next[nextIndex].metadata.commitId, value.metadata.commitId)) {
+                if (nextIndex === -1 || this.follows(this._next[nextIndex], value)) {
                     nextIndex = index;
                 }
             });
@@ -108,21 +126,29 @@ class JoinEventStream extends EventStream {
             }
             const next = this._next[nextIndex];
             this._next[nextIndex] = undefined;
-            if (!this.predicate || this.predicate(next.payload, next.metadata)) {
+
+            if (this.raw) {
+                // Raw mode: no deserialization. Predicates are not supported in this mode.
                 return next;
+            }
+
+            // Object mode: deserialize from the raw buffer to apply predicate and return the document.
+            const document = this.serializer.deserialize(next.buffer.toString('utf8'));
+            if (!this.predicate || this.predicate(document.payload, document.metadata)) {
+                return document;
             }
         }
     }
 
     /**
      * Readable stream implementation.
-     * Raw mode re-serializes merged events to NDJSON since merge ordering requires deserialized metadata.
      * @private
      */
     _read() {
         const next = this.next();
         if (this.raw) {
-            this.push(next === false ? null : Buffer.from(JSON.stringify(next) + '\n'));
+            // next is { buffer, globalTime, sequenceNumber } — push raw bytes + newline, no re-serialization.
+            this.push(next === false ? null : Buffer.concat([next.buffer, NDJSON_NEWLINE]));
         } else {
             this.push(next ? next.payload : null);
         }
