@@ -123,7 +123,7 @@ class AsyncReadablePartition extends ReadablePartition {
         if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
             const tempReadBuffer = Buffer.allocUnsafe(dataSize);
             await this.fileHandle.read(tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
-            return tempReadBuffer.toString('utf8');
+            return tempReadBuffer;
         }
 
         if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
@@ -131,7 +131,7 @@ class AsyncReadablePartition extends ReadablePartition {
             dataPosition = DOCUMENT_HEADER_SIZE;
         }
 
-        return reader.buffer.toString('utf8', dataPosition, dataPosition + dataSize);
+        return Buffer.from(reader.buffer.subarray(dataPosition, dataPosition + dataSize));
     }
 
     async *readAll(after = 0, headerState = null) {

@@ -121,7 +121,7 @@ describe('Partition', function() {
             partition.open();
             let i = 1;
             for (let data of partition.readAll()) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i++;
             }
         });
@@ -132,8 +132,8 @@ describe('Partition', function() {
             let doc2 = partition.write('bar-日本語');
             partition.close();
             partition.open();
-            expect(partition.readFrom(doc1)).to.be('foo-üöälß');
-            expect(partition.readFrom(doc2)).to.be('bar-日本語');
+            expect(partition.readFrom(doc1).toString('utf8')).to.be('foo-üöälß');
+            expect(partition.readFrom(doc2).toString('utf8')).to.be('bar-日本語');
         });
 
         it('returns file position of written document', function() {
@@ -145,7 +145,7 @@ describe('Partition', function() {
             partition.close();
             partition.open();
             for (let i = 1; i <= positions.length; i++) {
-                expect(partition.readFrom(positions[i - 1])).to.be('foo-' + i.toString());
+                expect(partition.readFrom(positions[i - 1]).toString('utf8')).to.be('foo-' + i.toString());
             }
         });
 
@@ -167,7 +167,7 @@ describe('Partition', function() {
             partition.open();
             let i = 1;
             for (let data of partition.readAll()) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i++;
             }
         });
@@ -183,7 +183,7 @@ describe('Partition', function() {
             partition.open();
             let i = 1;
             for (let data of partition.readAll()) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i++;
             }
             expect(i).to.be(51);
@@ -196,7 +196,7 @@ describe('Partition', function() {
             partition.open();
             let i = 50;
             for (let data of partition.readAll(-partition.documentWriteSize('foo-50'.length)-1)) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i++;
             }
             expect(i).to.be(51);
@@ -209,7 +209,7 @@ describe('Partition', function() {
             partition.open();
             let i = 50;
             for (let data of partition.readAllBackwards()) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i--;
             }
             expect(i).to.be(0);
@@ -222,13 +222,13 @@ describe('Partition', function() {
             partition.open();
             let i = 50;
             for (let data of partition.readAllBackwards(-9)) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i--;
             }
             expect(i).to.be(0);
             i = 50;
             for (let data of partition.readAllBackwards(partition.size - 12)) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i--;
             }
             expect(i).to.be(0);
@@ -254,7 +254,7 @@ describe('Partition', function() {
             // do NOT flush - all data is in the write buffer
             let i = 3;
             for (let data of partition.readAllBackwards()) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i--;
             }
             expect(i).to.be(0);
@@ -271,7 +271,7 @@ describe('Partition', function() {
             // foo-3 and foo-4 are still in the write buffer
             let i = 4;
             for (let data of partition.readAllBackwards()) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i--;
             }
             expect(i).to.be(0);
@@ -288,7 +288,7 @@ describe('Partition', function() {
             // foo-3 and foo-4 are still in the write buffer and must not be visible
             let i = 1;
             for (let data of partition.readAll()) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i++;
             }
             expect(i).to.be(3);
@@ -305,7 +305,7 @@ describe('Partition', function() {
             // foo-3 and foo-4 are still in the write buffer and must not be visible
             let i = 2;
             for (let data of partition.readAllBackwards()) {
-                expect(data).to.be('foo-' + i.toString());
+                expect(data.toString('utf8')).to.be('foo-' + i.toString());
                 i--;
             }
             expect(i).to.be(0);
@@ -314,18 +314,6 @@ describe('Partition', function() {
     });
 
     describe('streaming', function() {
-
-        it('streams the full file format in buffered chunks', async function() {
-            partition.open();
-            fillPartition(20, i => 'file-doc-' + i.toString().padStart(2, '0'));
-            partition.close();
-
-            const reader = createReader({ readBufferSize: 32 });
-            reader.open();
-            const expected = fs.readFileSync(reader.fileName);
-            const streamed = Buffer.concat(await consumeStreamToBuffers(reader.createFileReadStream()));
-            expect(streamed.equals(expected)).to.be(true);
-        });
 
         it('streams document buffers from indexed entry positions', async function() {
             partition.open();
@@ -363,7 +351,7 @@ describe('Partition', function() {
         it('can read unflushed documents', function() {
             partition.open();
             let position = partition.write('foobar');
-            expect(partition.readFrom(position, 6)).to.be('foobar');
+            expect(partition.readFrom(position, 6).toString('utf8')).to.be('foobar');
         });
 
         it('can disable dirty reads', function() {
@@ -379,7 +367,7 @@ describe('Partition', function() {
             partition.close();
             partition.open();
 
-            expect(partition.readFrom(0, 6)).to.be('foobar');
+            expect(partition.readFrom(0, 6).toString('utf8')).to.be('foobar');
             expect(() => partition.readFrom(0, 4)).to.throwError((e) => {
                 expect(e).to.be.a(InvalidDataSizeError);
             });
@@ -427,7 +415,7 @@ describe('Partition', function() {
 
             let pos = 0;
             for (let i = 0; i < 1000; i++) {
-                expect(partition.readFrom(pos)).to.be('foobar');
+                expect(partition.readFrom(pos).toString('utf8')).to.be('foobar');
                 pos += partition.documentWriteSize('foobar'.length);
             }
         });
@@ -441,7 +429,7 @@ describe('Partition', function() {
             partition.open();
 
             let read = partition.readFrom(0);
-            expect(read).to.be(blob);
+            expect(read.toString('utf8')).to.be(blob);
         });
 
     });
@@ -549,7 +537,7 @@ describe('Partition', function() {
             const found = partition.findDocument(1);
             expect(found).to.not.be(null);
             expect(found.headerOut.sequenceNumber).to.be(1);
-            expect(found.data).to.be('doc-1');
+            expect(found.data.toString('utf8')).to.be('doc-1');
         });
 
         it('finds a middle document by sequence number', function() {
@@ -558,7 +546,7 @@ describe('Partition', function() {
             const found = partition.findDocument(3);
             expect(found).to.not.be(null);
             expect(found.headerOut.sequenceNumber).to.be(3);
-            expect(found.data).to.be('doc-3');
+            expect(found.data.toString('utf8')).to.be('doc-3');
         });
 
         it('finds the last document by sequence number', function() {
@@ -567,7 +555,7 @@ describe('Partition', function() {
             const found = partition.findDocument(5);
             expect(found).to.not.be(null);
             expect(found.headerOut.sequenceNumber).to.be(5);
-            expect(found.data).to.be('doc-5');
+            expect(found.data.toString('utf8')).to.be('doc-5');
         });
 
         // Use a small readBufferSize so that even a few documents cause many binary search

@@ -4,6 +4,8 @@ import events from 'events';
 import { Readable } from 'stream';
 import { assert, alignTo, hash, binarySearch } from '../util.js';
 
+
+
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
@@ -299,7 +301,7 @@ class ReadablePartition extends events.EventEmitter {
      * @param {number} [size] The expected byte size of the document at the given position.
      * @param {object|null} [headerOut] Optional object to populate with the document header fields
      *   (`dataSize`, `sequenceNumber`, `time64`). Pass an existing object to avoid extra allocation.
-     * @returns {string|boolean} The data stored at the given position or false if no data could be read.
+     * @returns {Buffer|boolean} The data stored at the given position or false if no data could be read.
      * @throws {Error} if the storage entry at the given position is corrupted.
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
@@ -309,7 +311,7 @@ class ReadablePartition extends events.EventEmitter {
         if (buffer === false) {
             return false;
         }
-        return buffer.toString('utf8');
+        return buffer;
     }
 
     /**
@@ -397,7 +399,7 @@ class ReadablePartition extends events.EventEmitter {
      *
      * @api
      * @param {number} sequenceNumber The 0-based sequence number to search for.
-     * @returns {{ reader: Generator<string>, headerOut: object, data: string }|null}
+     * @returns {{ reader: Generator<Buffer>, headerOut: object, data: Buffer }|null}
      *   The matched document with its reader and shared headerOut, or null if no such document exists.
      */
     findDocument(sequenceNumber) {
@@ -438,7 +440,7 @@ class ReadablePartition extends events.EventEmitter {
      * @param {object|null} [headerOut] Optional object to populate with document header fields
      *   (`dataSize`, `sequenceNumber`, `time64`, `position`) on each yield. Pass an existing object
      *   to avoid extra allocation. The object is mutated in place before each yield.
-     * @returns {Generator<string>} A generator that returns all documents in this partition.
+     * @returns {Generator<Buffer>} A generator that returns all documents in this partition.
      */
     *readAll(after = 0, headerOut = null) {
         let position = after < 0 ? this.size + after + 1 : after;
@@ -456,44 +458,20 @@ class ReadablePartition extends events.EventEmitter {
     /**
      * @api
      * @param {number} [before] The document position to start reading backward from.
-     * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
+     * @param {object|null} [headerOut] Optional object to populate with document header fields
+     *   (`dataSize`, `sequenceNumber`, `time64`, `position`) on each yield.
+     * @returns {Generator<Buffer>} A generator that returns all documents in this partition in reverse order.
      */
-    *readAllBackwards(before = -1) {
+    *readAllBackwards(before = -1, headerOut = null) {
         let position = before < 0 ? this.size + before + 1 : before;
+        const internalHeader = headerOut !== null ? headerOut : {};
         while ((position = this.findDocumentPositionBefore(position)) !== false) {
-            const data = this.readFrom(position);
+            const data = this.readFrom(position, 0, internalHeader);
+            if (headerOut !== null) {
+                headerOut.position = position;
+            }
             yield data;
         }
-    }
-
-    /**
-     * Exists so higher layers can forward raw partition files without loading them into memory first.
-     */
-    *iterateFileBuffers() {
-        assert(this.fd, 'Partition is not opened.');
-        const totalSize = this.headerSize + this.size;
-        let filePosition = 0;
-        while (filePosition < totalSize) {
-            const bytesRead = fs.readSync(
-                this.fd,
-                this.readBuffer,
-                0,
-                Math.min(this.readBuffer.byteLength, totalSize - filePosition),
-                filePosition
-            );
-            if (bytesRead <= 0) {
-                return;
-            }
-            filePosition += bytesRead;
-            yield Buffer.from(this.readBuffer.subarray(0, bytesRead));
-        }
-    }
-
-    /**
-     * Adapts raw file iteration to Node streams so HTTP responses can pipe the on-disk format directly.
-     */
-    createFileReadStream() {
-        return Readable.from(this.iterateFileBuffers());
     }
 
     /**

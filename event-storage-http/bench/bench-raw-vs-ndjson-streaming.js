@@ -107,12 +107,6 @@ function createBenchmarkServer(partitionsById, firstPartition, singlePartitionEn
 
         const handleRequest = async () => {
             switch (requestUrl.pathname) {
-            case '/raw':
-                response.writeHead(200, { 'content-type': 'application/octet-stream' });
-                for (let pass = 0; pass < passes; pass++) {
-                    await streamResponse(response, firstPartition.createFileReadStream(), false, pass === passes - 1);
-                }
-                break;
             case '/ndjson-single':
                 response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8' });
                 for (let pass = 0; pass < passes; pass++) {
@@ -204,11 +198,9 @@ async function main() {
         const address = server.address();
         const baseUrl = `http://127.0.0.1:${address.port}`;
 
-        const rawDocs = singlePartitionEntries.length * passes;
         const singlePartitionDocs = singlePartitionEntries.length * passes;
         const mixedPartitionDocs = allEntries.length * passes;
 
-        const rawResult = await measureDownload(`${baseUrl}/raw?passes=${passes}`);
         const singleNdjsonResult = await measureDownload(`${baseUrl}/ndjson-single?passes=${passes}`);
         const mixedNdjsonResult = await measureDownload(`${baseUrl}/ndjson-mixed?passes=${passes}`);
 
@@ -224,7 +216,6 @@ async function main() {
                 passes
             },
             results: [
-                toMetrics('raw-full-file-format (single partition)', rawDocs, rawResult),
                 toMetrics('ndjson-buffer-sections (single partition)', singlePartitionDocs, singleNdjsonResult),
                 toMetrics('ndjson-buffer-sections (mixed partitions interleaved)', mixedPartitionDocs, mixedNdjsonResult)
             ]

@@ -317,16 +317,17 @@ class WritablePartition extends ReadablePartition {
      *
      * @api
      * @param {number} [before] The document position to start reading backward from.
-     * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
+     * @param {object|null} [headerOut] Optional object to populate with document header fields on each yield.
+     * @returns {Generator<Buffer>} A generator that returns all documents in this partition in reverse order.
      */
-    *readAllBackwards(before = -1) {
+    *readAllBackwards(before = -1, headerOut = null) {
         if (!this.dirtyReads && this.writeBufferCursor > 0) {
             const flushedSize = this.size - this.writeBufferCursor;
             const clampedBefore = before < 0 ? flushedSize : Math.min(before, flushedSize);
-            yield* super.readAllBackwards(clampedBefore);
+            yield* super.readAllBackwards(clampedBefore, headerOut);
             return;
         }
-        yield* super.readAllBackwards(before);
+        yield* super.readAllBackwards(before, headerOut);
     }
 
     /**

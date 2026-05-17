@@ -21,4 +21,13 @@ function writeNdjson(response, eventStream, headers = {}) {
     pump();
 }
 
-export { writeNdjson };
+function writeRawNdjson(response, rawStream, headers = {}) {
+    response.status(200);
+    response.set({
+        'content-type': ndjsonContentType,
+        ...headers
+    });
+    rawStream.pipe(response);
+}
+
+export { writeNdjson, writeRawNdjson };
