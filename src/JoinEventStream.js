@@ -41,6 +41,7 @@ class JoinEventStream extends EventStream {
         }
 
         this.streamIndex = eventStore.storage.index;
+        /** Deserializes raw buffer bytes into `{ stream, payload, metadata }` for object-mode reads and predicate filtering. */
         this.serializer = eventStore.storage.serializer;
         // Translate revisions to index numbers (1-based) and wrap around negatives
         this.minRevision = normalizeVersion(minRevision, eventStore.length);
