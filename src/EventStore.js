@@ -564,13 +564,14 @@ class EventStore extends events.EventEmitter {
      * @param {string} streamName The name of the stream to get.
      * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {boolean} [raw] When true, the stream emits raw NDJSON Buffers instead of event objects.
      * @returns {EventStream|boolean} The event stream or false if a stream with the name doesn't exist.
      */
-    getEventStream(streamName, minRevision = 1, maxRevision = -1) {
+    getEventStream(streamName, minRevision = 1, maxRevision = -1, raw = false) {
         if (!(streamName in this.streams)) {
             return false;
         }
-        return new EventStream(streamName, this, minRevision, maxRevision);
+        return new EventStream(streamName, this, minRevision, maxRevision, null, raw);
     }
 
     /**
@@ -580,10 +581,11 @@ class EventStore extends events.EventEmitter {
      * @api
      * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {boolean} [raw] When true, the stream emits raw NDJSON Buffers instead of event objects.
      * @returns {EventStream} The event stream.
      */
-    getAllEvents(minRevision = 1, maxRevision = -1) {
-        return this.getEventStream('_all', minRevision, maxRevision);
+    getAllEvents(minRevision = 1, maxRevision = -1, raw = false) {
+        return this.getEventStream('_all', minRevision, maxRevision, raw);
     }
 
     /**
@@ -595,10 +597,11 @@ class EventStore extends events.EventEmitter {
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @param {function(object, object): boolean|null} [predicate] An optional filter predicate
      *   `(payload, metadata) => boolean`. Only events for which this returns truthy are yielded.
+     * @param {boolean} [raw] When true, the stream emits raw NDJSON Buffers instead of event objects.
      * @returns {EventStream} The joined event stream.
      * @throws {Error} if any of the streams doesn't exist.
      */
-    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null) {
+    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
         if (streamNames.length === 0) {
@@ -610,12 +613,12 @@ class EventStore extends events.EventEmitter {
         }
 
         if (streamNames.length === 1) {
-            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate);
+            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate, raw);
             stream.name = streamName;
             return stream;
         }
 
-        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate);
+        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate, raw);
     }
 
     /**

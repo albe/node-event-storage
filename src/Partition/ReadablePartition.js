@@ -258,9 +258,9 @@ class ReadablePartition extends events.EventEmitter {
             dataPosition = DOCUMENT_HEADER_SIZE;
         }
 
-        // Copy from the shared read buffer: reader.buffer is reused on each fillBuffer call, so
-        // callers that hold onto the returned buffer across reads require an owned copy here.
-        return Buffer.from(reader.buffer.subarray(dataPosition, dataPosition + dataSize));
+        // reader.buffer is a shared buffer filled by fillBuffer; callers must consume the returned
+        // view before the next readFrom call (which may fill the same buffer region).
+        return reader.buffer.subarray(dataPosition, dataPosition + dataSize);
     }
 
     /**

@@ -35,13 +35,18 @@ class EventStream extends stream.Readable {
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
      * @param {function(object, object): boolean|null} [predicate] An optional filter function
      *   `(payload, metadata) => boolean`.  Only events for which this returns truthy are yielded.
+     * @param {boolean} [raw] When true, the stream emits raw NDJSON Buffers instead of event objects.
+     *   Each chunk is the on-disk JSON of the stored document followed by a newline byte, so the stream
+     *   can be piped directly into an HTTP response without serialization.  In this mode the synchronous
+     *   `next()`/`forEach()`/`events` API is not meaningful and should not be used.
      */
-    constructor(name, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {
-        super({ objectMode: true });
+    constructor(name, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        super({ objectMode: !raw });
         assert(typeof name === 'string' && name !== '', 'Need to specify a stream name.');
         assert(typeof eventStore === 'object' && eventStore !== null, `Need to provide EventStore instance to create EventStream ${name}.`);
 
         this.name = name;
+        this.raw = raw;
         this.predicate = predicate || null;
         if (eventStore.streams[name]) {
             this.streamIndex = eventStore.streams[name].index;
@@ -49,9 +54,9 @@ class EventStream extends stream.Readable {
             this.maxRevision = normalizeVersion(maxRevision, this.streamIndex.length);
             this.version = minVersion(this.streamIndex.length, maxRevision);
             this._iterator = null;
-            this.fetch = function() {
-                return eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex);
-            }
+            this.fetch = raw
+                ? function() { return eventStore.storage.readRangeBuffers(this.minRevision, this.maxRevision, this.streamIndex); }
+                : function() { return eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex); };
         } else {
             this.streamIndex = { length: 0 };
             this.version = -1;
@@ -290,6 +295,14 @@ class EventStream extends stream.Readable {
      * @private
      */
     _read() {
+        if (this.raw) {
+            if (!this._iterator) {
+                this._iterator = this.fetch();
+            }
+            const result = this._iterator.next();
+            this.push(result.done ? null : result.value);
+            return;
+        }
         const next = this.next();
         this.push(next ? next.payload : null);
     }

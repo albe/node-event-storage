@@ -29,9 +29,10 @@ class JoinEventStream extends EventStream {
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
      * @param {function(object, object): boolean|null} [predicate] An optional filter function
      *   `(payload, metadata) => boolean`.  Only events for which this returns truthy are yielded.
+     * @param {boolean} [raw] When true, emits raw NDJSON Buffers (re-serialized from merged events).
      */
-    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {
-        super(name, eventStore, minRevision, maxRevision, predicate);
+    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        super(name, eventStore, minRevision, maxRevision, predicate, raw);
         if (!(streams instanceof Array) || streams.length === 0) {
             throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
         }
@@ -110,6 +111,20 @@ class JoinEventStream extends EventStream {
             if (!this.predicate || this.predicate(next.payload, next.metadata)) {
                 return next;
             }
+        }
+    }
+
+    /**
+     * Readable stream implementation.
+     * Raw mode re-serializes merged events to NDJSON since merge ordering requires deserialized metadata.
+     * @private
+     */
+    _read() {
+        const next = this.next();
+        if (this.raw) {
+            this.push(next === false ? null : Buffer.from(JSON.stringify(next) + '\n'));
+        } else {
+            this.push(next ? next.payload : null);
         }
     }
 
