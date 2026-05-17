@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import { Readable } from 'stream';
 import { assert, alignTo, hash, binarySearch } from '../util.js';
 
 
@@ -213,9 +212,19 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * Ensures sync reads and streaming reads stay on identical buffer management rules.
+     * Read the data from the given position.
+     *
+     * @api
+     * @param {number} position The file position to read from.
+     * @param {number} [size] The expected byte size of the document at the given position.
+     * @param {object|null} [headerOut] Optional object to populate with the document header fields
+     *   (`dataSize`, `sequenceNumber`, `time64`). Pass an existing object to avoid extra allocation.
+     * @returns {Buffer|boolean} The data stored at the given position or false if no data could be read.
+     * @throws {Error} if the storage entry at the given position is corrupted.
+     * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
+     * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
-    extractDocumentPayload(position, size = 0, headerOut = null, validateSize = false) {
+    readFrom(position, size = 0, headerOut = null) {
         assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
@@ -225,15 +234,12 @@ class ReadablePartition extends events.EventEmitter {
         }
 
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
-        let dataSize = size;
-        if (dataSize === 0 || validateSize || headerOut !== null) {
-            const header = this.readDocumentHeader(reader.buffer, reader.cursor, position, validateSize ? size : 0);
-            dataSize = header.dataSize;
-            if (headerOut !== null) {
-                headerOut.dataSize = header.dataSize;
-                headerOut.sequenceNumber = header.sequenceNumber;
-                headerOut.time64 = header.time64;
-            }
+        const header = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
+        const dataSize = header.dataSize;
+        if (headerOut !== null) {
+            headerOut.dataSize = header.dataSize;
+            headerOut.sequenceNumber = header.sequenceNumber;
+            headerOut.time64 = header.time64;
         }
 
         const writeSize = this.documentWriteSize(dataSize);
@@ -252,8 +258,11 @@ class ReadablePartition extends events.EventEmitter {
             dataPosition = DOCUMENT_HEADER_SIZE;
         }
 
+        // Copy from the shared read buffer: reader.buffer is reused on each fillBuffer call, so
+        // callers that hold onto the returned buffer across reads require an owned copy here.
         return Buffer.from(reader.buffer.subarray(dataPosition, dataPosition + dataSize));
     }
+
 
     /**
      * Prepare the read buffer for reading from the specified position.
@@ -292,28 +301,6 @@ class ReadablePartition extends events.EventEmitter {
         }
         return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
     }
-
-    /**
-     * Read the data from the given position.
-     *
-     * @api
-     * @param {number} position The file position to read from.
-     * @param {number} [size] The expected byte size of the document at the given position.
-     * @param {object|null} [headerOut] Optional object to populate with the document header fields
-     *   (`dataSize`, `sequenceNumber`, `time64`). Pass an existing object to avoid extra allocation.
-     * @returns {Buffer|boolean} The data stored at the given position or false if no data could be read.
-     * @throws {Error} if the storage entry at the given position is corrupted.
-     * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
-     * @throws {CorruptFileError} if the document at the given position can not be read completely.
-     */
-    readFrom(position, size = 0, headerOut = null) {
-        const buffer = this.extractDocumentPayload(position, size, headerOut, true);
-        if (buffer === false) {
-            return false;
-        }
-        return buffer;
-    }
-
     /**
      * Find the start position of the document that precedes the given position.
      *
@@ -472,38 +459,6 @@ class ReadablePartition extends events.EventEmitter {
             }
             yield data;
         }
-    }
-
-    /**
-     * Enables payload-only streaming for APIs that should skip headers and padding without reparsing the file format elsewhere.
-     */
-    *iterateDocumentBuffers(entries = null) {
-        assert(this.fd, 'Partition is not opened.');
-        if (entries === null) {
-            const headerOut = {};
-            let position = 0;
-            let data;
-            while ((data = this.extractDocumentPayload(position, 0, headerOut)) !== false) {
-                yield data;
-                position += this.documentWriteSize(headerOut.dataSize);
-            }
-            return;
-        }
-
-        for (const entry of entries) {
-            const data = this.extractDocumentPayload(entry.position, entry.size);
-            if (data === false) {
-                return;
-            }
-            yield data;
-        }
-    }
-
-    /**
-     * Adapts payload iteration to Node streams so HTTP layers can emit NDJSON without per-document serialization work.
-     */
-    createDocumentReadStream(entries = null) {
-        return Readable.from(this.iterateDocumentBuffers(entries));
     }
 }
 

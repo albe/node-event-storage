@@ -113,7 +113,7 @@ function wrapAndCheck(index, length) {
 }
 
 /**
- * Perform a k-way merge over multiple streams, invoking a callback for each item in ascending key order.
+ * Perform a k-way merge over multiple streams, invoking a callback for each item in sorted order.
  * Each stream object is mutated in place by the `advance` function.
  *
  * @param {object[]} streams Array of stream state objects; entries are removed when exhausted.
@@ -121,18 +121,21 @@ function wrapAndCheck(index, length) {
  * @param {function(object): boolean} advance Advances the stream to its next item.
  *   Returns true if the stream has more items within range, false if exhausted.
  * @param {function(object): void} visit Called for each stream state in merged order.
+ * @param {boolean} [ascending=true] When true, yields items in ascending key order (min-merge).
+ *   When false, yields in descending key order (max-merge).
  */
-function kWayMerge(streams, getKey, advance, visit) {
+function kWayMerge(streams, getKey, advance, visit, ascending = true) {
     while (streams.length > 0) {
-        let minIdx = 0;
+        let bestIdx = 0;
         for (let i = 1; i < streams.length; i++) {
-            if (getKey(streams[i]) < getKey(streams[minIdx])) {
-                minIdx = i;
-            }
+            const better = ascending
+                ? getKey(streams[i]) < getKey(streams[bestIdx])
+                : getKey(streams[i]) > getKey(streams[bestIdx]);
+            if (better) bestIdx = i;
         }
-        visit(streams[minIdx]);
-        if (!advance(streams[minIdx])) {
-            streams.splice(minIdx, 1);
+        visit(streams[bestIdx]);
+        if (!advance(streams[bestIdx])) {
+            streams.splice(bestIdx, 1);
         }
     }
 }

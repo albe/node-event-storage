@@ -440,6 +440,21 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
+     * Build the standard document result entry from a merge stream state.
+     * @private
+     */
+    buildDocumentEntry(stream) {
+        return {
+            document: this.serializer.deserialize(stream.data.toString('utf8')),
+            sequenceNumber: stream.headerOut.sequenceNumber,
+            partitionName: stream.partitionName,
+            position: stream.headerOut.position,
+            size: stream.headerOut.dataSize,
+            partition: stream.partition,
+        };
+    }
+
+    /**
      * Iterate documents across all partitions in sequenceNumber order using a k-way merge.
      * Opens any closed partition automatically.
      *
@@ -476,14 +491,7 @@ class ReadableStorage extends events.EventEmitter {
                 }
                 return false;
             },
-            stream => items.push({
-                document: this.serializer.deserialize(stream.data.toString('utf8')),
-                sequenceNumber: stream.headerOut.sequenceNumber,
-                partitionName: stream.partitionName,
-                position: stream.headerOut.position,
-                size: stream.headerOut.dataSize,
-                partition: stream.partition,
-            })
+            stream => items.push(this.buildDocumentEntry(stream))
         );
 
         yield* items;
@@ -531,29 +539,20 @@ class ReadableStorage extends events.EventEmitter {
         });
 
         const items = [];
-        while (streams.length > 0) {
-            let maxIdx = 0;
-            for (let i = 1; i < streams.length; i++) {
-                if (streams[i].headerOut.sequenceNumber > streams[maxIdx].headerOut.sequenceNumber) {
-                    maxIdx = i;
+        kWayMerge(
+            streams,
+            stream => stream.headerOut.sequenceNumber,
+            stream => {
+                const next = stream.reader.next();
+                if (!next.done && stream.headerOut.sequenceNumber >= until) {
+                    stream.data = next.value;
+                    return true;
                 }
-            }
-            const stream = streams[maxIdx];
-            items.push({
-                document: this.serializer.deserialize(stream.data.toString('utf8')),
-                sequenceNumber: stream.headerOut.sequenceNumber,
-                partitionName: stream.partitionName,
-                position: stream.headerOut.position,
-                size: stream.headerOut.dataSize,
-                partition: stream.partition,
-            });
-            const next = stream.reader.next();
-            if (!next.done && stream.headerOut.sequenceNumber >= until) {
-                stream.data = next.value;
-            } else {
-                streams.splice(maxIdx, 1);
-            }
-        }
+                return false;
+            },
+            stream => items.push(this.buildDocumentEntry(stream)),
+            false  // descending: pick the stream with the highest sequenceNumber
+        );
 
         yield* items;
     }
@@ -572,7 +571,7 @@ class ReadableStorage extends events.EventEmitter {
         if (this.listenerCount('preRead') > 0) {
             this.emit('preRead', position, partition.metadata);
         }
-        return partition.extractDocumentPayload(position, size);
+        return partition.readFrom(position, size);
     }
 
     /**

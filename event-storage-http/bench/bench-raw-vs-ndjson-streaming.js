@@ -5,6 +5,7 @@ import path from 'path';
 import { once } from 'events';
 import { performance } from 'perf_hooks';
 import EventStore from '../../index.js';
+import { RawEventStream } from '../../index.js';
 
 function toNumber(value, fallback) {
     const num = Number(value);
@@ -37,26 +38,7 @@ async function createFixture(storageDirectory, streamCount, eventsPerStream, pay
     });
     await once(readStore, 'ready');
     store.close();
-    return readStore;
-}
-
-function collectEntries(index, from = 1, until = -1) {
-    const max = until < 0 ? index.length : until;
-    if (max < from) {
-        return [];
-    }
-    return index.range(from, max);
-}
-
-function groupEntriesByPartition(entries) {
-    const grouped = new Map();
-    for (const entry of entries) {
-        if (!grouped.has(entry.partition)) {
-            grouped.set(entry.partition, []);
-        }
-        grouped.get(entry.partition).push(entry);
-    }
-    return grouped;
+    return { readStore, streams };
 }
 
 async function writeChunk(response, chunk) {
@@ -66,41 +48,16 @@ async function writeChunk(response, chunk) {
     await once(response, 'drain');
 }
 
-async function streamResponse(response, source, appendNewline = false, endResponse = true) {
+async function streamResponse(response, source, endResponse = true) {
     for await (const chunk of source) {
         await writeChunk(response, chunk);
-        if (appendNewline) {
-            await writeChunk(response, '\n');
-        }
     }
     if (endResponse) {
         response.end();
     }
 }
 
-/**
- * Mirrors mixed-partition HTTP reads where the server must switch partitions frequently without giving up each partition's sequential buffer locality.
- */
-async function *interleavePartitionStreams(entries, partitionsById) {
-    const iterators = new Map();
-    for (const [partitionId, partitionEntries] of groupEntriesByPartition(entries)) {
-        iterators.set(
-            partitionId,
-            partitionsById.get(partitionId).createDocumentReadStream(partitionEntries)[Symbol.asyncIterator]()
-        );
-    }
-
-    for (const entry of entries) {
-        const iterator = iterators.get(entry.partition);
-        const next = await iterator.next();
-        if (next.done) {
-            return;
-        }
-        yield next.value;
-    }
-}
-
-function createBenchmarkServer(partitionsById, firstPartition, singlePartitionEntries, allEntries) {
+function createBenchmarkServer(readStore, firstStreamIndex) {
     return http.createServer((request, response) => {
         const requestUrl = new URL(request.url, 'http://127.0.0.1');
         const passes = toNumber(requestUrl.searchParams.get('passes'), 1);
@@ -110,13 +67,13 @@ function createBenchmarkServer(partitionsById, firstPartition, singlePartitionEn
             case '/ndjson-single':
                 response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8' });
                 for (let pass = 0; pass < passes; pass++) {
-                    await streamResponse(response, firstPartition.createDocumentReadStream(singlePartitionEntries), true, pass === passes - 1);
+                    await streamResponse(response, new RawEventStream(readStore.storage, 1, -1, firstStreamIndex), pass === passes - 1);
                 }
                 break;
             case '/ndjson-mixed':
                 response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8' });
                 for (let pass = 0; pass < passes; pass++) {
-                    await streamResponse(response, interleavePartitionStreams(allEntries, partitionsById), true, pass === passes - 1);
+                    await streamResponse(response, new RawEventStream(readStore.storage, 1, -1), pass === passes - 1);
                 }
                 break;
             default:
@@ -181,25 +138,15 @@ async function main() {
     const storageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'event-storage-http-streaming-bench-'));
 
     try {
-        const readStore = await createFixture(storageDirectory, streamCount, eventsPerStream, payloadSize);
-        const allEntries = collectEntries(readStore.storage.index);
-        const firstPartitionId = allEntries[0].partition;
-        const singlePartitionEntries = allEntries.filter(entry => entry.partition === firstPartitionId);
+        const { readStore, streams } = await createFixture(storageDirectory, streamCount, eventsPerStream, payloadSize);
+        const allDocs = readStore.storage.index.length;
+        const firstStreamIndex = readStore.getEventStream(streams[0]).streamIndex;
+        const singleStreamDocs = firstStreamIndex.length;
 
-        const partitionsById = new Map();
-        for (const partition of readStore.storage.partitions.values()) {
-            partition.open();
-            partitionsById.set(partition.id, partition);
-        }
-
-        const firstPartition = partitionsById.get(firstPartitionId);
-        const server = createBenchmarkServer(partitionsById, firstPartition, singlePartitionEntries, allEntries);
+        const server = createBenchmarkServer(readStore, firstStreamIndex);
         await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
         const address = server.address();
         const baseUrl = `http://127.0.0.1:${address.port}`;
-
-        const singlePartitionDocs = singlePartitionEntries.length * passes;
-        const mixedPartitionDocs = allEntries.length * passes;
 
         const singleNdjsonResult = await measureDownload(`${baseUrl}/ndjson-single?passes=${passes}`);
         const mixedNdjsonResult = await measureDownload(`${baseUrl}/ndjson-mixed?passes=${passes}`);
@@ -216,8 +163,8 @@ async function main() {
                 passes
             },
             results: [
-                toMetrics('ndjson-buffer-sections (single partition)', singlePartitionDocs, singleNdjsonResult),
-                toMetrics('ndjson-buffer-sections (mixed partitions interleaved)', mixedPartitionDocs, mixedNdjsonResult)
+                toMetrics('ndjson-buffer-sections (single stream)', singleStreamDocs * passes, singleNdjsonResult),
+                toMetrics('ndjson-buffer-sections (all streams interleaved)', allDocs * passes, mixedNdjsonResult)
             ]
         }, null, 2));
     } finally {
@@ -229,3 +176,4 @@ main().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });
+
