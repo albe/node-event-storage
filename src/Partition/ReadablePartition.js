@@ -263,7 +263,6 @@ class ReadablePartition extends events.EventEmitter {
         return Buffer.from(reader.buffer.subarray(dataPosition, dataPosition + dataSize));
     }
 
-
     /**
      * Prepare the read buffer for reading from the specified position.
      *
@@ -284,7 +283,7 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * Prepare the read buffer for reading *before* the specified position. Don't try to reader *after* the returned cursor.
+     * Prepare the read buffer for reading *before* the specified position. Don't try to read *after* the returned cursor.
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading before.
@@ -301,6 +300,7 @@ class ReadablePartition extends events.EventEmitter {
         }
         return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
     }
+
     /**
      * Find the start position of the document that precedes the given position.
      *
