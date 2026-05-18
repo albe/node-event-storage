@@ -42,7 +42,6 @@ class JoinEventStream extends EventStream {
         // Translate revisions to index numbers (1-based) and wrap around negatives
         this.minRevision = normalizeVersion(minRevision, eventStore.length);
         this.maxRevision = normalizeVersion(maxRevision, eventStore.length);
-        const raw = this.raw;
         this.fetch = function() {
             this._next = new Array(streams.length).fill(undefined);
             return streams.map(streamName => {
@@ -59,7 +58,7 @@ class JoinEventStream extends EventStream {
                 }
                 // Raw mode: get { buffer, time64, sequenceNumber } for binary-header ordering.
                 // Object mode: storage deserializes for us and we order by metadata.commitId.
-                return raw
+                return this.raw
                     ? eventStore.storage.iterateRangeBuffers(from, until, streamIndex)
                     : eventStore.storage.readRange(from, until, streamIndex);
             });
@@ -90,13 +89,12 @@ class JoinEventStream extends EventStream {
      */
     follows(first, second) {
         const descending = this.minRevision > this.maxRevision;
+        const lt = (a, b) => descending ? a < b : a > b;
         if (this.raw) {
-            if (first.time64 !== second.time64) return descending ? first.time64 < second.time64 : first.time64 > second.time64;
-            return descending ? first.sequenceNumber < second.sequenceNumber : first.sequenceNumber > second.sequenceNumber;
+            if (first.time64 !== second.time64) return lt(first.time64, second.time64);
+            return lt(first.sequenceNumber, second.sequenceNumber);
         }
-        const a = first.metadata.commitId;
-        const b = second.metadata.commitId;
-        return descending ? a < b : a > b;
+        return lt(first.metadata.commitId, second.metadata.commitId);
     }
 
     /**
