@@ -239,7 +239,9 @@ class ReadablePartition extends events.EventEmitter {
         if (headerOut !== null) {
             headerOut.dataSize = header.dataSize;
             headerOut.sequenceNumber = header.sequenceNumber;
-            headerOut.time64 = header.time64;
+            // Denormalize time64 relative to this partition's epoch so callers can compare
+            // timestamps across partitions without needing to know the epoch value.
+            headerOut.time64 = this.metadata.epoch + header.time64;
         }
 
         const writeSize = this.documentWriteSize(dataSize);

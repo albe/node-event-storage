@@ -571,7 +571,7 @@ class EventStore extends events.EventEmitter {
         if (!(streamName in this.streams)) {
             return false;
         }
-        return new EventStream(streamName, this, minRevision, maxRevision, null, raw);
+        return new EventStream(streamName, this, minRevision, maxRevision, raw ? true : null);
     }
 
     /**
@@ -613,12 +613,12 @@ class EventStore extends events.EventEmitter {
         }
 
         if (streamNames.length === 1) {
-            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate, raw);
+            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, raw ? true : predicate);
             stream.name = streamName;
             return stream;
         }
 
-        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate, raw);
+        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, raw ? true : predicate);
     }
 
     /**

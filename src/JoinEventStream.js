@@ -29,23 +29,20 @@ class JoinEventStream extends EventStream {
      * @param {EventStore} eventStore The event store to get the stream from.
      * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {function(object, object): boolean|null} [predicate] An optional filter function
-     *   `(payload, metadata) => boolean`.  Only events for which this returns truthy are yielded.
-     * @param {boolean} [raw] When true, emits raw NDJSON Buffers. Ordering uses the document header's
-     *   `time64` (denormalized by partition epoch) so no JSON deserialization is needed.
+     * @param {function(object, object): boolean|true|null} [predicate] An optional filter function, or
+     *   `true` to activate raw-buffer mode (see {@link EventStream}).
      */
-    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        super(name, eventStore, minRevision, maxRevision, predicate, raw);
+    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {
+        super(name, eventStore, minRevision, maxRevision, predicate);
         if (!(streams instanceof Array) || streams.length === 0) {
             throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
         }
 
         this.streamIndex = eventStore.storage.index;
-        /** Deserializes raw buffer bytes into `{ stream, payload, metadata }` for object-mode reads and predicate filtering. */
-        this.serializer = eventStore.storage.serializer;
         // Translate revisions to index numbers (1-based) and wrap around negatives
         this.minRevision = normalizeVersion(minRevision, eventStore.length);
         this.maxRevision = normalizeVersion(maxRevision, eventStore.length);
+        const raw = this.raw;
         this.fetch = function() {
             this._next = new Array(streams.length).fill(undefined);
             return streams.map(streamName => {
@@ -60,7 +57,11 @@ class JoinEventStream extends EventStream {
                     // (e.g. minRevision > all entries, or maxRevision < all entries).
                     return emptyIterator;
                 }
-                return eventStore.storage.iterateRangeWithHeaders(from, until, streamIndex);
+                // Raw mode: get { buffer, time64, sequenceNumber } for binary-header ordering.
+                // Object mode: storage deserializes for us and we order by metadata.commitId.
+                return raw
+                    ? eventStore.storage.iterateRangeBuffers(from, until, streamIndex)
+                    : eventStore.storage.readRange(from, until, streamIndex);
             });
         }
         this._iterator = null;
@@ -78,31 +79,33 @@ class JoinEventStream extends EventStream {
 
     /**
      * Returns true if `first` follows `second` in the read direction, meaning `second` should be yielded first.
-     * Compares by `globalTime` (denormalized partition-epoch + time64) with `sequenceNumber` as tiebreaker.
+     *
+     * In raw mode: compares by `time64` (epoch-denormalized, from binary header) with `sequenceNumber`
+     * as a globally-unique tiebreaker.
+     * In object mode: compares by `metadata.commitId` (the global sequence number from the JSON body).
      * @private
-     * @param {{ globalTime: number, sequenceNumber: number }} first
-     * @param {{ globalTime: number, sequenceNumber: number }} second
+     * @param {object} first
+     * @param {object} second
      * @returns {boolean}
      */
     follows(first, second) {
-        if (this.minRevision > this.maxRevision) {
-            // Descending: the event with the smaller globalTime comes later in the reverse scan.
-            if (first.globalTime !== second.globalTime) return first.globalTime < second.globalTime;
-            return first.sequenceNumber < second.sequenceNumber;
+        const descending = this.minRevision > this.maxRevision;
+        if (this.raw) {
+            if (first.time64 !== second.time64) return descending ? first.time64 < second.time64 : first.time64 > second.time64;
+            return descending ? first.sequenceNumber < second.sequenceNumber : first.sequenceNumber > second.sequenceNumber;
         }
-        // Ascending: the event with the larger globalTime follows (comes after) the smaller one.
-        if (first.globalTime !== second.globalTime) return first.globalTime > second.globalTime;
-        return first.sequenceNumber > second.sequenceNumber;
+        const a = first.metadata.commitId;
+        const b = second.metadata.commitId;
+        return descending ? a < b : a > b;
     }
 
     /**
-     * Returns the next event in merge order. Ordering is by `globalTime` (epoch-denormalized `time64`)
-     * with `sequenceNumber` as a tiebreaker, read directly from the binary document header without
-     * deserializing the JSON body.
+     * Returns the next event in merge order.
      *
-     * In object mode: returns a deserialized `{ stream, payload, metadata }` document.
-     * In raw mode: returns `{ buffer, globalTime, sequenceNumber }` — no JSON deserialization.
-     * @returns {object|{buffer:Buffer,globalTime:number,sequenceNumber:number}|false}
+     * In raw mode: returns `{ buffer, time64, sequenceNumber }` from the binary header — no JSON
+     * deserialization. In object mode: returns a deserialized `{ stream, payload, metadata }` document
+     * produced by the storage layer.
+     * @returns {object|false}
      */
     next() {
         if (!this._iterator) {
@@ -128,15 +131,8 @@ class JoinEventStream extends EventStream {
             const next = this._next[nextIndex];
             this._next[nextIndex] = undefined;
 
-            if (this.raw) {
-                // Raw mode: no deserialization. Predicates are not supported in this mode.
+            if (this.raw || !this.predicate || this.predicate(next.payload, next.metadata)) {
                 return next;
-            }
-
-            // Object mode: deserialize from the raw buffer to apply predicate and return the document.
-            const document = this.serializer.deserialize(next.buffer.toString('utf8'));
-            if (!this.predicate || this.predicate(document.payload, document.metadata)) {
-                return document;
             }
         }
     }
@@ -148,7 +144,6 @@ class JoinEventStream extends EventStream {
     _read() {
         const next = this.next();
         if (this.raw) {
-            // next is { buffer, globalTime, sequenceNumber } — push raw bytes + newline, no re-serialization.
             this.push(next === false ? null : Buffer.concat([next.buffer, NDJSON_NEWLINE]));
         } else {
             this.push(next ? next.payload : null);

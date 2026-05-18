@@ -7,6 +7,11 @@ function writeNdjson(response, eventStream, headers = {}) {
         ...headers
     });
 
+    if (eventStream.raw) {
+        eventStream.pipe(response);
+        return;
+    }
+
     const pump = () => {
         let next;
         while ((next = eventStream.next()) !== false) {
@@ -21,13 +26,4 @@ function writeNdjson(response, eventStream, headers = {}) {
     pump();
 }
 
-function writeRawNdjson(response, rawStream, headers = {}) {
-    response.status(200);
-    response.set({
-        'content-type': ndjsonContentType,
-        ...headers
-    });
-    rawStream.pipe(response);
-}
-
-export { writeNdjson, writeRawNdjson };
+export { writeNdjson };

@@ -559,14 +559,13 @@ class ReadableStorage extends events.EventEmitter {
 
     /**
      * Read a raw document Buffer from the given partition and position, firing the preRead hook.
-     * When `headerOut` is provided, also populates `headerOut.globalTime` with the absolute timestamp
-     * (`partition.metadata.epoch + time64`), allowing callers to order entries across partitions.
      *
      * @protected
      * @param {number} partitionId
      * @param {number} position
      * @param {number} [size]
-     * @param {object|null} [headerOut] Optional — populated with `dataSize`, `sequenceNumber`, `time64`, and `globalTime`.
+     * @param {object|null} [headerOut] Optional — populated by the partition with `dataSize`,
+     *   `sequenceNumber`, and `time64` (epoch-denormalized so it is comparable across partitions).
      * @returns {Buffer|false}
      */
     readBufferFrom(partitionId, position, size, headerOut = null) {
@@ -574,62 +573,23 @@ class ReadableStorage extends events.EventEmitter {
         if (this.listenerCount('preRead') > 0) {
             this.emit('preRead', position, partition.metadata);
         }
-        const buffer = partition.readFrom(position, size, headerOut);
-        if (headerOut !== null && buffer !== false) {
-            headerOut.globalTime = partition.metadata.epoch + headerOut.time64;
-        }
-        return buffer;
+        return partition.readFrom(position, size, headerOut);
     }
 
     /**
-     * Iterate raw document Buffers for the given index range.
-     * Newline separators (for NDJSON) are the caller's responsibility.
+     * Iterate raw document Buffers with header metadata for the given index range.
+     * Yields `{ buffer, time64, sequenceNumber }` per document, where `time64` is the
+     * epoch-denormalized absolute timestamp (comparable across partitions).
      * Does not support the no-index (`false`) path.
      *
      * @protected
      * @param {number} from 1-based index position (inclusive).
      * @param {number} until 1-based index position (inclusive). May be less than `from` for reverse order.
      * @param {ReadableIndex|null} index
-     * @returns {Generator<Buffer>}
+     * @returns {Generator<{buffer: Buffer, time64: number, sequenceNumber: number}>}
      */
     *iterateRangeBuffers(from, until, index) {
         const idx = index || this.index;
-        const ascending = from <= until;
-        const lo = ascending ? from : until;
-        const hi = ascending ? until : from;
-        const entries = idx.range(lo, hi);
-        if (!entries) return;
-        if (ascending) {
-            for (const entry of entries) {
-                const buffer = this.readBufferFrom(entry.partition, entry.position, entry.size);
-                if (buffer !== false) yield buffer;
-            }
-        } else {
-            for (let i = entries.length - 1; i >= 0; i--) {
-                const buffer = this.readBufferFrom(entries[i].partition, entries[i].position, entries[i].size);
-                if (buffer !== false) yield buffer;
-            }
-        }
-    }
-
-    /**
-     * Iterate raw document Buffers with header metadata for the given index range.
-     * Yields `{ buffer, globalTime, sequenceNumber }` per document, where `globalTime`
-     * is `partition.metadata.epoch + time64` — a denormalized absolute timestamp that is
-     * comparable across partitions with different epochs.
-     * Used by `JoinEventStream` so it can merge streams by time without deserializing JSON.
-     *
-     * @protected
-     * @param {number} from 1-based index position (inclusive).
-     * @param {number} until 1-based index position (inclusive). May be less than `from` for reverse order.
-     * @param {ReadableIndex|null} index
-     * @returns {Generator<{buffer: Buffer, globalTime: number, sequenceNumber: number}>}
-     */
-    *iterateRangeWithHeaders(from, until, index) {
-        const idx = index || this.index;
-        if (!idx.isOpen()) {
-            idx.open();
-        }
         const ascending = from <= until;
         const lo = ascending ? from : until;
         const hi = ascending ? until : from;
@@ -639,12 +599,12 @@ class ReadableStorage extends events.EventEmitter {
         if (ascending) {
             for (const entry of entries) {
                 const buffer = this.readBufferFrom(entry.partition, entry.position, entry.size, headerOut);
-                if (buffer !== false) yield { buffer, globalTime: headerOut.globalTime, sequenceNumber: headerOut.sequenceNumber };
+                if (buffer !== false) yield { buffer, time64: headerOut.time64, sequenceNumber: headerOut.sequenceNumber };
             }
         } else {
             for (let i = entries.length - 1; i >= 0; i--) {
                 const buffer = this.readBufferFrom(entries[i].partition, entries[i].position, entries[i].size, headerOut);
-                if (buffer !== false) yield { buffer, globalTime: headerOut.globalTime, sequenceNumber: headerOut.sequenceNumber };
+                if (buffer !== false) yield { buffer, time64: headerOut.time64, sequenceNumber: headerOut.sequenceNumber };
             }
         }
     }
@@ -668,7 +628,7 @@ class ReadableStorage extends events.EventEmitter {
         const readFrom = wrapAndCheck(from, lengthSource.length);
         const readUntil = wrapAndCheck(until, lengthSource.length);
         assert(readFrom > 0 && readUntil > 0, `Range scan error for range ${from} - ${until}.`);
-        for (const buffer of this.iterateRangeBuffers(readFrom, readUntil, index)) {
+        for (const { buffer } of this.iterateRangeBuffers(readFrom, readUntil, index)) {
             yield Buffer.concat([buffer, NDJSON_NEWLINE]);
         }
     }
