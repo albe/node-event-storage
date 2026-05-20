@@ -229,11 +229,18 @@ class ReadablePartition extends events.EventEmitter {
         assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
-        const reader = this.prepareReadBuffer(position);
+        const bufferOffset = size > 0 && backwardsHint ? DOCUMENT_HEADER_SIZE + size : 0;
+        const reader = size > 0 && backwardsHint
+            ? this.prepareReadBufferBackwards(position + bufferOffset)
+            : this.prepareReadBuffer(position);
         if (reader.length < DOCUMENT_HEADER_SIZE) {
             return false;
         }
 
+        // prepareReadBufferBackwards positions the cursor at position + bufferOffset (the end of
+        // the document data), so the previous document in file order lands inside the buffer on the next
+        // backwards read. Adjust the cursor back to the document header start before reading.
+        reader.cursor -= bufferOffset;
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
         const header = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
         const dataSize = header.dataSize;
