@@ -3,9 +3,6 @@ import EventStream from './EventStream.js';
 /** Reusable sentinel used for missing or empty per-stream iterators. */
 const emptyIterator = Object.freeze({ next() { return { done: true }; } });
 
-/** Appended to each raw buffer chunk to form a newline-delimited JSON stream. */
-const NDJSON_NEWLINE = Buffer.from('\n');
-
 /**
  * Calculate the actual version number from a possibly relative (negative) version number.
  *
@@ -58,9 +55,7 @@ class JoinEventStream extends EventStream {
                 }
                 // Raw mode: get { buffer, time64, sequenceNumber } for binary-header ordering.
                 // Object mode: storage deserializes for us and we order by metadata.commitId.
-                return this.raw
-                    ? eventStore.storage.iterateRangeBuffers(from, until, streamIndex)
-                    : eventStore.storage.readRange(from, until, streamIndex);
+                return eventStore.storage.readRange(from, until, streamIndex, this.raw);
             });
         }
         this._iterator = null;
@@ -89,12 +84,12 @@ class JoinEventStream extends EventStream {
      */
     follows(first, second) {
         const descending = this.minRevision > this.maxRevision;
-        const lt = (a, b) => descending ? a < b : a > b;
+        const follows = (a, b) => descending ? a < b : a > b;
         if (this.raw) {
-            if (first.time64 !== second.time64) return lt(first.time64, second.time64);
-            return lt(first.sequenceNumber, second.sequenceNumber);
+            if (first.time64 !== second.time64) return follows(first.time64, second.time64);
+            return follows(first.sequenceNumber, second.sequenceNumber);
         }
-        return lt(first.metadata.commitId, second.metadata.commitId);
+        return follows(first.metadata.commitId, second.metadata.commitId);
     }
 
     /**
@@ -132,19 +127,6 @@ class JoinEventStream extends EventStream {
             if (this.raw || !this.predicate || this.predicate(next.payload, next.metadata)) {
                 return next;
             }
-        }
-    }
-
-    /**
-     * Readable stream implementation.
-     * @private
-     */
-    _read() {
-        const next = this.next();
-        if (this.raw) {
-            this.push(next === false ? null : Buffer.concat([next.buffer, NDJSON_NEWLINE]));
-        } else {
-            this.push(next ? next.payload : null);
         }
     }
 

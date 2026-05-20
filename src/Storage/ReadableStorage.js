@@ -3,7 +3,7 @@ import path from 'path';
 import events from 'events';
 import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
-import { assert, wrapAndCheck, kWayMerge } from '../util.js';
+import { assert, wrapAndCheck, iterate, kWayMerge } from '../util.js';
 import { scanForFiles } from '../fsUtil.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
 import IndexMatcher from '../IndexMatcher.js';
@@ -273,16 +273,19 @@ class ReadableStorage extends events.EventEmitter {
      * @param {number} partitionId The partition to read from.
      * @param {number} position The file position to read from.
      * @param {number} [size] The expected byte size of the document at the given position.
+     * @param {boolean} [raw] Whether to return raw buffers instead of deserialized objects. Default false.
+     * @param {boolean} [backwardsHint] If set to true, will optimize buffering for backwards reading.
      * @returns {object} The document stored at the given position.
      * @throws {Error} if the document at the given position can not be deserialized.
      */
-    readFrom(partitionId, position, size) {
+    readFrom(partitionId, position, size, raw = false, backwardsHint = false) {
         const partition = this.getPartition(partitionId);
         if (this.listenerCount('preRead') > 0) {
             this.emit('preRead', position, partition.metadata);
         }
-        const data = partition.readFrom(position, size);
-        return this.serializer.deserialize(data.toString('utf8'));
+        const headerOut = {};
+        const buffer = partition.readFrom(position, size, headerOut, backwardsHint);
+        return raw ? { buffer, time64: headerOut.time64, sequenceNumber: headerOut.sequenceNumber } : this.serializer.deserialize(buffer.toString('utf8'));
     }
 
     /**
@@ -295,10 +298,7 @@ class ReadableStorage extends events.EventEmitter {
      */
     read(number, index) {
         index = index || this.index;
-
-        if (!index.isOpen()) {
-            index.open();
-        }
+        index.open();
 
         const entry = index.get(number);
         if (entry === false) {
@@ -318,19 +318,22 @@ class ReadableStorage extends events.EventEmitter {
      * @param {ReadableIndex|false} [index] The index to use for finding the documents in the range.
      *   Pass `false` to skip the global index and iterate all partitions directly in sequenceNumber order
      *   (useful when the global index is unavailable or corrupted).
+     * @param {boolean} [raw] Whether to return raw buffers instead of deserialized objects. Default false.
      * @returns {Generator<object>} A generator that will read each document in the range one by one.
      */
-    *readRange(from, until = -1, index = null) {
-        const lengthSource = index || this.index;
-        if (!lengthSource.isOpen()) {
-            lengthSource.open();
+    *readRange(from, until = -1, index = null, raw = false) {
+        let length = Number.MAX_SAFE_INTEGER;
+        if (index !== false) {
+            index = index || this.index;
+            index.open();
+            length = index.length;
         }
 
-        const readFrom = wrapAndCheck(from, lengthSource.length);
-        const readUntil = wrapAndCheck(until, lengthSource.length);
+        const readFrom = wrapAndCheck(from, length);
+        const readUntil = wrapAndCheck(until, length);
         assert(readFrom > 0 && readUntil > 0, `Range scan error for range ${from} - ${until}.`);
 
-        yield* this.iterateRange(readFrom, readUntil, index);
+        yield* this.iterateRange(readFrom, readUntil, index, raw);
     }
 
     /**
@@ -340,36 +343,25 @@ class ReadableStorage extends events.EventEmitter {
      * @param {number} from
      * @param {number} until
      * @param {ReadableIndex|false|null} index
+     * @param {boolean} [raw] Whether to return raw buffers instead of deserialized objects. Default false.
      * @returns {Generator<object>}
      */
-    *iterateRange(from, until, index) {
+    *iterateRange(from, until, index, raw = false) {
         if (index === false) {
-            if (from > until) {
-                for (const entry of this.iterateDocumentsNoIndexBackwards(from - 1, until - 1)) {
-                    yield entry.document;
-                }
-            } else {
-                for (const entry of this.iterateDocumentsNoIndex(from - 1, until - 1)) {
-                    yield entry.document;
-                }
+            for (const entry of this.iterateDocumentsNoIndex(from - 1, until - 1)) {
+                yield entry.document;
             }
             return;
         }
 
         const idx = index || this.index;
-        if (from > until) {
-            const entries = idx.range(until, from);
-            if (!entries) return;
-            for (let i = entries.length - 1; i >= 0; i--) {
-                yield this.readFrom(entries[i].partition, entries[i].position, entries[i].size);
-            }
-            return;
-        }
-
-        const entries = idx.range(from, until);
-        for (let entry of entries) {
-            const document = this.readFrom(entry.partition, entry.position, entry.size);
-            yield document;
+        const forwards = from <= until;
+        const lo = Math.min(from, until);
+        const hi = Math.max(from, until);
+        const entries = idx.range(lo, hi);
+        if (!entries) return;
+        for (const entry of iterate(entries, forwards)) {
+            yield this.readFrom(entry.partition, entry.position, entry.size, raw, !forwards);
         }
     }
 
@@ -446,10 +438,10 @@ class ReadableStorage extends events.EventEmitter {
     buildDocumentEntry(stream) {
         return {
             document: this.serializer.deserialize(stream.data.toString('utf8')),
-            sequenceNumber: stream.headerOut.sequenceNumber,
+            sequenceNumber: stream.header.sequenceNumber,
             partitionName: stream.partitionName,
-            position: stream.headerOut.position,
-            size: stream.headerOut.dataSize,
+            position: stream.header.position ?? stream.position,
+            size: stream.header.dataSize,
             partition: stream.partition,
         };
     }
@@ -466,171 +458,38 @@ class ReadableStorage extends events.EventEmitter {
     *iterateDocumentsNoIndex(from = 0, until = Number.MAX_SAFE_INTEGER) {
         const streams = [];
 
+        const forwards = from <= until;
+        const lo = Math.min(from, until);
+        const hi = Math.max(from, until);
         this.forEachPartition(partition => {
-            if (!partition.isOpen()) {
-                partition.open();
+            partition.open();
+            const found = partition.findDocument(forwards ? lo : hi, forwards);
+            if (!found || found.header.sequenceNumber < lo  || found.header.sequenceNumber > hi) {
+                return;
             }
 
-            const found = partition.findDocument(from);
-            if (found && found.headerOut.sequenceNumber <= until) {
-                const nextPosition = found.headerOut.position + partition.documentWriteSize(found.headerOut.dataSize);
-                const reader = partition.readAll(nextPosition, found.headerOut);
-                streams.push({ ...found, reader, partition: partition.id, partitionName: partition.name });
-            }
+            // Keep the located upper-bound document as current stream item and continue before it.
+            found.header.position = found.position;
+            const reader = forwards ?
+                partition.readAll(found.position + partition.documentWriteSize(found.header.dataSize), found.header)
+                : partition.readAllBackwards(found.position, found.header);
+            streams.push({ ...found, reader, partition: partition.id, partitionName: partition.name });
         });
 
-        const items = [];
-        kWayMerge(
+        yield* kWayMerge(
             streams,
-            stream => stream.headerOut.sequenceNumber,
+            stream => stream.header.sequenceNumber,
             stream => {
                 const next = stream.reader.next();
-                if (!next.done && stream.headerOut.sequenceNumber <= until) {
+                if (!next.done && stream.header.sequenceNumber >= lo && stream.header.sequenceNumber <= hi) {
                     stream.data = next.value;
                     return true;
                 }
                 return false;
             },
-            stream => items.push(this.buildDocumentEntry(stream))
+            stream => this.buildDocumentEntry(stream),
+            forwards
         );
-
-        yield* items;
-    }
-
-    /**
-     * Iterate documents across all partitions in descending sequenceNumber order using a k-way merge.
-     * Uses readAllBackwards on each partition.
-     *
-     * @protected
-     * @param {number} [from=Number.MAX_SAFE_INTEGER] The 0-based sequenceNumber upper bound (inclusive).
-     * @param {number} [until=0] The 0-based sequenceNumber lower bound (inclusive).
-     * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partition: number}>}
-     */
-    *iterateDocumentsNoIndexBackwards(from = Number.MAX_SAFE_INTEGER, until = 0) {
-        const streams = [];
-
-        this.forEachPartition(partition => {
-            if (!partition.isOpen()) {
-                partition.open();
-            }
-
-            const last = partition.readLast();
-            if (!last || last.header.sequenceNumber < until) {
-                return;
-            }
-
-            let startBefore;
-            if (last.header.sequenceNumber <= from) {
-                startBefore = partition.size;
-            } else {
-                const found = partition.findDocument(from + 1);
-                if (!found) return;
-                startBefore = found.headerOut.position;
-            }
-
-            const headerOut = {};
-            const reader = partition.readAllBackwards(startBefore, headerOut);
-            const first = reader.next();
-            if (first.done || headerOut.sequenceNumber > from || headerOut.sequenceNumber < until) {
-                return;
-            }
-
-            streams.push({ data: first.value, reader, headerOut, partition: partition.id, partitionName: partition.name });
-        });
-
-        const items = [];
-        kWayMerge(
-            streams,
-            stream => stream.headerOut.sequenceNumber,
-            stream => {
-                const next = stream.reader.next();
-                if (!next.done && stream.headerOut.sequenceNumber >= until) {
-                    stream.data = next.value;
-                    return true;
-                }
-                return false;
-            },
-            stream => items.push(this.buildDocumentEntry(stream)),
-            false  // descending: pick the stream with the highest sequenceNumber
-        );
-
-        yield* items;
-    }
-
-    /**
-     * Read a raw document Buffer from the given partition and position, firing the preRead hook.
-     *
-     * @protected
-     * @param {number} partitionId
-     * @param {number} position
-     * @param {number} [size]
-     * @param {object|null} [headerOut] Optional — populated by the partition with `dataSize`,
-     *   `sequenceNumber`, and `time64` (epoch-denormalized so it is comparable across partitions).
-     * @returns {Buffer|false}
-     */
-    readBufferFrom(partitionId, position, size, headerOut = null) {
-        const partition = this.getPartition(partitionId);
-        if (this.listenerCount('preRead') > 0) {
-            this.emit('preRead', position, partition.metadata);
-        }
-        return partition.readFrom(position, size, headerOut);
-    }
-
-    /**
-     * Iterate raw document Buffers with header metadata for the given index range.
-     * Yields `{ buffer, time64, sequenceNumber }` per document, where `time64` is the
-     * epoch-denormalized absolute timestamp (comparable across partitions).
-     * Does not support the no-index (`false`) path.
-     *
-     * @protected
-     * @param {number} from 1-based index position (inclusive).
-     * @param {number} until 1-based index position (inclusive). May be less than `from` for reverse order.
-     * @param {ReadableIndex|null} index
-     * @returns {Generator<{buffer: Buffer, time64: number, sequenceNumber: number}>}
-     */
-    *iterateRangeBuffers(from, until, index) {
-        const idx = index || this.index;
-        const ascending = from <= until;
-        const lo = ascending ? from : until;
-        const hi = ascending ? until : from;
-        const entries = idx.range(lo, hi);
-        if (!entries) return;
-        const headerOut = {};
-        if (ascending) {
-            for (const entry of entries) {
-                const buffer = this.readBufferFrom(entry.partition, entry.position, entry.size, headerOut);
-                if (buffer !== false) yield { buffer, time64: headerOut.time64, sequenceNumber: headerOut.sequenceNumber };
-            }
-        } else {
-            for (let i = entries.length - 1; i >= 0; i--) {
-                const buffer = this.readBufferFrom(entries[i].partition, entries[i].position, entries[i].size, headerOut);
-                if (buffer !== false) yield { buffer, time64: headerOut.time64, sequenceNumber: headerOut.sequenceNumber };
-            }
-        }
-    }
-
-    /**
-     * Read a range of raw document Buffers from the index, with NDJSON newlines appended to each.
-     * Yields one Buffer per document containing the serialized JSON followed by `\n`.
-     * Deserialization is skipped; the on-disk bytes are forwarded as-is.
-     *
-     * @api
-     * @param {number} from The 1-based document number (inclusive) to start reading from.
-     * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
-     * @param {ReadableIndex|null} [index] The index to use. Defaults to the primary index.
-     * @returns {Generator<Buffer>}
-     */
-    *readRangeBuffers(from, until = -1, index = null) {
-        const lengthSource = index || this.index;
-        if (!lengthSource.isOpen()) {
-            lengthSource.open();
-        }
-        const readFrom = wrapAndCheck(from, lengthSource.length);
-        const readUntil = wrapAndCheck(until, lengthSource.length);
-        assert(readFrom > 0 && readUntil > 0, `Range scan error for range ${from} - ${until}.`);
-        for (const { buffer } of this.iterateRangeBuffers(readFrom, readUntil, index)) {
-            yield Buffer.concat([buffer, NDJSON_NEWLINE]);
-        }
     }
 
     /**

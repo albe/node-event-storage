@@ -562,16 +562,17 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string} streamName The name of the stream to get.
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {boolean} [raw] When true, the stream emits raw NDJSON Buffers instead of event objects.
+     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {(function(object, object): boolean)|true|null} [predicate] An optional filter function
+     *   `(payload, metadata) => boolean`. Pass `true` to activate raw-buffer mode to receive NDJSON buffers
      * @returns {EventStream|boolean} The event stream or false if a stream with the name doesn't exist.
      */
-    getEventStream(streamName, minRevision = 1, maxRevision = -1, raw = false) {
+    getEventStream(streamName, minRevision = 1, maxRevision = -1, predicate = null) {
         if (!(streamName in this.streams)) {
             return false;
         }
-        return new EventStream(streamName, this, minRevision, maxRevision, raw ? true : null);
+        return new EventStream(streamName, this, minRevision, maxRevision, predicate);
     }
 
     /**
@@ -579,13 +580,14 @@ class EventStore extends events.EventEmitter {
      * This is the same as `getEventStream('_all', ...)`.
      *
      * @api
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {boolean} [raw] When true, the stream emits raw NDJSON Buffers instead of event objects.
+     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {(function(object, object): boolean)|true|null} [predicate] An optional filter function
+     *   `(payload, metadata) => boolean`. Only events for which this returns truthy are yielded. Pass `true` to activate raw-buffer mode to receive NDJSON buffers
      * @returns {EventStream} The event stream.
      */
-    getAllEvents(minRevision = 1, maxRevision = -1, raw = false) {
-        return this.getEventStream('_all', minRevision, maxRevision, raw);
+    getAllEvents(minRevision = 1, maxRevision = -1, predicate = null) {
+        return this.getEventStream('_all', minRevision, maxRevision, predicate);
     }
 
     /**
@@ -593,15 +595,14 @@ class EventStore extends events.EventEmitter {
      *
      * @param {string} streamName The (transient) name of the joined stream.
      * @param {Array<string>} streamNames An array of the stream names to join.
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {function(object, object): boolean|null} [predicate] An optional filter predicate
-     *   `(payload, metadata) => boolean`. Only events for which this returns truthy are yielded.
-     * @param {boolean} [raw] When true, the stream emits raw NDJSON Buffers instead of event objects.
+     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {(function(object, object): boolean)|true|null} [predicate] An optional filter function
+     *   `(payload, metadata) => boolean`. Only events for which this returns truthy are yielded. Pass `true` to activate raw-buffer mode to receive NDJSON buffers
      * @returns {EventStream} The joined event stream.
      * @throws {Error} if any of the streams doesn't exist.
      */
-    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null) {
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
         if (streamNames.length === 0) {
@@ -613,12 +614,12 @@ class EventStore extends events.EventEmitter {
         }
 
         if (streamNames.length === 1) {
-            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, raw ? true : predicate);
+            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate);
             stream.name = streamName;
             return stream;
         }
 
-        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, raw ? true : predicate);
+        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate);
     }
 
     /**
@@ -632,14 +633,14 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string} categoryName The name of the category to get a stream for. A category is a stream name prefix.
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
      * @returns {EventStream} The joined event stream for all streams of the given category.
      * @throws {Error} If no stream for this category exists.
      */
-    getEventStreamForCategory(categoryName, minRevision = 1, maxRevision = -1) {
+    getEventStreamForCategory(categoryName, minRevision = 1, maxRevision = -1, raw = false) {
         if (categoryName in this.streams) {
-            return this.getEventStream(categoryName, minRevision, maxRevision);
+            return this.getEventStream(categoryName, minRevision, maxRevision, raw);
         }
         const categoryStreams = Object.keys(this.streams).filter(streamName =>
             streamName.startsWith(categoryName + '-') ||
@@ -649,7 +650,7 @@ class EventStore extends events.EventEmitter {
         if (categoryStreams.length === 0) {
             throw new Error(`No streams for category '${categoryName}' exist.`);
         }
-        return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision);
+        return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision, null, raw);
     }
 
     /**

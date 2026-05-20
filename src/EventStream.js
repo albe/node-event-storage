@@ -53,9 +53,7 @@ class EventStream extends stream.Readable {
             this.maxRevision = normalizeVersion(maxRevision, this.streamIndex.length);
             this.version = minVersion(this.streamIndex.length, maxRevision);
             this._iterator = null;
-            this.fetch = raw
-                ? function() { return eventStore.storage.readRangeBuffers(this.minRevision, this.maxRevision, this.streamIndex); }
-                : function() { return eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex); };
+            this.fetch = () => eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex, raw);
         } else {
             this.streamIndex = { length: 0 };
             this.version = -1;

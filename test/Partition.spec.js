@@ -505,7 +505,7 @@ describe('Partition', function() {
             fillPartition(5, i => 'doc-' + i);
             const found = partition.findDocument(1);
             expect(found).to.not.be(null);
-            expect(found.headerOut.sequenceNumber).to.be(1);
+            expect(found.header.sequenceNumber).to.be(1);
             expect(found.data.toString('utf8')).to.be('doc-1');
         });
 
@@ -514,7 +514,7 @@ describe('Partition', function() {
             fillPartition(5, i => 'doc-' + i);
             const found = partition.findDocument(3);
             expect(found).to.not.be(null);
-            expect(found.headerOut.sequenceNumber).to.be(3);
+            expect(found.header.sequenceNumber).to.be(3);
             expect(found.data.toString('utf8')).to.be('doc-3');
         });
 
@@ -523,7 +523,7 @@ describe('Partition', function() {
             fillPartition(5, i => 'doc-' + i);
             const found = partition.findDocument(5);
             expect(found).to.not.be(null);
-            expect(found.headerOut.sequenceNumber).to.be(5);
+            expect(found.header.sequenceNumber).to.be(5);
             expect(found.data.toString('utf8')).to.be('doc-5');
         });
 
@@ -542,7 +542,7 @@ describe('Partition', function() {
             reader.open();
             const found = reader.findDocument(2);
             expect(found).to.not.be(null);
-            expect(found.headerOut.sequenceNumber).to.be(2);
+            expect(found.header.sequenceNumber).to.be(2);
         });
 
         it('finds document near center via binary search', function() {
@@ -554,7 +554,7 @@ describe('Partition', function() {
             reader.open();
             const found = reader.findDocument(50);
             expect(found).to.not.be(null);
-            expect(found.headerOut.sequenceNumber).to.be(50);
+            expect(found.header.sequenceNumber).to.be(50);
         });
 
         it('finds document near end via binary search', function() {
@@ -566,7 +566,7 @@ describe('Partition', function() {
             reader.open();
             const found = reader.findDocument(99);
             expect(found).to.not.be(null);
-            expect(found.headerOut.sequenceNumber).to.be(99);
+            expect(found.header.sequenceNumber).to.be(99);
         });
 
         it('returns the lowest sequence number >= search value when exact match is absent', function() {
@@ -582,7 +582,29 @@ describe('Partition', function() {
             // Searching for the missing seqNum 50 must return seqNum 51.
             const found = reader.findDocument(50);
             expect(found).to.not.be(null);
-            expect(found.headerOut.sequenceNumber).to.be(51);
+            expect(found.header.sequenceNumber).to.be(51);
+        });
+
+        it('returns the highest sequence number <= search value when min is false', function() {
+            // Write docs 1-49 then 51-100 (seqNum 50 is deliberately missing).
+            partition.open();
+            for (let i = 1; i <= 49; i++) partition.write('x'.repeat(460), i);
+            for (let i = 51; i <= 100; i++) partition.write('x'.repeat(460), i);
+            partition.flush();
+            partition.close();
+
+            const reader = createBinarySearchReader();
+            reader.open();
+            const found = reader.findDocument(50, false);
+            expect(found).to.not.be(null);
+            expect(found.header.sequenceNumber).to.be(49);
+        });
+
+        it('returns null when min is false and all sequence numbers are greater than the search value', function() {
+            partition.open();
+            fillPartition(5, i => 'doc-' + i);
+            const found = partition.findDocument(0, false);
+            expect(found).to.be(null);
         });
 
     });

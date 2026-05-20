@@ -113,18 +113,37 @@ function wrapAndCheck(index, length) {
 }
 
 /**
+ * Iterate an array-like list in forward or reverse order.
+ *
+ * @param {Iterable} entries
+ * @param {boolean} forwards
+ */
+function* iterate(entries, forwards) {
+    if (forwards) {
+        yield* entries;
+        return;
+    }
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+        yield entries[i];
+    }
+}
+
+/**
  * Perform a k-way merge over multiple streams, invoking a callback for each item in sorted order.
  * Each stream object is mutated in place by the `advance` function.
  *
+ * @typedef {object} Visited
  * @param {object[]} streams Array of stream state objects; entries are removed when exhausted.
  * @param {function(object): number} getKey Returns the current sort key for a stream state.
  * @param {function(object): boolean} advance Advances the stream to its next item.
  *   Returns true if the stream has more items within range, false if exhausted.
- * @param {function(object): void} visit Called for each stream state in merged order.
+ * @param {function(object): Visited} visit Called for each stream state in merged order and then yielded.
  * @param {boolean} [ascending=true] When true, yields items in ascending key order (min-merge).
  *   When false, yields in descending key order (max-merge).
+ * @returns {Generator<Visited>}
  */
-function kWayMerge(streams, getKey, advance, visit, ascending = true) {
+function *kWayMerge(streams, getKey, advance, visit, ascending = true) {
     while (streams.length > 0) {
         let bestIdx = 0;
         for (let i = 1; i < streams.length; i++) {
@@ -133,7 +152,7 @@ function kWayMerge(streams, getKey, advance, visit, ascending = true) {
                 : getKey(streams[i]) > getKey(streams[bestIdx]);
             if (better) bestIdx = i;
         }
-        visit(streams[bestIdx]);
+        yield visit(streams[bestIdx]);
         if (!advance(streams[bestIdx])) {
             streams.splice(bestIdx, 1);
         }
@@ -163,6 +182,7 @@ export {
     assertEqual,
     hash,
     wrapAndCheck,
+    iterate,
     binarySearch,
     alignTo,
     kWayMerge,

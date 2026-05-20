@@ -204,7 +204,7 @@ class WritableStorage extends ReadableStorage {
 
         // Scan partitions in sequence-number order and rebuild index entries.
         // iterateDocumentsNoIndex opens any closed partitions automatically.
-        for (const { document, partition, position, size } of this.iterateDocumentsNoIndex(fromSequenceNumber, Number.MAX_SAFE_INTEGER)) {
+        for (const { document, partition, position, size } of this.iterateDocumentsNoIndex(fromSequenceNumber)) {
             const newEntry = new WritableIndexEntry(this.index.length + 1, position, size, partition);
             this.index.add(newEntry);
 

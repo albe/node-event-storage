@@ -379,7 +379,7 @@ describe('EventStore', function() {
             });
         });
 
-        it('invokes callback when finished with optimistic concurrency check and metdata', function(done) {
+        it('invokes callback when finished with optimistic concurrency check and metadata', function(done) {
             eventstore = new EventStore({
                 storageDirectory
             });
@@ -461,6 +461,32 @@ describe('EventStore', function() {
             });
         });
 
+        it('can commit to existing non-empty read-streams', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.createEventStream('my-foo-bar', event => event.payload.foo === 'bar');
+                eventstore.commit('my-foo-bar', [{ foo: 'bar', baz: 'quux' }], 1, () => {
+                    expect(eventstore.length).to.be(2);
+                    expect(eventstore.getStreamVersion('my-foo-bar')).to.be(2);
+                    done();
+                });
+            });
+        });
+
+        xit('can commit only matching events to existing read-streams', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.createEventStream('my-foo-bar', event => event.payload.foo === 'bar');
+                expect(() => eventstore.commit('my-foo-bar', [{ foo: 'baz', baz: 'quux' }], 1)).to.throwError(/events do not match/);
+                done();
+            });
+        });
     });
 
     describe('createEventStream', function() {

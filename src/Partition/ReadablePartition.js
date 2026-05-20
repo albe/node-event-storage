@@ -219,12 +219,13 @@ class ReadablePartition extends events.EventEmitter {
      * @param {number} [size] The expected byte size of the document at the given position.
      * @param {object|null} [headerOut] Optional object to populate with the document header fields
      *   (`dataSize`, `sequenceNumber`, `time64`). Pass an existing object to avoid extra allocation.
+     * @param {boolean} [backwardsHint] If set to true, will optimize buffering for backwards reads.
      * @returns {Buffer|boolean} The data stored at the given position or false if no data could be read.
      * @throws {Error} if the storage entry at the given position is corrupted.
      * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
-    readFrom(position, size = 0, headerOut = null) {
+    readFrom(position, size = 0, headerOut = null, backwardsHint = false) {
         assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
@@ -312,7 +313,7 @@ class ReadablePartition extends events.EventEmitter {
      */
     findDocumentPositionBefore(position) {
         assert(this.fd, 'Partition is not opened.');
-        position -= (position % DOCUMENT_ALIGNMENT);
+        if (position > 0) position -= (position % DOCUMENT_ALIGNMENT);
         if (position <= 0) {
             return false;
         }
@@ -378,49 +379,49 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * Find the first document whose sequenceNumber is >= the given value.
+     * Find a document around the target sequence number using one of two binary-search modes.
      * Uses readLast() to short-circuit when the partition contains no such document.
      * Uses a binary search over file positions via readDocumentBefore() to locate the
-     * document. The search tracks both the lower bound (position just after the last
-     * confirmed "< sequenceNumber" doc) and the upper bound (minimum position of any
-     * probed doc with sequenceNumber >= target). The upper bound, when available, is
-     * the exact target document, so no further linear scan is needed.
+     * document and tracks nearest candidates on both sides of the target.
      *
      * @api
      * @param {number} sequenceNumber The 0-based sequence number to search for.
-     * @returns {{ reader: Generator<Buffer>, headerOut: object, data: Buffer }|null}
-     *   The matched document with its reader and shared headerOut, or null if no such document exists.
+     * @param {boolean} [min=true] When true, returns the first document with sequenceNumber >= target.
+     *   When false, returns the last document with sequenceNumber <= target.
+     * @returns {{ data: Buffer, header: object, position: number }|null}
+     *   The matched document with its header and position, or null if no such document exists.
      */
-    findDocument(sequenceNumber) {
+    findDocument(sequenceNumber, min = true) {
         const last = this.readLast();
-        if (!last || last.header.sequenceNumber < sequenceNumber) {
+        if (!last) {
             return null;
         }
 
-        let startPosition = this.size;
-        binarySearch(
+        if (min && last.header.sequenceNumber < sequenceNumber) {
+            return null;
+        }
+
+        const [low, high] = binarySearch(
             sequenceNumber,
             this.size,
             (pos) => {
                 const doc = this.readDocumentBefore(pos);
-                if (!doc) return sequenceNumber;
-                if (doc.header.sequenceNumber < sequenceNumber) {
-                    startPosition = Math.max(startPosition, doc.position + this.documentWriteSize(doc.header.dataSize));
-                } else {
-                    startPosition = Math.min(startPosition, doc.position);
-                }
-                return doc.header.sequenceNumber;
+                return doc ? doc.header.sequenceNumber : Number.MIN_SAFE_INTEGER;
             }
         );
 
-        const headerOut = {};
-        const data = this.readFrom(startPosition, 0, headerOut);
+        const position = this.findDocumentPositionBefore(min ? low : high);
+        if (position === false || position < 0) {
+            return null;
+        }
+
+        const header = {};
+        const data = this.readFrom(position, 0, header);
         /* istanbul ignore if */
         if (data === false) {
             return null;
         }
-        headerOut.position = startPosition;
-        return { headerOut, data };
+        return { data, header, position };
     }
 
     /**
@@ -455,7 +456,7 @@ class ReadablePartition extends events.EventEmitter {
         let position = before < 0 ? this.size + before + 1 : before;
         const internalHeader = headerOut !== null ? headerOut : {};
         while ((position = this.findDocumentPositionBefore(position)) !== false) {
-            const data = this.readFrom(position, 0, internalHeader);
+            const data = this.readFrom(position, 0, internalHeader, true);
             if (headerOut !== null) {
                 headerOut.position = position;
             }
