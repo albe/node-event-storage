@@ -493,7 +493,7 @@ describe('Storage', function() {
             expect(entries.length).to.be(6);
             for (let i = 0; i < 6; i++) {
                 expect(entries[i].document).to.eql({ foo: i + 1 });
-                expect(entries[i].sequenceNumber).to.be(i);
+                expect(entries[i].number).to.be(i);
                 expect(typeof entries[i].partitionName).to.be('string');
                 expect(typeof entries[i].position).to.be('number');
             }

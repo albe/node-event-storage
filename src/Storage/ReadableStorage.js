@@ -275,7 +275,7 @@ class ReadableStorage extends events.EventEmitter {
      * @param {number} [size] The expected byte size of the document at the given position.
      * @param {boolean} [raw] Whether to return raw buffers instead of deserialized objects. Default false.
      * @param {boolean} [backwardsHint] If set to true, will optimize buffering for backwards reading.
-     * @returns {object} The document stored at the given position.
+     * @returns {object|{ buffer: Buffer, time64: number, sequenceNumber: number }} The document stored at the given position.
      * @throws {Error} if the document at the given position can not be deserialized.
      */
     readFrom(partitionId, position, size, raw = false, backwardsHint = false) {
@@ -438,8 +438,9 @@ class ReadableStorage extends events.EventEmitter {
     buildDocumentEntry(stream) {
         return {
             document: this.serializer.deserialize(stream.data.toString('utf8')),
-            sequenceNumber: stream.header.sequenceNumber,
             partitionName: stream.partitionName,
+            // Replicate the index entry structure here, so iteration can be used easily to reindex
+            number: stream.header.sequenceNumber,
             position: stream.header.position ?? stream.position,
             size: stream.header.dataSize,
             partition: stream.partition,
