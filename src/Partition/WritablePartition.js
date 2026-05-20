@@ -300,15 +300,16 @@ class WritablePartition extends ReadablePartition {
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading before.
+     * @param {number} [size] The amount of bytes that need to be buffered before position. By default, only guarantees that the document footer can be read.
      * @returns {object} A reader object with properties `buffer`, `cursor` and `length`.
      */
-    prepareReadBufferBackwards(position) {
+    prepareReadBufferBackwards(position, size = 0) {
         const bufferPos = this.size - this.writeBufferCursor;
         // Handle the case when data that is still in write buffer is supposed to be read backwards
         if (this.dirtyReads && this.writeBufferCursor > 0 && position > bufferPos) {
             return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
         }
-        return super.prepareReadBufferBackwards(position);
+        return super.prepareReadBufferBackwards(position, size);
     }
 
     /**

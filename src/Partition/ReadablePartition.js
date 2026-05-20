@@ -231,7 +231,7 @@ class ReadablePartition extends events.EventEmitter {
 
         const bufferOffset = size > 0 && backwardsHint ? DOCUMENT_HEADER_SIZE + size : 0;
         const reader = size > 0 && backwardsHint
-            ? this.prepareReadBufferBackwards(position + bufferOffset)
+            ? this.prepareReadBufferBackwards(position + bufferOffset, bufferOffset)
             : this.prepareReadBuffer(position);
         if (reader.length < DOCUMENT_HEADER_SIZE) {
             return false;
@@ -297,14 +297,15 @@ class ReadablePartition extends events.EventEmitter {
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading before.
+     * @param {number} [size] The amount of bytes that need to be buffered before position. By default, only guarantees that the document footer can be read.
      * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object with properties `buffer`, `cursor` and `length`.
      */
-    prepareReadBufferBackwards(position) {
+    prepareReadBufferBackwards(position, size = 0) {
         if (position < 0) {
             return ({ buffer: null, cursor: 0, length: 0 });
         }
         let bufferCursor = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE) || bufferCursor > this.readBufferLength) {
+        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < size + DOCUMENT_FOOTER_SIZE) || bufferCursor > this.readBufferLength) {
             this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
             bufferCursor = position - this.readBufferPos;
         }
