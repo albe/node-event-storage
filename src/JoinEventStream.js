@@ -1,4 +1,5 @@
 import EventStream from './EventStream.js';
+import { kWayMerge } from './util.js';
 
 /** Reusable sentinel used for missing or empty per-stream iterators. */
 const emptyIterator = Object.freeze({ next() { return { done: true }; } });
@@ -40,7 +41,6 @@ class JoinEventStream extends EventStream {
         this.minRevision = normalizeVersion(minRevision, eventStore.length);
         this.maxRevision = normalizeVersion(maxRevision, eventStore.length);
         this.fetch = function() {
-            this._next = new Array(streams.length).fill(undefined);
             return streams.map(streamName => {
                 const streamIndex = eventStore.streams[streamName]?.index;
                 if (!streamIndex || streamIndex.length === 0) {
@@ -62,34 +62,16 @@ class JoinEventStream extends EventStream {
     }
 
     /**
-     * Returns the value of the iterator at position `index`
-     * @param {number} index The iterator position for which to return the next value
-     * @returns {*}
+     * @returns {Generator<object>}
      */
-    getValue(index) {
-        const next = this._iterator[index].next();
-        return next.done ? false : next.value;
-    }
-
-    /**
-     * Returns true if `first` follows `second` in the read direction, meaning `second` should be yielded first.
-     *
-     * In raw mode: compares by `time64` (epoch-denormalized, from binary header) with `sequenceNumber`
-     * as a globally-unique tiebreaker.
-     * In object mode: compares by `metadata.commitId` (the global sequence number from the JSON body).
-     * @private
-     * @param {object} first
-     * @param {object} second
-     * @returns {boolean}
-     */
-    follows(first, second) {
-        const descending = this.minRevision > this.maxRevision;
-        const follows = (a, b) => descending ? a < b : a > b;
-        if (this.raw) {
-            if (first.time64 !== second.time64) return follows(first.time64, second.time64);
-            return follows(first.sequenceNumber, second.sequenceNumber);
-        }
-        return follows(first.metadata.commitId, second.metadata.commitId);
+    createMergedIterator() {
+        const ascending = this.minRevision <= this.maxRevision;
+        const raw = this.raw;
+        return kWayMerge(
+            this.fetch(),
+            entry => raw ? entry.sequenceNumber : entry.metadata.commitId,
+            ascending
+        );
     }
 
     /**
@@ -102,27 +84,14 @@ class JoinEventStream extends EventStream {
      */
     next() {
         if (!this._iterator) {
-            this._iterator = this.fetch();
+            this._iterator = this.createMergedIterator();
         }
         while (true) {
-            let nextIndex = -1;
-            this._next.forEach((value, index) => {
-                if (typeof value === 'undefined') {
-                    value = this._next[index] = this.getValue(index);
-                }
-                if (value === false) {
-                    return;
-                }
-                if (nextIndex === -1 || this.follows(this._next[nextIndex], value)) {
-                    nextIndex = index;
-                }
-            });
-
-            if (nextIndex === -1) {
+            const step = this._iterator.next();
+            if (step.done) {
                 return false;
             }
-            const next = this._next[nextIndex];
-            this._next[nextIndex] = undefined;
+            const next = step.value;
 
             if (this.raw || !this.predicate || this.predicate(next.payload, next.metadata)) {
                 return next;
