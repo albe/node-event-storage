@@ -305,6 +305,108 @@ describe('Partition', function() {
 
     });
 
+    describe('readRange', function() {
+
+        function writeDocumentsWithSequenceNumbers(sequenceNumbers) {
+            const positions = [];
+            partition.open();
+            for (const sequenceNumber of sequenceNumbers) {
+                positions.push(partition.write('doc-' + sequenceNumber, sequenceNumber));
+            }
+            partition.flush();
+            return positions;
+        }
+
+        function collectRangePayloads(from, until) {
+            const reader = createReader();
+            reader.open();
+            const payloads = [];
+            for (const { data } of reader.readRange(from, until)) {
+                payloads.push(data.toString('utf8'));
+            }
+            return payloads;
+        }
+
+        it('yields all existing documents exactly once within an inclusive 0-based range', function() {
+            writeDocumentsWithSequenceNumbers([0, 1, 3, 5, 8]);
+
+            const payloads = collectRangePayloads(1, 6);
+            expect(payloads).to.eql(['doc-1', 'doc-3', 'doc-5']);
+            expect(new Set(payloads).size).to.be(payloads.length);
+        });
+
+        it('yields the same inclusive range in reverse order when from is greater than until', function() {
+            writeDocumentsWithSequenceNumbers([0, 1, 3, 5, 8]);
+
+            const payloads = collectRangePayloads(6, 1);
+            expect(payloads).to.eql(['doc-5', 'doc-3', 'doc-1']);
+            expect(new Set(payloads).size).to.be(payloads.length);
+        });
+
+        it('includes exact matches on both lower and upper inclusive boundaries', function() {
+            writeDocumentsWithSequenceNumbers([0, 1, 3, 5, 8]);
+
+            const payloads = collectRangePayloads(0, 8);
+            expect(payloads).to.eql(['doc-0', 'doc-1', 'doc-3', 'doc-5', 'doc-8']);
+            expect(new Set(payloads).size).to.be(payloads.length);
+        });
+
+        it('includes exact boundary matches in reverse when from is greater than until', function() {
+            writeDocumentsWithSequenceNumbers([0, 1, 3, 5, 8]);
+
+            const payloads = collectRangePayloads(8, 0);
+            expect(payloads).to.eql(['doc-8', 'doc-5', 'doc-3', 'doc-1', 'doc-0']);
+            expect(new Set(payloads).size).to.be(payloads.length);
+        });
+
+        it('returns the document once when from and until are the same exact sequence number', function() {
+            writeDocumentsWithSequenceNumbers([0, 1, 3, 5, 8]);
+
+            const payloads = collectRangePayloads(3, 3);
+            expect(payloads).to.eql(['doc-3']);
+        });
+
+        it('yields index-like entry fields that reference the corresponding document (forward)', function() {
+            const sequenceNumbers = [0, 1, 3, 5, 8];
+            const positions = writeDocumentsWithSequenceNumbers(sequenceNumbers);
+
+            const reader = createReader();
+            reader.open();
+
+            let index = 0;
+            for (const { data, header, entry } of reader.readRange(0, 8)) {
+                expect(entry.number).to.be(sequenceNumbers[index]);
+                expect(entry.position).to.be(positions[index]);
+                const expectedDoc = 'doc-' + sequenceNumbers[index];
+                expect(entry.size).to.be(Buffer.from(expectedDoc, 'utf-8').byteLength);
+                expect(entry.partition).to.be(reader.id);
+                expect(data.toString('utf8')).to.be(expectedDoc);
+                index++;
+            }
+            expect(index).to.be(sequenceNumbers.length);
+        });
+
+        it('yields index-like entry fields in reverse order with exact boundaries', function() {
+            const sequenceNumbers = [0, 1, 3, 5, 8];
+            const positions = writeDocumentsWithSequenceNumbers([0, 1, 3, 5, 8]);
+
+            const reader = createReader();
+            reader.open();
+
+            let index = sequenceNumbers.length;
+            for (const { data, header, entry } of reader.readRange(8, 0)) {
+                index--;
+                expect(entry.number).to.be(sequenceNumbers[index]);
+                expect(entry.position).to.be(positions[index]);
+                const expectedDoc = 'doc-' + sequenceNumbers[index];
+                expect(entry.size).to.be(Buffer.from(expectedDoc, 'utf-8').byteLength);
+                expect(entry.partition).to.be(reader.id);
+                expect(data.toString('utf8')).to.be(expectedDoc);
+            }
+            expect(index).to.be(0);
+        });
+    });
+
     describe('readFrom', function() {
 
         it('throws when partition is not open', function() {

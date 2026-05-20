@@ -470,6 +470,43 @@ class ReadablePartition extends events.EventEmitter {
             yield data;
         }
     }
+
+    /**
+     * Read documents with sequenceNumber in the inclusive range [from, until].
+     * If from > until, documents are yielded in reverse order.
+     *
+     * @api
+     * @param {number} [from=0]
+     * @param {number} [until=Number.MAX_SAFE_INTEGER]
+     * @returns {Generator<{ data: Buffer, header: object, entry: object }>}
+     */
+    *readRange(from = 0, until = Number.MAX_SAFE_INTEGER) {
+        const forwards = from <= until;
+        const lo = Math.min(from, until);
+        const hi = Math.max(from, until);
+        const found = this.findDocument(forwards ? lo : hi, forwards);
+        if (!found || found.header.sequenceNumber < lo || found.header.sequenceNumber > hi) {
+            return;
+        }
+
+        const entry = { partition: this.id };
+        const header = {};
+        const iterator = forwards
+            ? this.readAll(found.position, header)
+            : this.readAllBackwards(found.position + this.documentWriteSize(found.header.dataSize), header);
+
+        for (const data of iterator) {
+            if (header.sequenceNumber < lo || header.sequenceNumber > hi) {
+                return;
+            }
+            entry.number = header.sequenceNumber;
+            entry.position = header.position;
+            entry.size = header.dataSize;
+            yield { data, header, entry };
+        }
+    }
+
+
 }
 
 export default ReadablePartition;
