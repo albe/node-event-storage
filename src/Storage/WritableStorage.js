@@ -64,6 +64,7 @@ class WritableStorage extends ReadableStorage {
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         this._lockMode = config.lock;
         this.partitioner = config.partitioner;
+        this.partitionIds = {};
     }
 
     /**
@@ -327,7 +328,8 @@ class WritableStorage extends ReadableStorage {
         if (typeof partitionIdentifier === 'string') {
             const partitionShortName = partitionIdentifier;
             const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
-            partitionIdentifier = WritablePartition.idFor(partitionName);
+            partitionIdentifier = this.partitionIds[partitionShortName] ?? WritablePartition.idFor(partitionName);
+            this.partitionIds[partitionShortName] = partitionIdentifier;
             if (!this.partitions.has(partitionIdentifier)) {
                 const partitionConfig = typeof this.partitionConfig.metadata === 'function'
                     ? { ...this.partitionConfig, metadata: this.partitionConfig.metadata(partitionShortName) }
@@ -354,9 +356,8 @@ class WritableStorage extends ReadableStorage {
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
-        if (this.listenerCount('preCommit') > 0) {
-            this.emit('preCommit', document, partition.metadata);
-        }
+        this.emit('preCommit', document, partition.metadata);
+
         const position = partition.write(data, this.length, callback);
 
         assert(position !== false, 'Error writing document.');
