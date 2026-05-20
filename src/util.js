@@ -130,31 +130,43 @@ function* iterate(entries, forwards) {
 }
 
 /**
- * Perform a k-way merge over multiple streams, invoking a callback for each item in sorted order.
- * Each stream object is mutated in place by the `advance` function.
+ * Perform a k-way merge over multiple iterables in sort-key order.
  *
- * @typedef {object} Visited
- * @param {object[]} streams Array of stream state objects; entries are removed when exhausted.
- * @param {function(object): number} getKey Returns the current sort key for a stream state.
- * @param {function(object): boolean} advance Advances the stream to its next item.
- *   Returns true if the stream has more items within range, false if exhausted.
- * @param {function(object): Visited} visit Called for each stream state in merged order and then yielded.
+ * Each iterable is primed by calling `.next()` once at startup. On each merge step the iterable
+ * with the best current value is advanced and its value is yielded (after passing through `visit`).
+ * An iterable is dropped once its iterator reports `done`.
+ *
+ * @param {Iterable[]|Iterator[]} iterables Iterables or bare iterators to merge.
+ * @param {function(*): number} getSortKey Extracts the numeric sort key from an iterable's current value.
  * @param {boolean} [ascending=true] When true, yields items in ascending key order (min-merge).
  *   When false, yields in descending key order (max-merge).
- * @returns {Generator<Visited>}
+ * @param {function(*): *} [visit] Optional extractor for the yielded value. Defaults to identity.
+ * @returns {Generator<*>}
  */
-function *kWayMerge(streams, getKey, advance, visit, ascending = true) {
-    while (streams.length > 0) {
+function *kWayMerge(iterables, getSortKey, ascending = true, visit = v => v) {
+    const states = [];
+    for (const iterable of iterables) {
+        const iterator = typeof iterable[Symbol.iterator] === 'function' ? iterable[Symbol.iterator]() : iterable;
+        const { value, done } = iterator.next();
+        if (!done) {
+            states.push({ iterator, current: value });
+        }
+    }
+
+    while (states.length > 0) {
         let bestIdx = 0;
-        for (let i = 1; i < streams.length; i++) {
+        for (let i = 1; i < states.length; i++) {
             const better = ascending
-                ? getKey(streams[i]) < getKey(streams[bestIdx])
-                : getKey(streams[i]) > getKey(streams[bestIdx]);
+                ? getSortKey(states[i].current) < getSortKey(states[bestIdx].current)
+                : getSortKey(states[i].current) > getSortKey(states[bestIdx].current);
             if (better) bestIdx = i;
         }
-        yield visit(streams[bestIdx]);
-        if (!advance(streams[bestIdx])) {
-            streams.splice(bestIdx, 1);
+        yield visit(states[bestIdx].current);
+        const { value, done } = states[bestIdx].iterator.next();
+        if (done) {
+            states.splice(bestIdx, 1);
+        } else {
+            states[bestIdx].current = value;
         }
     }
 }

@@ -348,8 +348,8 @@ class ReadableStorage extends events.EventEmitter {
      */
     *iterateRange(from, until, index, raw = false) {
         if (index === false) {
-            for (const entry of this.iterateDocumentsNoIndex(from - 1, until - 1)) {
-                yield entry.document;
+            for (const { document } of this.iterateDocumentsNoIndex(from - 1, until - 1)) {
+                yield document;
             }
             return;
         }
@@ -431,74 +431,50 @@ class ReadableStorage extends events.EventEmitter {
         }
     }
 
-    /**
-     * Build the standard document result entry from a merge stream state.
-     * @private
-     */
-    buildDocumentEntry(stream) {
-        return {
-            document: this.serializer.deserialize(stream.data.toString('utf8')),
-            partitionName: stream.partitionName,
-            // Replicate the index entry structure here, so iteration can be used easily to reindex
-            number: stream.header.sequenceNumber,
-            position: stream.header.position ?? stream.position,
-            size: stream.header.dataSize,
-            partition: stream.partition,
-        };
-    }
+     /**
+      * Build the standard document result entry from a readRange yield.
+      * @private
+      * @param {{ data: Buffer, entry: { number: number, position: number, size: number, partition: number } }} [readItem]
+      */
+     buildDocumentEntry(readItem) {
+         return {
+             document: this.serializer.deserialize(readItem.data.toString('utf8')),
+             // Replicate the index entry structure here, so iteration can be used easily to reindex
+             entry: readItem.entry
+         };
+     }
 
-    /**
-     * Iterate documents across all partitions in sequenceNumber order using a k-way merge.
-     * Opens any closed partition automatically.
-     *
-     * @protected
-     * @param {number} [from=0] The 0-based sequenceNumber to start from (inclusive).
-     * @param {number} [until=Number.MAX_SAFE_INTEGER] The 0-based sequenceNumber to read until (inclusive).
-     * @returns {Generator<{document: object, sequenceNumber: number, partitionName: string, position: number, size: number, partition: number}>}
-     */
-    *iterateDocumentsNoIndex(from = 0, until = Number.MAX_SAFE_INTEGER) {
-        const streams = [];
+     /**
+      * Iterate documents across all partitions in sequenceNumber order using a k-way merge.
+      * Opens any closed partition automatically.
+      *
+      * @protected
+      * @param {number} [from=0] The 0-based sequenceNumber to start from (inclusive).
+      * @param {number} [until=Number.MAX_SAFE_INTEGER] The 0-based sequenceNumber to read until (inclusive).
+      * @returns {Generator<{document: object, sequenceNumber: number, position: number, size: number, partition: number}>}
+      */
+     *iterateDocumentsNoIndex(from = 0, until = Number.MAX_SAFE_INTEGER) {
+         const forwards = from <= until;
+         const partitions = [];
+         this.forEachPartition(partition => {
+             partition.open();
+             partitions.push(partition.readRange(from, until));
+         });
 
-        const forwards = from <= until;
-        const lo = Math.min(from, until);
-        const hi = Math.max(from, until);
-        this.forEachPartition(partition => {
-            partition.open();
-            const found = partition.findDocument(forwards ? lo : hi, forwards);
-            if (!found || found.header.sequenceNumber < lo  || found.header.sequenceNumber > hi) {
-                return;
-            }
-
-            // Keep the located upper-bound document as current stream item and continue before it.
-            found.header.position = found.position;
-            const reader = forwards ?
-                partition.readAll(found.position + partition.documentWriteSize(found.header.dataSize), found.header)
-                : partition.readAllBackwards(found.position, found.header);
-            streams.push({ ...found, reader, partition: partition.id, partitionName: partition.name });
-        });
-
-        yield* kWayMerge(
-            streams,
-            stream => stream.header.sequenceNumber,
-            stream => {
-                const next = stream.reader.next();
-                if (!next.done && stream.header.sequenceNumber >= lo && stream.header.sequenceNumber <= hi) {
-                    stream.data = next.value;
-                    return true;
-                }
-                return false;
-            },
-            stream => this.buildDocumentEntry(stream),
-            forwards
-        );
-    }
+         yield* kWayMerge(
+             partitions,
+             item => item.entry.number,
+             forwards,
+             item => this.buildDocumentEntry(item)
+         );
+     }
 
     /**
      * Helper method to iterate over all documents, invoking a callback for each one.
      * Pass `noIndex = true` to iterate all partitions directly in sequenceNumber order
      * (useful when the global index is unavailable or corrupted).
      * When `noIndex` is false the second callback argument is the raw index `EntryInterface`.
-     * When `noIndex` is true the second callback argument has `{ partition, position, size, sequenceNumber, partitionName }`.
+     * When `noIndex` is true the second callback argument has `{ partition, position, size, sequenceNumber }`.
      *
      * @protected
      * @param {function(object, object): void} iterationHandler
@@ -511,8 +487,8 @@ class ReadableStorage extends events.EventEmitter {
         }
 
         if (noIndex) {
-            for (const { document, ...entryInfo } of this.iterateDocumentsNoIndex()) {
-                iterationHandler(document, entryInfo);
+            for (const { document, entry } of this.iterateDocumentsNoIndex()) {
+                iterationHandler(document, entry);
             }
             return;
         }
