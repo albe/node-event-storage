@@ -1,6 +1,8 @@
 import stream from 'stream';
 import { assert } from './util.js';
 
+const NDJSON_NEWLINE = Buffer.from('\n');
+
 /**
  * Calculate the actual version number from a possibly relative (negative) version number.
  *
@@ -33,7 +35,7 @@ class EventStream extends stream.Readable {
      * @param {EventStore} eventStore The event store to get the stream from.
      * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
-     * @param {function(object, object): boolean|true|null} [predicate] An optional filter function
+     * @param {(function(object, object): boolean)|true|null} [predicate] An optional filter function
      *   `(payload, metadata) => boolean`. Pass `true` to activate raw-buffer mode: the stream emits
      *   NDJSON Buffers instead of event objects and can be piped directly into an HTTP response.
      *   When `true`, `next()`/`forEach()`/`filter()` must not be used.
@@ -235,8 +237,16 @@ class EventStream extends stream.Readable {
     *[Symbol.iterator]() {
         let next;
         while ((next = this.next()) !== false) {
-            yield next.payload;
+            yield this.raw ? this.toRawBuffer(next) : next.payload;
         }
+    }
+
+    /**
+     * @param {{ buffer: Buffer }} entry
+     * @returns {Buffer}
+     */
+    toRawBuffer(entry) {
+        return Buffer.concat([entry.buffer, NDJSON_NEWLINE]);
     }
 
     /**
@@ -296,7 +306,7 @@ class EventStream extends stream.Readable {
      */
     _read() {
         const next = this.next();
-        this.push(next ? (this.raw ? next : next.payload) : null);
+        this.push(next ? (this.raw ? this.toRawBuffer(next) : next.payload) : null);
     }
 
 }

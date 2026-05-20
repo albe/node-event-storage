@@ -26,7 +26,7 @@ class JoinEventStream extends EventStream {
      * @param {EventStore} eventStore The event store to get the stream from.
      * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {function(object, object): boolean|true|null} [predicate] An optional filter function, or
+     * @param {(function(object, object): boolean)|true|null} [predicate] An optional filter function, or
      *   `true` to activate raw-buffer mode (see {@link EventStream}).
      */
     constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {

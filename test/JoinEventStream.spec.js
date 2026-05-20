@@ -141,4 +141,20 @@ describe('JoinEventStream', function() {
 
     });
 
+    describe('raw mode', function() {
+
+        it('yields newline-delimited JSON buffers when predicate is true', function() {
+            const rawStream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 1, -1, true);
+            const chunks = [...rawStream];
+
+            expect(chunks.length).to.be(3);
+            chunks.forEach((chunk) => {
+                expect(Buffer.isBuffer(chunk)).to.be(true);
+                expect(chunk.at(-1)).to.be(0x0A);
+                expect(() => JSON.parse(chunk.toString('utf8'))).to.not.throwError();
+            });
+        });
+
+    });
+
 });

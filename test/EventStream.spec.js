@@ -1,5 +1,7 @@
 import expect from 'expect.js';
+import fs from 'fs-extra';
 import EventStream from '../src/EventStream.js';
+import EventStore from '../src/EventStore.js';
 
 describe('EventStream', function() {
 
@@ -140,6 +142,40 @@ describe('EventStream', function() {
                 expect(event).to.be(events[i++]);
                 expect(metadata).to.eql({ occuredAt: 12345 });
                 expect(stream).to.be('foo');
+            });
+        });
+
+    });
+
+    describe('raw mode', function() {
+
+        let rawStore;
+
+        before(function(done) {
+            fs.emptyDirSync('test/data/eventstream-raw');
+            rawStore = new EventStore({
+                storageDirectory: 'test/data/eventstream-raw'
+            });
+
+            rawStore.commit('foo', { type: 'created', value: 1 }, () => {
+                rawStore.commit('foo', { type: 'updated', value: 2 }, () => done());
+            });
+        });
+
+        after(function() {
+            rawStore.close();
+            rawStore = null;
+        });
+
+        it('yields newline-delimited JSON buffers when predicate is true', function() {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, true);
+            const chunks = [...rawStream];
+
+            expect(chunks.length).to.be(2);
+            chunks.forEach((chunk) => {
+                expect(Buffer.isBuffer(chunk)).to.be(true);
+                expect(chunk.at(-1)).to.be(0x0A);
+                expect(() => JSON.parse(chunk.toString('utf8'))).to.not.throwError();
             });
         });
 
