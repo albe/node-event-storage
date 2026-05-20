@@ -503,6 +503,28 @@ describe('Partition', function() {
             expect(read.toString('utf8')).to.be(blob);
         });
 
+        it('reads reverse point-lookups with backwardsHint and explicit size across buffer boundaries', function() {
+            partition = new Partition('.part', { dataDirectory, readBufferSize: 128 });
+            partition.open();
+
+            const payload = 'x'.repeat(24);
+            const size = Buffer.byteLength(payload, 'utf8');
+            const positions = [];
+            for (let i = 0; i < 200; i++) {
+                positions.push(partition.write(payload, i));
+            }
+            partition.flush();
+            partition.close();
+            partition.open();
+
+            for (let i = positions.length - 1; i >= 0; i--) {
+                const header = {};
+                const data = partition.readFrom(positions[i], size, header, true);
+                expect(data.toString('utf8')).to.be(payload);
+                expect(header.sequenceNumber).to.be(i);
+            }
+        });
+
     });
 
     describe('truncate', function() {
