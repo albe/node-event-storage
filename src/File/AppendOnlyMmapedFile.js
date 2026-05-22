@@ -231,8 +231,6 @@ class WritableAppendOnlyMmapedFile extends ReadableAppendOnlyMmapedFile {
         fs.ftruncateSync(this.fd, nextMappedSize);
         this.map(nextMappedSize);
         this.fileSize = requiredFileSize;
-        this.writeFileSizeMarker();
-        this.hasPendingData = true;
         return true;
     }
 
