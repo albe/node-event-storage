@@ -1,5 +1,6 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
+import fsNative from 'fs';
 import Storage from '../src/Storage.js';
 import Consumer from '../src/Consumer.js';
 import { fileURLToPath } from 'url';
@@ -49,6 +50,29 @@ describe('Consumer', function() {
         fs.writeFileSync(consumer.fileName + '.1', 'failed write!');
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         expect(fs.existsSync(consumer.fileName + '.1')).to.be(false);
+    });
+
+    it('rethrows cleanup unlink errors other than ENOENT', function() {
+        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer.stop();
+        const failedWriteFile = consumer.fileName + '.1';
+        fs.writeFileSync(failedWriteFile, 'failed write!');
+
+        const originalUnlinkSync = fsNative.unlinkSync;
+        fsNative.unlinkSync = () => {
+            const error = new Error('permission denied');
+            error.code = 'EACCES';
+            throw error;
+        };
+
+        try {
+            expect(() => consumer.cleanUpFailedWrites()).to.throwError(/permission denied/);
+        } finally {
+            fsNative.unlinkSync = originalUnlinkSync;
+            if (fs.existsSync(failedWriteFile)) {
+                fs.unlinkSync(failedWriteFile);
+            }
+        }
     });
 
     it('emits event when catching up', function(done){
@@ -246,6 +270,27 @@ describe('Consumer', function() {
         });
     });
 
+    it('ignores index-add notifications with non-sequential positions', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer.once('caught-up', () => {
+            const initialPosition = consumer.position;
+            let received = false;
+
+            consumer.once('data', () => {
+                received = true;
+            });
+
+            storage.emit('index-add', 'foobar', initialPosition + 2, { type: 'Foobar', id: 999 });
+
+            setTimeout(() => {
+                expect(received).to.be(false);
+                expect(consumer.position).to.be(initialPosition);
+                done();
+            }, 10);
+        });
+        consumer.start();
+    });
+
     it('starting manually is no-op after registering data listener', function(done){
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         let expected = 0;
@@ -279,6 +324,47 @@ describe('Consumer', function() {
         });
 
         storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('ignores concurrent persist calls while one write is scheduled', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.position = 1;
+        consumer.state = Object.freeze({ foo: 1 });
+
+        let persistedCount = 0;
+        consumer.on('persisted', () => {
+            persistedCount++;
+        });
+
+        consumer.persist();
+        consumer.persist();
+
+        setTimeout(() => {
+            expect(persistedCount).to.be(1);
+            done();
+        }, 15);
+    });
+
+    it('swallows persistence write errors and removes temp files', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.position = 1;
+        consumer.state = Object.freeze({ foo: 1 });
+
+        const tmpFile = consumer.fileName + '.1';
+        const originalWriteFileSync = fsNative.writeFileSync;
+        fsNative.writeFileSync = () => {
+            const error = new Error('disk full');
+            error.code = 'ENOSPC';
+            throw error;
+        };
+
+        consumer.persist();
+
+        setTimeout(() => {
+            fsNative.writeFileSync = originalWriteFileSync;
+            expect(fs.existsSync(tmpFile)).to.be(false);
+            done();
+        }, 15);
     });
 
     it('restores state after reopening', function(done) {

@@ -168,7 +168,7 @@ describe('EventStream', function() {
         });
 
         it('yields newline-delimited JSON buffers when predicate is true', function() {
-            const rawStream = new EventStream('foo', rawStore, 1, -1, true);
+            const rawStream = new EventStream('foo', rawStore, 1, -1, null, true);
             const chunks = [...rawStream];
 
             expect(chunks.length).to.be(2);
@@ -177,6 +177,36 @@ describe('EventStream', function() {
                 expect(chunk.at(-1)).to.be(0x0A);
                 expect(() => JSON.parse(chunk.toString('utf8'))).to.not.throwError();
             });
+        });
+
+        it('supports object matchers in raw mode', function() {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, { payload: { type: 'updated' } }, true);
+            const chunks = [...rawStream];
+
+            expect(chunks.length).to.be(1);
+            const parsed = JSON.parse(chunks[0].toString('utf8'));
+            expect(parsed.payload.type).to.be('updated');
+        });
+
+        it('passes raw document buffers to function matchers in raw mode', function() {
+            let calledWithBuffer = false;
+            const rawStream = new EventStream('foo', rawStore, 1, -1, (buffer) => {
+                calledWithBuffer = Buffer.isBuffer(buffer);
+                return buffer.includes(Buffer.from('"updated"', 'utf8'));
+            }, true);
+            const chunks = [...rawStream];
+
+            expect(calledWithBuffer).to.be(true);
+            expect(chunks.length).to.be(1);
+        });
+
+        it('builds the raw object matcher lazily on first consumption', function() {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, { payload: { type: 'created' } }, true);
+            expect(rawStream.rawMatcher).to.be(null);
+
+            rawStream.next();
+
+            expect(typeof rawStream.rawMatcher).to.be('function');
         });
 
     });

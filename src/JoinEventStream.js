@@ -27,11 +27,11 @@ class JoinEventStream extends EventStream {
      * @param {EventStore} eventStore The event store to get the stream from.
      * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {(function(object, object): boolean)|true|null} [predicate] An optional filter function, or
-     *   `true` to activate raw-buffer mode (see {@link EventStream}).
+     * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
+     * @param {boolean} [raw=false] If true, emit NDJSON Buffers.
      */
-    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {
-        super(name, eventStore, minRevision, maxRevision, predicate);
+    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        super(name, eventStore, minRevision, maxRevision, predicate, raw);
         if (!(streams instanceof Array) || streams.length === 0) {
             throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
         }
@@ -93,7 +93,7 @@ class JoinEventStream extends EventStream {
             }
             const next = step.value;
 
-            if (this.raw || !this.predicate || this.predicate(next.payload, next.metadata)) {
+            if (this.matchesPredicate(next)) {
                 return next;
             }
         }

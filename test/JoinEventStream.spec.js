@@ -144,7 +144,7 @@ describe('JoinEventStream', function() {
     describe('raw mode', function() {
 
         it('yields newline-delimited JSON buffers when predicate is true', function() {
-            const rawStream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 1, -1, true);
+            const rawStream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 1, -1, null, true);
             const chunks = [...rawStream];
 
             expect(chunks.length).to.be(3);
@@ -153,6 +153,29 @@ describe('JoinEventStream', function() {
                 expect(chunk.at(-1)).to.be(0x0A);
                 expect(() => JSON.parse(chunk.toString('utf8'))).to.not.throwError();
             });
+        });
+
+        it('supports object matchers in raw mode', function() {
+            const rawStream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 1, -1, {
+                payload: { type: 'bar' }
+            }, true);
+            const chunks = [...rawStream];
+
+            expect(chunks.length).to.be(1);
+            const parsed = JSON.parse(chunks[0].toString('utf8'));
+            expect(parsed.payload.type).to.be('bar');
+        });
+
+        it('passes raw document buffers to function matchers in raw mode', function() {
+            let calledWithBuffer = false;
+            const rawStream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 1, -1, (buffer) => {
+                calledWithBuffer = Buffer.isBuffer(buffer);
+                return buffer.includes(Buffer.from('"baz"', 'utf8'));
+            }, true);
+            const chunks = [...rawStream];
+
+            expect(calledWithBuffer).to.be(true);
+            expect(chunks.length).to.be(1);
         });
 
     });
