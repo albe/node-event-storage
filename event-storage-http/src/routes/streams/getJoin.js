@@ -1,6 +1,6 @@
 import { HttpError } from '../../http/errors.js';
 import { writeNdjson } from '../../http/ndjson.js';
-import { applyMatcher, buildReadWindow, getQueryValues, parseMatcher, parseReadOptions, parseStreamName } from '../../http/routeUtils.js';
+import { buildReadWindow, getQueryValues, parseMatcher, parseReadOptions, parseStreamName } from '../../http/routeUtils.js';
 
 function registerGetJoinRoute(app, eventStore) {
     app.get(/^\/streams\/join(?:\/(.*))?$/, (request, response) => {
@@ -13,10 +13,7 @@ function registerGetJoinRoute(app, eventStore) {
 
         const options = parseReadOptions(rawOptions);
         const { from, until } = buildReadWindow(eventStore.length, options);
-        const stream = applyMatcher(
-            eventStore.fromStreams(`join:${streamNames.join(',')}`, streamNames, from, until),
-            filter
-        );
+        const stream = eventStore.fromStreams(`join:${streamNames.join(',')}`, streamNames, from, until, filter, true);
         writeNdjson(response, stream, {
             'x-event-store-streams': streamNames.join(',')
         });

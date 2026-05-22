@@ -241,11 +241,6 @@ function splitConsumerStreamPath(rawPath) {
     return { resourceName, from };
 }
 
-function applyMatcher(eventStream, matcher) {
-    const predicate = createPayloadMetadataPredicate(matcher);
-    return predicate ? eventStream.filter(predicate) : eventStream;
-}
-
 function commitAsync(eventStore, streamName, events, expectedVersion, metadata) {
     return new Promise((resolve, reject) => {
         try {
@@ -304,7 +299,6 @@ function buildConsumerName(stream, identifier) {
 }
 
 export {
-    applyMatcher,
     buildReadWindow,
     buildConsumerName,
     commitAsync,
