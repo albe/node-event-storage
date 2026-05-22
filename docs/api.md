@@ -77,30 +77,33 @@ Return the current version (event count) of a stream, or `-1` if the stream does
 
 ---
 
-#### `getEventStream(streamName, [minRevision], [maxRevision])` ✅ Stable
+#### `getEventStream(streamName, [minRevision], [maxRevision], [predicate], [raw])` ✅ Stable
 
 ```javascript
-eventstore.getEventStream(streamName [, minRevision [, maxRevision]]) → EventStream | false
+eventstore.getEventStream(streamName [, minRevision [, maxRevision [, predicate [, raw]]]]) → EventStream | false
 ```
 
-Return an `EventStream` for the named stream, or `false` if no such stream exists.  `minRevision` and `maxRevision` are 1-based and inclusive; negative values count from the end.
+Return an `EventStream` for the named stream, or `false` if no such stream exists. `minRevision` and `maxRevision` are 1-based and inclusive; negative values count from the end.
+
+- `predicate` supports function and object matchers.
+- `raw=true` returns newline-delimited JSON `Buffer` chunks (NDJSON) for direct network streaming.
 
 ---
 
-#### `getAllEvents([minRevision], [maxRevision])` ✅ Stable
+#### `getAllEvents([minRevision], [maxRevision], [predicate], [raw])` ✅ Stable
 
 ```javascript
-eventstore.getAllEvents([minRevision [, maxRevision]]) → EventStream
+eventstore.getAllEvents([minRevision [, maxRevision [, predicate [, raw]]]]) → EventStream
 ```
 
 Return an `EventStream` covering every event in the store across all streams.  Equivalent to `getEventStream('_all', ...)`.
 
 ---
 
-#### `getEventStreamForCategory(categoryName, [minRevision], [maxRevision])` ✅ Stable
+#### `getEventStreamForCategory(categoryName, [minRevision], [maxRevision], [predicate], [raw])` ✅ Stable
 
 ```javascript
-eventstore.getEventStreamForCategory(categoryName [, minRevision [, maxRevision]]) → EventStream
+eventstore.getEventStreamForCategory(categoryName [, minRevision [, maxRevision [, predicate [, raw]]]]) → EventStream
 ```
 
 Return a joined `EventStream` for all streams whose names begin with
@@ -211,10 +214,10 @@ Remove a previously registered listener.
 
 ---
 
-#### `fromStreams(streamName, streamNames, [minRevision], [maxRevision])`
+#### `fromStreams(streamName, streamNames, [minRevision], [maxRevision], [predicate], [raw])`
 
 ```javascript
-eventstore.fromStreams(streamName, streamNames [, minRevision [, maxRevision]]) → EventStream
+eventstore.fromStreams(streamName, streamNames [, minRevision [, maxRevision [, predicate [, raw]]]]) → EventStream
 ```
 
 Create a virtual `EventStream` by joining the listed streams in sequence-number order.
@@ -291,12 +294,12 @@ Asynchronously scan all consumer state files and return their identifiers.
 import { EventStream } from 'event-storage';
 ```
 
-`EventStream` extends Node's `stream.Readable` (in `objectMode`).
+`EventStream` extends Node's `stream.Readable`.
 
 ### Constructor
 
 ```javascript
-new EventStream(name, eventStore, [minRevision], [maxRevision])
+new EventStream(name, eventStore, [minRevision], [maxRevision], [predicate], [raw])
 ```
 
 | Parameter | Type | Default | Description |
@@ -305,6 +308,8 @@ new EventStream(name, eventStore, [minRevision], [maxRevision])
 | `eventStore` | `EventStore` | — | The owning `EventStore`. |
 | `minRevision` | `number` | `1` | First event revision to include (1-based, inclusive). Negative values count from the end. |
 | `maxRevision` | `number` | `-1` | Last event revision to include (inclusive). `-1` means the last event. |
+| `predicate` | `function\|object\|null` | `null` | Optional matcher. In object mode functions receive `(payload, metadata)`. In raw mode functions receive `(buffer)`. |
+| `raw` | `boolean` | `false` | Emit NDJSON `Buffer` chunks instead of payload objects. |
 
 In practice, `EventStream` instances are obtained from `EventStore` methods rather than constructed directly.
 
@@ -489,6 +494,28 @@ stream.next() → { payload, metadata, stream } | false
 ```
 
 Return the next event object from the iterator, or `false` when the stream is exhausted.
+
+---
+
+### Raw Streaming (NDJSON)
+
+Use raw mode when you want to stream events directly over sockets/HTTP without deserializing and re-serializing every event in userland.
+
+```javascript
+const stream = eventstore.getEventStream('orders', 1, -1, { payload: { type: 'OrderPlaced' } }, true);
+stream.pipe(httpResponse);
+```
+
+Matcher behavior differs by mode:
+
+- **Object mode (`raw=false`)**
+  - Function matcher: `(payload, metadata) => boolean`
+  - Object matcher: evaluated against `{ stream, payload, metadata }`
+- **Raw mode (`raw=true`)**
+  - Function matcher: `(buffer) => boolean` where `buffer` is one compact JSON document
+  - Object matcher: byte-level raw matcher over compact JSON bytes (lazy-built at first stream consumption)
+
+The raw object matcher requires the default compact JSON serializer format. If you use a custom serializer (including pretty-printed or transformed JSON), object matchers in raw mode are not guaranteed to work; use a function matcher in that case.
 
 ---
 
