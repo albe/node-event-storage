@@ -51,10 +51,10 @@ function registerPutConsumerRoute(app, eventStore, consumerRegistry) {
 
         // Stop and remove any previously registered consumer for this name so the
         // new handler and fresh position take effect cleanly.
-        const existing = consumerRegistry.get(consumerName);
+        const existing = consumerRegistry.get(identifier);
         if (existing) {
-            existing.stop();
-            consumerRegistry.delete(consumerName);
+            existing.consumer.stop();
+            consumerRegistry.delete(identifier);
         }
 
         const exists = (await scanConsumersAsync(eventStore)).includes(consumerName);
@@ -80,12 +80,12 @@ function registerPutConsumerRoute(app, eventStore, consumerRegistry) {
         consumer.on('error', (err) => {
             console.error('[EventStoreHttpApi] Consumer "%s" error:', consumerName, err);
             consumer.stop();
-            consumerRegistry.delete(consumerName);
+            consumerRegistry.delete(identifier);
         });
 
         // Keep the consumer running in memory so it stays up-to-date.
         consumer.start();
-        consumerRegistry.set(consumerName, consumer);
+        consumerRegistry.set(identifier, { consumer, name: consumerName, stream });
 
         sendJson(response, exists ? 200 : 201, {
             identifier,

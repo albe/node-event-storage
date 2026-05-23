@@ -151,6 +151,7 @@ class Consumer extends stream.Readable {
         if (this.doPersist) {
             this.persist();
         }
+        this.emit('progress', this.position, this.state);
     }
 
     /**
@@ -244,6 +245,7 @@ class Consumer extends stream.Readable {
                 const maxBatchPosition = Math.min(this.position + MAX_CATCHUP_BATCH + 1, this.index.length);
                 const documents = this.storage.readRange(this.position + 1, maxBatchPosition, this.index);
                 this.consumeDocuments(documents);
+                this.emit('progress', this.position, this.state);
                 this.once('persisted', () => catchUpBatch());
                 this.persist();
             });

@@ -1,5 +1,5 @@
 import { HttpError, sendJson } from '../../http/errors.js';
-import { buildConsumerName, consumerNameToStream, parseConsumerIdentifier, parsePositiveInteger, scanConsumersAsync } from '../../http/routeUtils.js';
+import { parseConsumerIdentifier, parsePositiveInteger } from '../../http/routeUtils.js';
 
 /**
  * Register the long-poll consumer endpoint.
@@ -15,36 +15,17 @@ function registerGetConsumerUntilRoute(app, eventStore, consumerRegistry, timeou
         const identifier = parseConsumerIdentifier(request.params.identifier);
         const minVersion = parsePositiveInteger(request.params.minVersion, 'minVersion');
 
-        const consumers = await scanConsumersAsync(eventStore);
-        const matchesByIdentifier = consumers.filter(name => name.endsWith(`.${identifier}`));
-        if (matchesByIdentifier.length === 0) {
-            throw new HttpError(404, `Consumer "${identifier}" does not exist.`);
-        }
-        if (matchesByIdentifier.length > 1) {
-            throw new HttpError(409, `Consumer identifier "${identifier}" is ambiguous.`, matchesByIdentifier);
+        const entry = consumerRegistry.get(identifier);
+        if (!entry) {
+            throw new HttpError(404, `Consumer "${identifier}" is not running. Start it via PUT before polling.`);
         }
 
-        const consumerInfo = consumerNameToStream(matchesByIdentifier[0]);
-        const consumerName = buildConsumerName(consumerInfo.stream, consumerInfo.identifier);
-        const runningConsumer = consumerRegistry.get(consumerName);
+        const { consumer, name, stream } = entry;
 
-        // Read position from a fresh consumer object so we don't need the registry.
-        const consumerForPosition = eventStore.getConsumer(consumerInfo.stream, consumerInfo.identifier);
-        if (consumerForPosition.position >= minVersion) {
-            return sendJson(response, 200, {
-                name: consumerInfo.name,
-                identifier: consumerInfo.identifier,
-                stream: consumerInfo.stream,
-                position: consumerForPosition.position,
-                state: consumerForPosition.state
-            });
+        if (consumer.position >= minVersion) {
+            return sendJson(response, 200, { name, identifier, stream, position: consumer.position, state: consumer.state });
         }
 
-        if (!runningConsumer) {
-            throw new HttpError(409, `Consumer "${identifier}" is not running. Start it via PUT before polling.`);
-        }
-
-        // Long-poll: wait for the consumer to advance to minVersion.
         await new Promise((resolve, reject) => {
             let settled = false;
 
@@ -53,20 +34,12 @@ function registerGetConsumerUntilRoute(app, eventStore, consumerRegistry, timeou
                 reject(new HttpError(408, `Consumer "${identifier}" did not reach version ${minVersion} within ${timeoutMs}ms.`));
             }, timeoutMs);
 
-            function checkPosition() {
-                if (settled) {
+            function onProgress(position) {
+                if (settled || position < minVersion) {
                     return;
                 }
-                if (runningConsumer.position >= minVersion) {
-                    cleanup();
-                    resolve();
-                }
-            }
-
-            function onData() {
-                // Position is updated synchronously AFTER push() returns, so defer the
-                // check to the next iteration of the event loop to read the new value.
-                setImmediate(checkPosition);
+                cleanup();
+                resolve();
             }
 
             function onError(err) {
@@ -80,25 +53,22 @@ function registerGetConsumerUntilRoute(app, eventStore, consumerRegistry, timeou
                 }
                 settled = true;
                 clearTimeout(timer);
-                runningConsumer.removeListener('data', onData);
-                runningConsumer.removeListener('error', onError);
+                consumer.removeListener('progress', onProgress);
+                consumer.removeListener('error', onError);
             }
 
-            runningConsumer.on('data', onData);
-            runningConsumer.once('error', onError);
+            consumer.on('progress', onProgress);
+            consumer.once('error', onError);
 
             // Re-check after registering the listener to avoid a race where the
             // consumer advanced between the initial check and the listener setup.
-            checkPosition();
+            if (consumer.position >= minVersion) {
+                cleanup();
+                resolve();
+            }
         });
 
-        sendJson(response, 200, {
-            name: consumerInfo.name,
-            identifier: consumerInfo.identifier,
-            stream: consumerInfo.stream,
-            position: runningConsumer.position,
-            state: runningConsumer.state
-        });
+        sendJson(response, 200, { name, identifier, stream, position: consumer.position, state: consumer.state });
     });
 }
 
