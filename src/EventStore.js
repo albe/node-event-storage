@@ -8,7 +8,7 @@ import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert, getPropertyAtPath } from './util.js';
 import { ensureDirectory, scanForFiles } from './fsUtil.js';
-import { buildTypeMatcherFn, matches } from './metadataUtil.js';
+import { buildTypeMatcherFn } from './metadataUtil.js';
 
 const ExpectedVersion = {
     Any: -1,
@@ -38,12 +38,14 @@ class OptimisticConcurrencyError extends Error {}
 class CommitCondition {
     /**
      * @param {string[]} types
-     * @param {function(object, object): boolean|null} [matcher]
+     * @param {function(object, object): boolean|object|null} [matcher]
      * @param {number}   noneMatchAfter
+     * @param {boolean}  [raw=false]
      */
-    constructor(types, matcher = null, noneMatchAfter) {
+    constructor(types, matcher = null, noneMatchAfter, raw = false) {
         this.types = types;
         this.matcher = matcher;
+        this.raw = raw;
         this.noneMatchAfter = noneMatchAfter;
     }
 }
@@ -379,19 +381,20 @@ class EventStore extends events.EventEmitter {
         if (existingTypes.length === 0) return;
 
         // Only events after condition.noneMatchAfter can be conflicts.
+        // Pass the original matcher and raw flag so the stream filters at the source.
         const stream = this.fromStreams(
             '_check_' + condition.types.join('_'),
             existingTypes,
-            condition.noneMatchAfter + 1
+            condition.noneMatchAfter + 1,
+            -1,
+            condition.matcher,
+            condition.raw
         );
 
-        let next;
-        while ((next = stream.next()) !== false) {
-            if (!condition.matcher || condition.matcher(next.payload, next.metadata)) {
-                throw new OptimisticConcurrencyError(
-                    `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
-                );
-            }
+        if (stream.next() !== false) {
+            throw new OptimisticConcurrencyError(
+                `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
+            );
         }
     }
 
@@ -553,28 +556,9 @@ class EventStore extends events.EventEmitter {
             queryTypes.push(type);
         }
 
-        const conditionMatcher = this.buildConditionMatcher(matcher, raw);
-        const condition = new CommitCondition(types, conditionMatcher, this.storage.length);
+        const condition = new CommitCondition(types, matcher, this.storage.length, raw);
         const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher, raw);
         return { stream, condition };
-    }
-
-    buildConditionMatcher(matcher, raw = false) {
-        if (!matcher) {
-            return null;
-        }
-        if (typeof matcher === 'function') {
-            if (raw) {
-                // Raw-mode function matchers receive Buffer objects from the stream and
-                // cannot be re-evaluated reliably during OCC checks against payload/metadata.
-                return null;
-            }
-            return matcher;
-        }
-        if (typeof matcher === 'object' && !Array.isArray(matcher)) {
-            return (payload, metadata) => matches({ payload, metadata }, matcher);
-        }
-        return null;
     }
 
     /**

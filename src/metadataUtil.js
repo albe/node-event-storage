@@ -211,6 +211,14 @@ function matchesNode(buffer, startOffset, node) {
     return true;
 }
 
+/**
+ * Find the position of `pattern` within `buffer` at depth 0 (the top-level object), starting
+ * from `startOffset`.  It scans character-by-character tracking JSON nesting depth and string
+ * quoting.  If `matchPosition` arrives at depth > 0 it means the pattern is inside a nested
+ * object/array, so the scan continues searching for the next candidate at depth 0.  Returns -1
+ * when no such position exists before the end of the buffer or when a closing brace reduces depth
+ * below zero (the top-level object has ended).
+ */
 function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
     /* c8 ignore start */
     // Defensive fallback: public call path precomputes an initial candidate in preCheck.

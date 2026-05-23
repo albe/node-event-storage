@@ -25,7 +25,7 @@ class EventStoreHttpApi {
         this.server = null;
         this.ready = storage?.initialized === true
             ? Promise.resolve()
-            : (storage ? once(storage, 'opened') : once(eventStore, 'ready')).then(() => undefined);
+            : once(eventStore, 'ready').then(() => undefined);
         this.app = this.createApp();
     }
 

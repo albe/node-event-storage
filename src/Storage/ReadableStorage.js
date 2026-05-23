@@ -451,7 +451,7 @@ class ReadableStorage extends events.EventEmitter {
       * @protected
       * @param {number} [from=0] The 0-based sequenceNumber to start from (inclusive).
       * @param {number} [until=Number.MAX_SAFE_INTEGER] The 0-based sequenceNumber to read until (inclusive).
-      * @returns {Generator<{document: object, sequenceNumber: number, position: number, size: number, partition: number}>}
+      * @returns {Generator<{document: object, entry: { sequenceNumber: number, position: number, size: number, partition: number }}>}
       */
      *iterateDocumentsNoIndex(from = 0, until = Number.MAX_SAFE_INTEGER) {
          const forwards = from <= until;

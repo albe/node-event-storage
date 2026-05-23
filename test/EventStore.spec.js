@@ -1874,7 +1874,7 @@ describe('EventStore', function() {
                     );
                     const chunks = [...stream];
                     expect(chunks.length).to.be(1);
-                    expect(typeof condition.matcher).to.be('function');
+                    expect(typeof condition.matcher).to.be('object');
                     const parsed = JSON.parse(chunks[0].toString('utf8'));
                     expect(parsed.payload.orderId).to.be('b');
                     done();
@@ -1882,19 +1882,21 @@ describe('EventStore', function() {
             });
         });
 
-        it('uses null condition matcher for raw-mode function matchers', function(done) {
+        it('stores function matcher and raw flag for raw-mode function matchers', function(done) {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
             eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 'a' }], () => {
                 eventstore.commit('order-2', [{ type: 'OrderPlaced', orderId: 'b' }], () => {
+                    const matcher = (buffer) => buffer.includes(Buffer.from('"orderId":"b"', 'utf8'));
                     const { stream, condition } = eventstore.query(
                         ['OrderPlaced'],
-                        (buffer) => buffer.includes(Buffer.from('"orderId":"b"', 'utf8')),
+                        matcher,
                         1,
                         true
                     );
                     const chunks = [...stream];
                     expect(chunks.length).to.be(1);
-                    expect(condition.matcher).to.be(null);
+                    expect(condition.matcher).to.be(matcher);
+                    expect(condition.raw).to.be(true);
                     done();
                 });
             });

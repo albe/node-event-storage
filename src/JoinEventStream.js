@@ -80,7 +80,7 @@ class JoinEventStream extends EventStream {
      * In raw mode: returns `{ buffer, time64, sequenceNumber }` from the binary header — no JSON
      * deserialization. In object mode: returns a deserialized `{ stream, payload, metadata }` document
      * produced by the storage layer.
-     * @returns {object|false}
+     * @returns {object|false} The next event, or `false` when the stream is exhausted.
      */
     next() {
         if (!this._iterator) {
