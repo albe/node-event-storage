@@ -308,6 +308,7 @@ export {
     parseCondition,
     parseExpectedVersion,
     parseMatcher,
+    parsePositiveInteger,
     parseReadOptions,
     parseConsumerIdentifier,
     parseRevision,

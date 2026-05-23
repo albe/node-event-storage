@@ -268,3 +268,84 @@ test('PUT /consumers/:identifier/stream/:stream and GET /consumers endpoints exp
         await destroyFixture(fixture);
     }
 });
+
+test('GET /consumers/:identifier/until/:minVersion long-polls until the consumer reaches the requested version', async () => {
+    const fixture = await createFixture();
+    try {
+        await commitAsync(fixture.eventStore, 'orders-1', [{ type: 'OrderPlaced', orderId: '1' }]);
+
+        // Start a consumer at position 1 (one event already committed).
+        await fetch(`${fixture.baseUrl}/consumers/poll-reader/stream/orders-1/from/1`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                state: { count: 0 },
+                handler: '(event, state) => ({ count: state.count + 1 })'
+            })
+        });
+
+        // The consumer is at position 1; asking for version 1 should respond immediately.
+        const immediateResponse = await fetch(`${fixture.baseUrl}/consumers/poll-reader/until/1`);
+        assert.equal(immediateResponse.status, 200);
+        const immediate = await immediateResponse.json();
+        assert.equal(immediate.identifier, 'poll-reader');
+        assert.equal(immediate.stream, 'orders-1');
+        assert.ok(immediate.position >= 1);
+
+        // Commit a second event while the long-poll is in flight.
+        const pollPromise = fetch(`${fixture.baseUrl}/consumers/poll-reader/until/2`);
+        await commitAsync(fixture.eventStore, 'orders-1', [{ type: 'OrderConfirmed', orderId: '1' }]);
+
+        const pollResponse = await pollPromise;
+        assert.equal(pollResponse.status, 200);
+        const polled = await pollResponse.json();
+        assert.ok(polled.position >= 2);
+        assert.equal(polled.state.count, 1);
+    } finally {
+        await destroyFixture(fixture);
+    }
+});
+
+test('GET /consumers/:identifier/until/:minVersion returns 408 when timeout elapses before version is reached', async () => {
+    const fixture = await createFixture();
+    try {
+        // Create an API instance with a very short timeout so the test doesn't hang.
+        const shortTimeoutApi = new EventStoreHttpApi(fixture.eventStore, { consumerPollTimeoutMs: 100 });
+        const shortTimeoutServer = shortTimeoutApi.createServer();
+        await new Promise(resolve => shortTimeoutServer.listen(0, '127.0.0.1', resolve));
+        const shortAddress = shortTimeoutServer.address();
+        const shortBaseUrl = `http://127.0.0.1:${shortAddress.port}`;
+
+        try {
+            await commitAsync(fixture.eventStore, 'orders-2', [{ type: 'OrderPlaced', orderId: '1' }]);
+            await fetch(`${shortBaseUrl}/consumers/timeout-reader/stream/orders-2/from/1`, {
+                method: 'PUT',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    state: {},
+                    handler: '() => {}'
+                })
+            });
+
+            // Ask for version 99 which will never be reached within 100ms.
+            const timeoutResponse = await fetch(`${shortBaseUrl}/consumers/timeout-reader/until/99`);
+            assert.equal(timeoutResponse.status, 408);
+            const body = await timeoutResponse.json();
+            assert.ok(body.error.includes('did not reach version'));
+        } finally {
+            await new Promise(resolve => shortTimeoutServer.close(resolve));
+        }
+    } finally {
+        await destroyFixture(fixture);
+    }
+});
+
+test('GET /consumers/:identifier/until/:minVersion returns 404 for unknown consumer', async () => {
+    const fixture = await createFixture();
+    try {
+        const response = await fetch(`${fixture.baseUrl}/consumers/no-such-consumer/until/1`);
+        assert.equal(response.status, 404);
+    } finally {
+        await destroyFixture(fixture);
+    }
+});

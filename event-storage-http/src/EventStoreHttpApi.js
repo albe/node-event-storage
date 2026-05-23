@@ -5,6 +5,7 @@ import { HttpError, sendError } from './http/errors.js';
 import { waitForReadyMiddleware } from './http/routeUtils.js';
 import registerGetConsumerRoute from './routes/consumers/getConsumer.js';
 import registerGetConsumersRoute from './routes/consumers/getConsumers.js';
+import registerGetConsumerUntilRoute from './routes/consumers/getConsumerUntil.js';
 import registerPutConsumerRoute from './routes/consumers/putConsumer.js';
 import registerGetQueryRoute from './routes/query/getQuery.js';
 import registerGetCategoryRoute from './routes/streams/getCategory.js';
@@ -38,6 +39,7 @@ class EventStoreHttpApi {
 
         registerGetConsumersRoute(app, this.eventStore);
         registerGetConsumerRoute(app, this.eventStore);
+        registerGetConsumerUntilRoute(app, this.eventStore, this.consumerRegistry, this.options.consumerPollTimeoutMs ?? 10_000);
         registerPutConsumerRoute(app, this.eventStore, this.consumerRegistry);
         registerGetQueryRoute(app, this.eventStore);
         registerGetJoinRoute(app, this.eventStore);
