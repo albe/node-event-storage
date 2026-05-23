@@ -7,6 +7,9 @@ import { buildConsumerName, parseConsumerIdentifier, scanConsumersAsync, splitCo
  * The handler is invoked with `(event, state)` and should return the new state,
  * or `undefined` to leave state unchanged.
  *
+ * WARNING: This uses `new Function()` to compile user-supplied code and must only be
+ * called from a trusted client context. Do not expose this endpoint to untrusted callers.
+ *
  * @param {string} handlerCode Serialized JavaScript function, e.g. `"(event, state) => ({ ...state, count: state.count + 1 })"`.
  * @returns {function} The compiled handler function.
  * @throws {HttpError} 400 if handlerCode is missing, not a string, or not a valid function.
@@ -16,6 +19,7 @@ function compileHandler(handlerCode) {
         throw new HttpError(400, 'Consumer payload must include a "handler" function string.');
     }
     try {
+        // Intentionally compiles user-supplied code. This endpoint requires a trusted caller.
         // eslint-disable-next-line no-new-func
         const fn = new Function('return (' + handlerCode + ')')();
         if (typeof fn !== 'function') {
@@ -73,7 +77,8 @@ function registerPutConsumerRoute(app, eventStore, consumerRegistry) {
             }
         });
 
-        consumer.on('error', () => {
+        consumer.on('error', (err) => {
+            console.error('[EventStoreHttpApi] Consumer "%s" error:', consumerName, err);
             consumer.stop();
             consumerRegistry.delete(consumerName);
         });
