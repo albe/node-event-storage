@@ -53,11 +53,20 @@ function registerGetConsumerUntilRoute(app, eventStore, consumerRegistry, timeou
                 reject(new HttpError(408, `Consumer "${identifier}" did not reach version ${minVersion} within ${timeoutMs}ms.`));
             }, timeoutMs);
 
-            function onData() {
+            function checkPosition() {
+                if (settled) {
+                    return;
+                }
                 if (runningConsumer.position >= minVersion) {
                     cleanup();
                     resolve();
                 }
+            }
+
+            function onData() {
+                // Position is updated synchronously AFTER push() returns, so defer the
+                // check to the next iteration of the event loop to read the new value.
+                setImmediate(checkPosition);
             }
 
             function onError(err) {
@@ -80,7 +89,7 @@ function registerGetConsumerUntilRoute(app, eventStore, consumerRegistry, timeou
 
             // Re-check after registering the listener to avoid a race where the
             // consumer advanced between the initial check and the listener setup.
-            onData();
+            checkPosition();
         });
 
         sendJson(response, 200, {
