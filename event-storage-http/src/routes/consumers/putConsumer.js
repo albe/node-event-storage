@@ -2,16 +2,57 @@ import { once } from 'events';
 import { HttpError, sendJson } from '../../http/errors.js';
 import { buildConsumerName, parseConsumerIdentifier, scanConsumersAsync, splitConsumerStreamPath } from '../../http/routeUtils.js';
 
-function registerPutConsumerRoute(app, eventStore) {
+/**
+ * Compile a serialized handler function string into a callable function.
+ * The handler is invoked with `(event, state)` and should return the new state,
+ * or `undefined` to leave state unchanged.
+ *
+ * @param {string} handlerCode Serialized JavaScript function, e.g. `"(event, state) => ({ ...state, count: state.count + 1 })"`.
+ * @returns {function} The compiled handler function.
+ * @throws {HttpError} 400 if handlerCode is missing, not a string, or not a valid function.
+ */
+function compileHandler(handlerCode) {
+    if (typeof handlerCode !== 'string' || !handlerCode.trim()) {
+        throw new HttpError(400, 'Consumer payload must include a "handler" function string.');
+    }
+    try {
+        // eslint-disable-next-line no-new-func
+        const fn = new Function('return (' + handlerCode + ')')();
+        if (typeof fn !== 'function') {
+            throw new Error('Not a function');
+        }
+        return fn;
+    } catch {
+        throw new HttpError(400, 'handler must be a valid JavaScript function.');
+    }
+}
+
+function registerPutConsumerRoute(app, eventStore, consumerRegistry) {
     app.put(/^\/consumers\/([^/]+)\/stream\/(.+)$/, async (request, response) => {
         const identifier = parseConsumerIdentifier(decodeURIComponent(request.params[0]));
         const { resourceName: stream, from } = splitConsumerStreamPath(request.params[1]);
-        const initialState = request.body === undefined ? {} : request.body;
-        if (!initialState || typeof initialState !== 'object' || Array.isArray(initialState)) {
+
+        const body = request.body;
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
             throw new HttpError(400, 'Consumer payload must be a JSON object.');
         }
 
+        const handlerFn = compileHandler(body.handler);
+        const initialState = body.state ?? {};
+        if (typeof initialState !== 'object' || Array.isArray(initialState) || initialState === null) {
+            throw new HttpError(400, 'Consumer state must be a JSON object.');
+        }
+
         const consumerName = buildConsumerName(stream, identifier);
+
+        // Stop and remove any previously registered consumer for this name so the
+        // new handler and fresh position take effect cleanly.
+        const existing = consumerRegistry.get(consumerName);
+        if (existing) {
+            existing.stop();
+            consumerRegistry.delete(consumerName);
+        }
+
         const exists = (await scanConsumersAsync(eventStore)).includes(consumerName);
         const consumer = eventStore.getConsumer(stream, identifier, initialState, from);
         if (!exists) {
@@ -19,6 +60,28 @@ function registerPutConsumerRoute(app, eventStore) {
             consumer.reset(initialState, from);
             await persisted;
         }
+
+        // Register the compiled handler: called for every event, may update state.
+        consumer.on('data', (event) => {
+            try {
+                const newState = handlerFn(event, consumer.state);
+                if (newState !== undefined) {
+                    consumer.setState(newState);
+                }
+            } catch (err) {
+                consumer.emit('error', err);
+            }
+        });
+
+        consumer.on('error', () => {
+            consumer.stop();
+            consumerRegistry.delete(consumerName);
+        });
+
+        // Keep the consumer running in memory so it stays up-to-date.
+        consumer.start();
+        consumerRegistry.set(consumerName, consumer);
+
         sendJson(response, exists ? 200 : 201, {
             identifier,
             stream,

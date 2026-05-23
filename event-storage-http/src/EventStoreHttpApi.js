@@ -23,6 +23,7 @@ class EventStoreHttpApi {
         this.eventStore = eventStore;
         this.options = options;
         this.server = null;
+        this.consumerRegistry = new Map();
         this.ready = storage?.initialized === true
             ? Promise.resolve()
             : once(eventStore, 'ready').then(() => undefined);
@@ -37,7 +38,7 @@ class EventStoreHttpApi {
 
         registerGetConsumersRoute(app, this.eventStore);
         registerGetConsumerRoute(app, this.eventStore);
-        registerPutConsumerRoute(app, this.eventStore);
+        registerPutConsumerRoute(app, this.eventStore, this.consumerRegistry);
         registerGetQueryRoute(app, this.eventStore);
         registerGetJoinRoute(app, this.eventStore);
         registerGetCategoryRoute(app, this.eventStore);

@@ -229,7 +229,10 @@ test('PUT /consumers/:identifier/stream/:stream and GET /consumers endpoints exp
         const createResponse = await fetch(`${fixture.baseUrl}/consumers/orders-reader/stream/orders-1/from/1`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ lastSeen: null })
+            body: JSON.stringify({
+                state: { lastSeen: null },
+                handler: '(event, state) => ({ lastSeen: event.orderId ?? state.lastSeen })'
+            })
         });
         assert.equal(createResponse.status, 201);
         assert.deepEqual(await createResponse.json(), {
