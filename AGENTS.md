@@ -6,7 +6,7 @@
 2. **Understandable code** — cyclomatic complexity per method should stay around or below current levels. Higher-level methods should delegate to clearly-named helpers so the logic reads like pseudo-code. Use utility functions (e.g. `kWayMerge`, binary search) for generic algorithms.
 3. **Performance** — maintain good performance across all code paths. The Index and Partition layers are most performance-sensitive and may prefer performance over readability at the margin. Elsewhere, prefer simplicity; simpler code is often faster.
 
-**Keep this file up-to-date**: after any code review that surfaces new architectural insights or a new principal rule, compact this file and integrate what was learned.
+**Keep this file up-to-date**: after any code review that surfaces new architectural insights or a new principle, compact this file and integrate what was learned.
 
 ## Architecture
 
