@@ -145,6 +145,16 @@ function buildRawBufferMatcher(matcher = {}) {
     };
 }
 
+/**
+ * Scan the matcher tree top-down, pre-computing each candidate's offset using `Buffer.indexOf`.
+ * Returns false early if any required pattern is entirely absent from the buffer — so the more
+ * expensive per-level depth walk in `matchesNode` is skipped for definite non-matches.
+ *
+ * @param {Buffer} buffer The raw JSON buffer to search.
+ * @param {number} startOffset Byte offset to begin the search from.
+ * @param {object} node A matcher tree node produced by `buildMatcherTree`.
+ * @returns {boolean} False if any required pattern is missing, true otherwise.
+ */
 function preCheck(buffer, startOffset, node) {
     for (const child of node.children) {
         let i = 0;
@@ -163,6 +173,14 @@ function preCheck(buffer, startOffset, node) {
     return true;
 }
 
+/**
+ * Recursively build a matcher tree from a plain object matcher.
+ * Each key in the matcher becomes a child node with either a set of byte patterns to search for
+ * (scalar / array values) or a nested sub-tree (object values).
+ *
+ * @param {object} matcher A plain object whose keys are JSON field names.
+ * @returns {{ children: Array }} A tree node used by `preCheck` and `matchesNode`.
+ */
 function buildMatcherTree(matcher) {
     const node = { children: [] };
 
@@ -188,6 +206,17 @@ function buildMatcherTree(matcher) {
     return node;
 }
 
+/**
+ * Walk a matcher tree node against a buffer, verifying that each required key-value pattern
+ * exists at the correct JSON object depth.  Uses the pre-computed candidate positions from
+ * `preCheck` and delegates to `indexOfSameLevel` to discard matches that are inside nested
+ * objects or arrays.
+ *
+ * @param {Buffer} buffer The raw JSON buffer to search.
+ * @param {number} startOffset Byte offset of the opening `{` + 1 for the current JSON object.
+ * @param {object} node A matcher tree node produced by `buildMatcherTree`.
+ * @returns {boolean} True if all children match at the correct depth, false otherwise.
+ */
 function matchesNode(buffer, startOffset, node) {
     for (const child of node.children) {
         if (child.valuePatterns) {

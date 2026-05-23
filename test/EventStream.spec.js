@@ -209,6 +209,54 @@ describe('EventStream', function() {
             expect(typeof rawStream.rawMatcher).to.be('function');
         });
 
+        it('activates raw mode when predicate argument is true (shorthand)', function() {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, true);
+            expect(rawStream.raw).to.be(true);
+            expect(rawStream.predicate).to.be(null);
+            const chunks = [...rawStream];
+            expect(chunks.length).to.be(2);
+            expect(Buffer.isBuffer(chunks[0])).to.be(true);
+        });
+
+        it('emits Buffer chunks when used as a Readable stream in raw mode', function(done) {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, null, true);
+            const chunks = [];
+            rawStream.on('data', (chunk) => chunks.push(chunk));
+            rawStream.once('end', () => {
+                expect(chunks.length).to.be(2);
+                expect(Buffer.isBuffer(chunks[0])).to.be(true);
+                expect(chunks[0].at(-1)).to.be(0x0A);
+                done();
+            });
+        });
+
+    });
+
+    describe('filter()', function() {
+
+        it('sets a predicate and resets the iterator', function() {
+            const result = stream.filter(payload => payload === 'foo');
+            expect(result).to.be(stream);
+            expect(typeof stream.predicate).to.be('function');
+            expect(stream.events).to.eql(['foo']);
+        });
+
+        it('clears the predicate when called with no argument', function() {
+            stream.filter(payload => payload === 'foo');
+            stream.filter(null);
+            expect(stream.predicate).to.be(null);
+            expect(stream.events).to.eql(events);
+        });
+
+    });
+
+    describe('object matcher (non-raw mode)', function() {
+
+        it('filters events by an object matcher against stream/payload/metadata', function() {
+            const filtered = stream.filter({ payload: 'foo' });
+            expect(filtered.events).to.eql(['foo']);
+        });
+
     });
 
 });

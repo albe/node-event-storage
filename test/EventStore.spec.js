@@ -720,6 +720,18 @@ describe('EventStore', function() {
                 done();
             });
         });
+
+        it('activates raw mode via predicate shorthand (true as 4th arg)', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo-bar', [{ key: 1 }], () => {
+                const stream = eventstore.getEventStream('foo-bar', 1, -1, true);
+                expect(stream.raw).to.be(true);
+                const chunks = [...stream];
+                expect(chunks.length).to.be(1);
+                expect(Buffer.isBuffer(chunks[0])).to.be(true);
+                done();
+            });
+        });
     });
 
     describe('getAllEvents', function() {
@@ -751,6 +763,18 @@ describe('EventStore', function() {
                     expect(parsed.payload.type).to.be('B');
                     done();
                 });
+            });
+        });
+
+        it('activates raw mode via predicate shorthand (true as 3rd arg)', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo', [{ type: 'A' }], () => {
+                const stream = eventstore.getAllEvents(1, -1, true);
+                expect(stream.raw).to.be(true);
+                const chunks = [...stream];
+                expect(chunks.length).to.be(1);
+                expect(Buffer.isBuffer(chunks[0])).to.be(true);
+                done();
             });
         });
 
@@ -833,6 +857,20 @@ describe('EventStore', function() {
                     expect(chunks.length).to.be(1);
                     const parsed = JSON.parse(chunks[0].toString('utf8'));
                     expect(parsed.payload.key).to.be(2);
+                    done();
+                });
+            });
+        });
+
+        it('activates raw mode via predicate shorthand (true as 5th arg)', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo', { key: 1 }, () => {
+                eventstore.commit('bar', { key: 2 }, () => {
+                    const stream = eventstore.fromStreams('joined', ['foo', 'bar'], 1, -1, true);
+                    expect(stream.raw).to.be(true);
+                    const chunks = [...stream];
+                    expect(chunks.length).to.be(2);
+                    expect(Buffer.isBuffer(chunks[0])).to.be(true);
                     done();
                 });
             });
@@ -953,6 +991,17 @@ describe('EventStore', function() {
                 keys.push(event.key);
             }
             expect(keys).to.eql([2, 3]);
+        });
+
+        it('activates raw mode via predicate shorthand (true as 3rd arg)', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('cat-1', [{ key: 1 }]);
+            eventstore.commit('cat-2', [{ key: 2 }]);
+            const stream = eventstore.getEventStreamForCategory('cat', 1, -1, true);
+            expect(stream.raw).to.be(true);
+            const chunks = [...stream];
+            expect(chunks.length).to.be(2);
+            expect(Buffer.isBuffer(chunks[0])).to.be(true);
         });
 
     });
