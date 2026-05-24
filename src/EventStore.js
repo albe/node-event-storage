@@ -218,10 +218,15 @@ class EventStore extends events.EventEmitter {
 
     /**
      * Close the event store and free up all resources.
+     * Stops all registered consumers before closing storage.
      *
      * @api
      */
     close() {
+        for (const consumer of this.consumers.values()) {
+            consumer.stop();
+        }
+        this.consumers.clear();
         this.storage.close();
     }
 

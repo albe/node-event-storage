@@ -1,4 +1,5 @@
 import { once } from 'events';
+import vm from 'vm';
 import { HttpError, sendJson } from '../../http/errors.js';
 import { buildConsumerName, parseConsumerIdentifier, scanConsumersAsync, splitConsumerStreamPath } from '../../http/routeUtils.js';
 
@@ -7,7 +8,10 @@ import { buildConsumerName, parseConsumerIdentifier, scanConsumersAsync, splitCo
  * The handler is invoked with `(event, state)` and should return the new state,
  * or `undefined` to leave state unchanged.
  *
- * WARNING: This uses `new Function()` to compile user-supplied code and must only be
+ * The function is compiled inside a `vm.createContext({})` sandbox so that the
+ * handler body cannot access Node.js globals (`process`, `require`, `global`, etc.).
+ *
+ * WARNING: This uses `vm.runInNewContext()` to compile user-supplied code and must only be
  * called from a trusted client context. Do not expose this endpoint to untrusted callers.
  *
  * @param {string} handlerCode Serialized JavaScript function, e.g. `"(event, state) => ({ ...state, count: state.count + 1 })"`.
@@ -19,9 +23,8 @@ function compileHandler(handlerCode) {
         throw new HttpError(400, 'Consumer payload must include a "handler" function string.');
     }
     try {
-        // Intentionally compiles user-supplied code. This endpoint requires a trusted caller.
-        // eslint-disable-next-line no-new-func
-        const fn = new Function('return (' + handlerCode + ')')();
+        // Run in an empty context so the handler cannot reach process, require, global, etc.
+        const fn = vm.runInNewContext('(' + handlerCode + ')', Object.freeze({}));
         if (typeof fn !== 'function') {
             throw new Error('Not a function');
         }

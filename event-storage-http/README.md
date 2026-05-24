@@ -28,7 +28,7 @@ Query responses also expose a serialized optimistic-concurrency condition in the
 
 `GET /consumers/{identifier}` returns the live position and state of the named consumer from the in-memory registry. Returns `404` if the consumer is not registered.
 
-`GET /consumers/{identifier}/until/{minVersion}` is a long-poll endpoint that blocks until the named consumer's position reaches `minVersion`, then responds with the consumer's current position and state. If the consumer does not advance to `minVersion` within the configured timeout (default 10 s, configurable via `options.consumerPollTimeoutMs`), the server responds with HTTP `408 Request Timeout`. The consumer must be started via `PUT` first.
+`GET /consumers/{identifier}/until/{minVersion}` is a long-poll endpoint that blocks until the named consumer's position reaches `minVersion`, then responds with the consumer's current position and state. If the consumer does not advance to `minVersion` within the configured timeout (default 10 s, configurable via `options.consumerPollTimeoutMs`), the server responds with HTTP `408 Request Timeout`. The consumer must be registered in the event store's consumer registry (via `PUT` or by the startup scan) before calling this endpoint.
 
 ```http
 GET /consumers/orders-reader/until/5
