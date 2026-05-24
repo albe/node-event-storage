@@ -24,6 +24,7 @@ function compileHandler(handlerCode) {
     }
     try {
         // Run in an empty context so the handler cannot reach process, require, global, etc.
+        // CodeQL [js/code-injection] Intentional: executes user-supplied handler in an isolated vm context with no globals. This endpoint requires a trusted caller (documented above).
         const fn = vm.runInNewContext('(' + handlerCode + ')', Object.freeze({}));
         if (typeof fn !== 'function') {
             throw new Error('Not a function');
