@@ -38,7 +38,7 @@ class EventStoreHttpApi {
         app.use((request, response, next) => waitForReadyMiddleware(this.ready, request, response, next));
 
         registerGetConsumersRoute(app, this.eventStore);
-        registerGetConsumerRoute(app, this.eventStore);
+        registerGetConsumerRoute(app, this.eventStore, this.consumerRegistry);
         registerGetConsumerUntilRoute(app, this.eventStore, this.consumerRegistry, this.options.consumerPollTimeoutMs ?? 10_000);
         registerPutConsumerRoute(app, this.eventStore, this.consumerRegistry);
         registerGetQueryRoute(app, this.eventStore);

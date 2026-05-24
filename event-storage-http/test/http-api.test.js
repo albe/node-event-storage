@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { once } from 'events';
 import EventStore from '../../index.js';
 import EventStoreHttpApi from '../src/EventStoreHttpApi.js';
+import HttpEventStream from '../src/HttpEventStream.js';
 
 function commitAsync(eventStore, streamName, events) {
     return new Promise((resolve, reject) => {
@@ -349,3 +350,83 @@ test('GET /consumers/:identifier/until/:minVersion returns 404 for unknown consu
         await destroyFixture(fixture);
     }
 });
+
+test('HttpEventStream parses NDJSON response body and exposes commitCondition header', async () => {
+    const fixture = await createFixture();
+    try {
+        await commitAsync(fixture.eventStore, 'orders-1', [
+            { type: 'OrderPlaced', orderId: '1' },
+            { type: 'OrderConfirmed', orderId: '1' }
+        ]);
+
+        const response = await fetch(`${fixture.baseUrl}/query?types=OrderPlaced,OrderConfirmed`);
+        assert.equal(response.status, 200);
+
+        const stream = new HttpEventStream(response);
+        assert.ok(stream.commitCondition, 'commitCondition should be populated from response header');
+        assert.deepEqual(stream.commitCondition.types, ['OrderPlaced', 'OrderConfirmed']);
+
+        const events = await stream.toArray();
+        assert.equal(events.length, 2);
+        assert.equal(events[0].payload.type, 'OrderPlaced');
+        assert.equal(events[1].payload.type, 'OrderConfirmed');
+    } finally {
+        await destroyFixture(fixture);
+    }
+});
+
+test('HttpEventStream async iteration yields events one by one', async () => {
+    const fixture = await createFixture();
+    try {
+        await commitAsync(fixture.eventStore, 'orders-1', [
+            { type: 'OrderPlaced', orderId: '1' },
+            { type: 'OrderConfirmed', orderId: '1' }
+        ]);
+
+        const response = await fetch(`${fixture.baseUrl}/streams/orders-1`);
+        assert.equal(response.status, 200);
+
+        const stream = new HttpEventStream(response);
+        const collected = [];
+        for await (const event of stream) {
+            collected.push(event);
+        }
+        assert.equal(collected.length, 2);
+        assert.equal(collected[0].payload.type, 'OrderPlaced');
+        assert.equal(collected[1].payload.type, 'OrderConfirmed');
+    } finally {
+        await destroyFixture(fixture);
+    }
+});
+
+test('GET /consumers/:identifier returns running consumer from registry without opening a second instance', async () => {
+    const fixture = await createFixture();
+    try {
+        await commitAsync(fixture.eventStore, 'orders-1', [{ type: 'OrderPlaced', orderId: '1' }]);
+
+        // Start the consumer via PUT so it is in the registry.
+        const putResponse = await fetch(`${fixture.baseUrl}/consumers/reg-reader/stream/orders-1/from/1`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                state: { count: 0 },
+                handler: '(event, state) => ({ count: state.count + 1 })'
+            })
+        });
+        assert.equal(putResponse.status, 201);
+
+        // Let the consumer catch up.
+        await commitAsync(fixture.eventStore, 'orders-1', [{ type: 'OrderConfirmed', orderId: '1' }]);
+        await fetch(`${fixture.baseUrl}/consumers/reg-reader/until/2`);
+
+        // GET should return the registry entry (live position/state).
+        const getResponse = await fetch(`${fixture.baseUrl}/consumers/reg-reader`);
+        assert.equal(getResponse.status, 200);
+        const body = await getResponse.json();
+        assert.equal(body.identifier, 'reg-reader');
+        assert.ok(body.position >= 2, 'should reflect the live position from the registry');
+    } finally {
+        await destroyFixture(fixture);
+    }
+});
+
