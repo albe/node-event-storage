@@ -22,11 +22,13 @@ Query responses also expose a serialized optimistic-concurrency condition in the
 
 `start` and `end` are accepted wherever a revision boundary is expected. Matchers are JSON object matchers using the same shape as the core storage matchers (`{ stream, payload, metadata }`).
 
-### Long-poll consumer endpoint
+### Consumer endpoints
 
-`GET /consumers/{identifier}/until/{minVersion}` is a long-poll endpoint that blocks until the named consumer's position reaches `minVersion`, then responds with the consumer's current position and state. If the consumer does not advance to `minVersion` within the configured timeout (default 10 s, configurable via `options.consumerPollTimeoutMs`), the server responds with HTTP `408 Request Timeout`.
+`PUT /consumers/{identifier}/stream/{stream}[/from/{revision}]` starts a durable consumer that is kept running in memory and registered in the EventStore's internal `consumers` map (keyed by `identifier`). Re-issuing the PUT replaces the existing consumer and restarts from the new handler and state.
 
-The consumer must be started in memory via `PUT /consumers/{identifier}/stream/{stream}` before this endpoint can detect new events; for an already-advanced consumer it responds immediately.
+`GET /consumers/{identifier}` returns the live position and state of the named consumer from the in-memory registry. Returns `404` if the consumer is not registered.
+
+`GET /consumers/{identifier}/until/{minVersion}` is a long-poll endpoint that blocks until the named consumer's position reaches `minVersion`, then responds with the consumer's current position and state. If the consumer does not advance to `minVersion` within the configured timeout (default 10 s, configurable via `options.consumerPollTimeoutMs`), the server responds with HTTP `408 Request Timeout`. The consumer must be started via `PUT` first.
 
 ```http
 GET /consumers/orders-reader/until/5
@@ -34,13 +36,16 @@ GET /consumers/orders-reader/until/5
 
 ```json
 {
-  "name": "stream-orders.orders-reader",
   "identifier": "orders-reader",
   "stream": "orders",
   "position": 5,
   "state": { "count": 5 }
 }
 ```
+
+`GET /consumers` lists all consumers currently registered in memory. It also fires an asynchronous filesystem scan to keep the registry eventually consistent with consumers created outside of this process (using `options.autoStartConsumers` at startup to eagerly pre-load existing consumers).
+
+On startup, `EventStoreHttpApi` calls `eventStore.scanConsumers()` once to pre-populate the consumer registry. Pass `options.autoStartConsumers: true` to open and register all existing consumers on disk at boot time.
 
 Raw-mode matcher notes:
 

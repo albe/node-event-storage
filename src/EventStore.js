@@ -135,6 +135,7 @@ class EventStore extends events.EventEmitter {
                         : new Storage(storeName, storageConfig);
         this.streams = Object.create(null);
         this.streams._all = { index: this.storage.index };
+        this.consumers = new Map();
 
         this.storage.on('index-created', this.registerStream.bind(this));
 
@@ -766,39 +767,82 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Get a durable consumer for the given stream that will keep receiving events from the last position.
+     * Get a durable consumer for the given stream, or look up an existing consumer by identifier.
      *
-     * @param {string} streamName The name of the stream to consume.
-     * @param {string} identifier The unique identifying name of this consumer.
+     * When called with a single argument, returns the running consumer registered under that
+     * identifier, or `null` if none is found — useful for read endpoints that need the live
+     * in-memory instance without creating a new one.
+     *
+     * When called with two or more arguments, creates (or re-uses) a Consumer for the given
+     * stream and identifier, registers it in `this.consumers`, and returns it.
+     *
+     * @param {string} streamNameOrIdentifier The stream name, or the consumer identifier when used as a registry lookup.
+     * @param {string} [identifier] The unique identifying name of this consumer. Omit for registry-only lookup.
      * @param {object} [initialState] The initial state of the consumer.
      * @param {number} [since] The stream revision to start consuming from.
-     * @returns {Consumer} A durable consumer for the given stream.
+     * @returns {Consumer|null} A durable consumer, or `null` when looking up by identifier and none is registered.
      */
-    getConsumer(streamName, identifier, initialState = {}, since = 0) {
+    getConsumer(streamNameOrIdentifier, identifier, initialState = {}, since = 0) {
+        if (identifier === undefined) {
+            return this.consumers.get(streamNameOrIdentifier) ?? null;
+        }
+        const streamName = streamNameOrIdentifier;
+        if (this.consumers.has(identifier)) {
+            return this.consumers.get(identifier);
+        }
         const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
         consumer.streamName = streamName;
+        this.consumers.set(identifier, consumer);
         return consumer;
     }
 
     /**
-     * Scan the existing consumers on this EventStore and asynchronously return a list of their names.
-     * @param {function(error: Error, consumers: array)} callback A callback that will receive an error as first and the list of consumers as second argument.
+     * Scan the existing consumers on this EventStore and asynchronously invoke a callback with the parsed list.
+     *
+     * Each consumer entry provides `{ name, stream, identifier }` parsed from the on-disk filename.
+     * Pass `autoStart = true` to eagerly open every discovered consumer and register it in
+     * `this.consumers` so that it is immediately available for registry lookups.
+     *
+     * @param {function(error: Error|null, consumers: Array<{name: string, stream: string, identifier: string}>)} callback
+     * @param {boolean} [autoStart=false] When true, calls `getConsumer(stream, identifier)` for each discovered consumer.
      */
-    scanConsumers(callback) {
+    scanConsumers(callback, autoStart = false) {
         const consumersPath = path.join(this.storage.indexDirectory, 'consumers');
         if (!fs.existsSync(consumersPath)) {
             callback(null, []);
             return;
         }
         const regex = new RegExp(`^${this.storage.storageFile}\\.([^.]*\\..*)$`);
-        const consumers = [];
-        scanForFiles(consumersPath, regex, consumers.push.bind(consumers), /* istanbul ignore next */ (err) => {
+        const consumerNames = [];
+        scanForFiles(consumersPath, regex, consumerNames.push.bind(consumerNames), /* istanbul ignore next */ (err) => {
             if (err) {
                 return callback(err, []);
+            }
+            const consumers = consumerNames.map(name => {
+                const splitIndex = name.lastIndexOf('.');
+                const indexName = name.slice(0, splitIndex);
+                const identifier = name.slice(splitIndex + 1);
+                const stream = parseStreamFromIndexName(indexName);
+                return { name, stream, identifier };
+            });
+            if (autoStart) {
+                for (const { stream, identifier } of consumers) {
+                    this.getConsumer(stream, identifier);
+                }
             }
             callback(null, consumers);
         });
     }
+}
+
+function parseStreamFromIndexName(indexName) {
+    if (indexName === '_all') {
+        return '_all';
+    }
+    if (indexName.startsWith('stream-')) {
+        return indexName.slice(7);
+    }
+    return indexName;
 }
 
 EventStore.Storage = Storage;

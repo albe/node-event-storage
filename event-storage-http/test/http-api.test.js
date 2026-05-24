@@ -246,7 +246,6 @@ test('PUT /consumers/:identifier/stream/:stream and GET /consumers endpoints exp
         const consumerResponse = await fetch(`${fixture.baseUrl}/consumers/orders-reader`);
         assert.equal(consumerResponse.status, 200);
         assert.deepEqual(await consumerResponse.json(), {
-            name: 'stream-orders-1.orders-reader',
             identifier: 'orders-reader',
             stream: 'orders-1',
             position: 1,
@@ -259,7 +258,6 @@ test('PUT /consumers/:identifier/stream/:stream and GET /consumers endpoints exp
         assert.deepEqual(list, {
             consumers: [
                 {
-                    name: 'stream-orders-1.orders-reader',
                     identifier: 'orders-reader',
                     stream: 'orders-1'
                 }

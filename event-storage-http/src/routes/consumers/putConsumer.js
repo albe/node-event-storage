@@ -31,7 +31,7 @@ function compileHandler(handlerCode) {
     }
 }
 
-function registerPutConsumerRoute(app, eventStore, consumerRegistry) {
+function registerPutConsumerRoute(app, eventStore) {
     app.put(/^\/consumers\/([^/]+)\/stream\/(.+)$/, async (request, response) => {
         const identifier = parseConsumerIdentifier(decodeURIComponent(request.params[0]));
         const { resourceName: stream, from } = splitConsumerStreamPath(request.params[1]);
@@ -49,15 +49,15 @@ function registerPutConsumerRoute(app, eventStore, consumerRegistry) {
 
         const consumerName = buildConsumerName(stream, identifier);
 
-        // Stop and remove any previously registered consumer for this name so the
+        // Stop any previously registered consumer for this identifier so the
         // new handler and fresh position take effect cleanly.
-        const existing = consumerRegistry.get(identifier);
+        const existing = eventStore.consumers.get(identifier);
         if (existing) {
-            existing.consumer.stop();
-            consumerRegistry.delete(identifier);
+            existing.stop();
+            eventStore.consumers.delete(identifier);
         }
 
-        const exists = (await scanConsumersAsync(eventStore)).includes(consumerName);
+        const exists = (await scanConsumersAsync(eventStore)).some(c => c.name === consumerName);
         const consumer = eventStore.getConsumer(stream, identifier, initialState, from);
         if (!exists) {
             const persisted = once(consumer, 'persisted');
@@ -80,12 +80,11 @@ function registerPutConsumerRoute(app, eventStore, consumerRegistry) {
         consumer.on('error', (err) => {
             console.error('[EventStoreHttpApi] Consumer "%s" error:', consumerName, err);
             consumer.stop();
-            consumerRegistry.delete(identifier);
+            eventStore.consumers.delete(identifier);
         });
 
         // Keep the consumer running in memory so it stays up-to-date.
         consumer.start();
-        consumerRegistry.set(identifier, { consumer, name: consumerName, stream });
 
         sendJson(response, exists ? 200 : 201, {
             identifier,

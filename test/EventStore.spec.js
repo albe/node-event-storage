@@ -1407,8 +1407,10 @@ describe('EventStore', function() {
 
             consumer2.on('caught-up', () =>
                 eventstore.scanConsumers((err, consumers) => {
-                    expect(consumers).to.contain('_all.consumer1');
-                    expect(consumers).to.contain('stream-foo-bar.consumer2');
+                    expect(consumers.map(c => c.name)).to.contain('_all.consumer1');
+                    expect(consumers.map(c => c.name)).to.contain('stream-foo-bar.consumer2');
+                    expect(consumers.find(c => c.identifier === 'consumer1')).to.eql({ name: '_all.consumer1', stream: '_all', identifier: 'consumer1' });
+                    expect(consumers.find(c => c.identifier === 'consumer2')).to.eql({ name: 'stream-foo-bar.consumer2', stream: 'foo-bar', identifier: 'consumer2' });
                     done();
                 })
             );

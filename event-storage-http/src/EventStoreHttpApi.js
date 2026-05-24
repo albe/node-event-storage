@@ -24,10 +24,16 @@ class EventStoreHttpApi {
         this.eventStore = eventStore;
         this.options = options;
         this.server = null;
-        this.consumerRegistry = new Map();
         this.ready = storage?.initialized === true
             ? Promise.resolve()
             : once(eventStore, 'ready').then(() => undefined);
+        this.ready.then(() => {
+            eventStore.scanConsumers(/* istanbul ignore next */ (err) => {
+                if (err) {
+                    console.error('[EventStoreHttpApi] Consumer scan error on startup:', err);
+                }
+            }, options.autoStartConsumers ?? false);
+        });
         this.app = this.createApp();
     }
 
@@ -38,9 +44,9 @@ class EventStoreHttpApi {
         app.use((request, response, next) => waitForReadyMiddleware(this.ready, request, response, next));
 
         registerGetConsumersRoute(app, this.eventStore);
-        registerGetConsumerRoute(app, this.eventStore, this.consumerRegistry);
-        registerGetConsumerUntilRoute(app, this.eventStore, this.consumerRegistry, this.options.consumerPollTimeoutMs ?? 10_000);
-        registerPutConsumerRoute(app, this.eventStore, this.consumerRegistry);
+        registerGetConsumerRoute(app, this.eventStore);
+        registerGetConsumerUntilRoute(app, this.eventStore, this.options.consumerPollTimeoutMs ?? 10_000);
+        registerPutConsumerRoute(app, this.eventStore);
         registerGetQueryRoute(app, this.eventStore);
         registerGetJoinRoute(app, this.eventStore);
         registerGetCategoryRoute(app, this.eventStore);
