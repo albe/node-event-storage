@@ -46,6 +46,10 @@
     "src/util.js",
     "src/fsUtil.js",
     "src/metadataUtil.js",
+    "src/AppendOnlyMmapedFile.js",
+    "src/MmapIndex*.js",
+    "src/MmapPartition.js",
+    "src/File/*.js",
     "index.js"
   ],
   "license": "MIT",
@@ -59,6 +63,7 @@
     "node": ">=18.0"
   },
   "dependencies": {
+    "@riaskov/mmap-io": "^1.4.3",
     "mkdirp": "^3.0.1"
   },
   "devDependencies": {

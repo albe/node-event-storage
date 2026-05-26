@@ -2,7 +2,7 @@ import Benchmark from 'benchmark';
 import benchmarks from 'beautify-benchmark';
 import fs from 'fs-extra';
 import Stable from 'event-storage';
-import { Index as LatestIndex } from '../index.js';
+import { Index as LatestIndex, MmapIndex } from '../index.js';
 
 const Suite = new Benchmark.Suite('index');
 Suite.on('start', () => fs.emptyDirSync('data'));
@@ -11,31 +11,79 @@ Suite.on('complete', () => benchmarks.log());
 Suite.on('error', (e) => console.log(e.target.error));
 
 const WRITES = 1000;
-let stableCallCount = 0;
-let latestCallCount = 0;
+const READER_STEPS = [1, 2, 4, 8, 16];
 
-function bench(index) {
-	index.open();
-	for (let i = 1; i<=WRITES; i++) {
-		index.add(new Stable.Index.Entry(i,2,4,8));
-	}
-	index.close();
+function bench({ IndexClass, dataDirectory, id, readers }) {
+	const name = `${id}.index`;
+	const writer = new IndexClass(name, { dataDirectory });
+	const readIndexes = [];
+	const ReaderClass = IndexClass.ReadOnly || IndexClass;
 
-	let number;
-	index.open();
-	for (let entry of index.range(-WRITES + 1)) {
-		number = entry.number;
+	for (let reader = 0; reader < readers; reader++) {
+		const readIndex = new ReaderClass(name, { dataDirectory });
+		if (typeof readIndex.range !== 'function') {
+			readIndexes.push(new IndexClass(name, { dataDirectory }));
+			continue;
+		}
+		readIndexes.push(readIndex);
 	}
-	index.close();
-	if (number < WRITES) throw new Error('Not all entries were written! Last entry was '+number);
+
+	writer.open();
+	for (const index of readIndexes) {
+		index.open();
+	}
+
+	for (let i = 1; i <= WRITES; i++) {
+		writer.add(new IndexClass.Entry(i, 2, 4, 8));
+	}
+	writer.flush();
+
+	for (const index of readIndexes) {
+		index.close();
+		index.open();
+	}
+
+	for (let reader = 0; reader < readIndexes.length; reader++) {
+		const index = readIndexes[reader];
+		const start = Math.floor((reader * WRITES) / readers) + 1;
+		const end = Math.floor(((reader + 1) * WRITES) / readers);
+		const expectedLength = end - start + 1;
+		let number = 0;
+		const entries = index.range(start, end) || [];
+		for (const entry of entries) {
+			number = entry.number;
+		}
+		if (entries.length !== expectedLength || number !== end) {
+			throw new Error(
+				'Split read range failed for reader ' + reader +
+				': expected [' + start + ',' + end + '] but got last=' + number +
+				' length=' + entries.length
+			);
+		}
+	}
+
+	for (const index of readIndexes) {
+		index.close();
+	}
+	writer.close();
 }
 
-Suite.add('index [stable]', function() {
-	bench(new Stable.Index((stableCallCount++) + '.index', { dataDirectory: 'data/stable' }));
-});
+function addBenchmarks(label, IndexClass, dataDirectory) {
+	let callCount = 0;
+	for (const readers of READER_STEPS) {
+		Suite.add(`index [${label}] readers=${readers}`, function() {
+			bench({
+				IndexClass,
+				dataDirectory,
+				id: callCount++,
+				readers
+			});
+		});
+	}
+}
 
-Suite.add('index [latest]', function() {
-	bench(new LatestIndex((latestCallCount++) + '.index', { dataDirectory: 'data/latest' }));
-});
+addBenchmarks('stable', Stable.Index, 'data/stable');
+addBenchmarks('latest', LatestIndex, 'data/latest');
+addBenchmarks('mmap', MmapIndex, 'data/mmap');
 
 Suite.run();

@@ -3,12 +3,15 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "bench": "node bench-index.js && node bench-storage.js && node bench-eventstore.js && node bench-read-scenarios.js"
+    "bench": "node bench-index.js && node bench-storage.js && node bench-eventstore.js && node bench-read-scenarios.js",
+    "bench:storage:forked": "node bench-storage-forked.js"
   },
   "dependencies": {
+    "@riaskov/mmap-io": "^1.4.3",
     "beautify-benchmark": "^0.2.4",
     "benchmark": "^2.1.4",
     "event-storage": "^0.7.2",
-    "fs-extra": "^11.1.1"
+    "fs-extra": "^11.1.1",
+    "mkdirp": "^3.0.1"
   }
 }
