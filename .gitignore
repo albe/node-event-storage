@@ -13,5 +13,5 @@ node_modules
 /site
 /data
 *.tgz
-/ui
+/event-storage-ui
 /event-storage-http
