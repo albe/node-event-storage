@@ -1,5 +1,7 @@
 import expect from 'expect.js';
+import fs from 'fs-extra';
 import EventStream from '../src/EventStream.js';
+import EventStore from '../src/EventStore.js';
 
 describe('EventStream', function() {
 
@@ -141,6 +143,118 @@ describe('EventStream', function() {
                 expect(metadata).to.eql({ occuredAt: 12345 });
                 expect(stream).to.be('foo');
             });
+        });
+
+    });
+
+    describe('raw mode', function() {
+
+        let rawStore;
+
+        before(function(done) {
+            fs.emptyDirSync('test/data/eventstream-raw');
+            rawStore = new EventStore({
+                storageDirectory: 'test/data/eventstream-raw'
+            });
+
+            rawStore.commit('foo', { type: 'created', value: 1 }, () => {
+                rawStore.commit('foo', { type: 'updated', value: 2 }, () => done());
+            });
+        });
+
+        after(function() {
+            rawStore.close();
+            rawStore = null;
+        });
+
+        it('yields newline-delimited JSON buffers when predicate is true', function() {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, null, true);
+            const chunks = [...rawStream];
+
+            expect(chunks.length).to.be(2);
+            chunks.forEach((chunk) => {
+                expect(Buffer.isBuffer(chunk)).to.be(true);
+                expect(chunk.at(-1)).to.be(0x0A);
+                expect(() => JSON.parse(chunk.toString('utf8'))).to.not.throwError();
+            });
+        });
+
+        it('supports object matchers in raw mode', function() {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, { payload: { type: 'updated' } }, true);
+            const chunks = [...rawStream];
+
+            expect(chunks.length).to.be(1);
+            const parsed = JSON.parse(chunks[0].toString('utf8'));
+            expect(parsed.payload.type).to.be('updated');
+        });
+
+        it('passes raw document buffers to function matchers in raw mode', function() {
+            let calledWithBuffer = false;
+            const rawStream = new EventStream('foo', rawStore, 1, -1, (buffer) => {
+                calledWithBuffer = Buffer.isBuffer(buffer);
+                return buffer.includes(Buffer.from('"updated"', 'utf8'));
+            }, true);
+            const chunks = [...rawStream];
+
+            expect(calledWithBuffer).to.be(true);
+            expect(chunks.length).to.be(1);
+        });
+
+        it('builds the raw object matcher lazily on first consumption', function() {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, { payload: { type: 'created' } }, true);
+            expect(rawStream.rawMatcher).to.be(null);
+
+            rawStream.next();
+
+            expect(typeof rawStream.rawMatcher).to.be('function');
+        });
+
+        it('activates raw mode when predicate argument is true (shorthand)', function() {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, true);
+            expect(rawStream.raw).to.be(true);
+            expect(rawStream.predicate).to.be(null);
+            const chunks = [...rawStream];
+            expect(chunks.length).to.be(2);
+            expect(Buffer.isBuffer(chunks[0])).to.be(true);
+        });
+
+        it('emits Buffer chunks when used as a Readable stream in raw mode', function(done) {
+            const rawStream = new EventStream('foo', rawStore, 1, -1, null, true);
+            const chunks = [];
+            rawStream.on('data', (chunk) => chunks.push(chunk));
+            rawStream.once('end', () => {
+                expect(chunks.length).to.be(2);
+                expect(Buffer.isBuffer(chunks[0])).to.be(true);
+                expect(chunks[0].at(-1)).to.be(0x0A);
+                done();
+            });
+        });
+
+    });
+
+    describe('filter()', function() {
+
+        it('sets a predicate and resets the iterator', function() {
+            const result = stream.filter(payload => payload === 'foo');
+            expect(result).to.be(stream);
+            expect(typeof stream.predicate).to.be('function');
+            expect(stream.events).to.eql(['foo']);
+        });
+
+        it('clears the predicate when called with no argument', function() {
+            stream.filter(payload => payload === 'foo');
+            stream.filter(null);
+            expect(stream.predicate).to.be(null);
+            expect(stream.events).to.eql(events);
+        });
+
+    });
+
+    describe('object matcher (non-raw mode)', function() {
+
+        it('filters events by an object matcher against stream/payload/metadata', function() {
+            const filtered = stream.filter({ payload: 'foo' });
+            expect(filtered.events).to.eql(['foo']);
         });
 
     });

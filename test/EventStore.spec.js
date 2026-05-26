@@ -379,7 +379,7 @@ describe('EventStore', function() {
             });
         });
 
-        it('invokes callback when finished with optimistic concurrency check and metdata', function(done) {
+        it('invokes callback when finished with optimistic concurrency check and metadata', function(done) {
             eventstore = new EventStore({
                 storageDirectory
             });
@@ -461,6 +461,32 @@ describe('EventStore', function() {
             });
         });
 
+        it('can commit to existing non-empty read-streams', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.createEventStream('my-foo-bar', event => event.payload.foo === 'bar');
+                eventstore.commit('my-foo-bar', [{ foo: 'bar', baz: 'quux' }], 1, () => {
+                    expect(eventstore.length).to.be(2);
+                    expect(eventstore.getStreamVersion('my-foo-bar')).to.be(2);
+                    done();
+                });
+            });
+        });
+
+        xit('can commit only matching events to existing read-streams', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+                eventstore.createEventStream('my-foo-bar', event => event.payload.foo === 'bar');
+                expect(() => eventstore.commit('my-foo-bar', [{ foo: 'baz', baz: 'quux' }], 1)).to.throwError(/events do not match/);
+                done();
+            });
+        });
     });
 
     describe('createEventStream', function() {
@@ -667,6 +693,45 @@ describe('EventStore', function() {
         });
 
         it('needs to be tested further.');
+
+        it('supports raw mode with object matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo-bar', [{ type: 'A', key: 1 }, { type: 'B', key: 2 }], () => {
+                const stream = eventstore.getEventStream('foo-bar', 1, -1, { payload: { type: 'B' } }, true);
+                const chunks = [...stream];
+                expect(chunks.length).to.be(1);
+                const parsed = JSON.parse(chunks[0].toString('utf8'));
+                expect(parsed.payload.key).to.be(2);
+                done();
+            });
+        });
+
+        it('passes document buffers to function matcher in raw mode', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo-bar', [{ key: 1 }, { key: 2 }], () => {
+                let calledWithBuffer = false;
+                const stream = eventstore.getEventStream('foo-bar', 1, -1, (buffer) => {
+                    calledWithBuffer = Buffer.isBuffer(buffer);
+                    return buffer.includes(Buffer.from('"key":2', 'utf8'));
+                }, true);
+                const chunks = [...stream];
+                expect(calledWithBuffer).to.be(true);
+                expect(chunks.length).to.be(1);
+                done();
+            });
+        });
+
+        it('activates raw mode via predicate shorthand (true as 4th arg)', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo-bar', [{ key: 1 }], () => {
+                const stream = eventstore.getEventStream('foo-bar', 1, -1, true);
+                expect(stream.raw).to.be(true);
+                const chunks = [...stream];
+                expect(chunks.length).to.be(1);
+                expect(Buffer.isBuffer(chunks[0])).to.be(true);
+                done();
+            });
+        });
     });
 
     describe('getAllEvents', function() {
@@ -683,6 +748,32 @@ describe('EventStore', function() {
             eventstore.on('ready', () => {
                 const stream = eventstore.getAllEvents();
                 expect(stream.events.length).to.be(20);
+                done();
+            });
+        });
+
+        it('supports raw mode with object matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo', [{ type: 'A' }], () => {
+                eventstore.commit('bar', [{ type: 'B' }], () => {
+                    const stream = eventstore.getAllEvents(1, -1, { payload: { type: 'B' } }, true);
+                    const chunks = [...stream];
+                    expect(chunks.length).to.be(1);
+                    const parsed = JSON.parse(chunks[0].toString('utf8'));
+                    expect(parsed.payload.type).to.be('B');
+                    done();
+                });
+            });
+        });
+
+        it('activates raw mode via predicate shorthand (true as 3rd arg)', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo', [{ type: 'A' }], () => {
+                const stream = eventstore.getAllEvents(1, -1, true);
+                expect(stream.raw).to.be(true);
+                const chunks = [...stream];
+                expect(chunks.length).to.be(1);
+                expect(Buffer.isBuffer(chunks[0])).to.be(true);
                 done();
             });
         });
@@ -753,6 +844,36 @@ describe('EventStore', function() {
                 expect(event).to.eql({ key: i-- });
             }
             expect(i).to.be(0);
+        });
+
+        it('supports raw mode with object matcher across joined streams', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo', { type: 'A', key: 1 }, () => {
+                eventstore.commit('bar', { type: 'B', key: 2 }, () => {
+                    const stream = eventstore.fromStreams('joined', ['foo', 'bar'], 1, -1, {
+                        payload: { type: 'B' }
+                    }, true);
+                    const chunks = [...stream];
+                    expect(chunks.length).to.be(1);
+                    const parsed = JSON.parse(chunks[0].toString('utf8'));
+                    expect(parsed.payload.key).to.be(2);
+                    done();
+                });
+            });
+        });
+
+        it('activates raw mode via predicate shorthand (true as 5th arg)', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo', { key: 1 }, () => {
+                eventstore.commit('bar', { key: 2 }, () => {
+                    const stream = eventstore.fromStreams('joined', ['foo', 'bar'], 1, -1, true);
+                    expect(stream.raw).to.be(true);
+                    const chunks = [...stream];
+                    expect(chunks.length).to.be(2);
+                    expect(Buffer.isBuffer(chunks[0])).to.be(true);
+                    done();
+                });
+            });
         });
 
     });
@@ -870,6 +991,17 @@ describe('EventStore', function() {
                 keys.push(event.key);
             }
             expect(keys).to.eql([2, 3]);
+        });
+
+        it('activates raw mode via predicate shorthand (true as 3rd arg)', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('cat-1', [{ key: 1 }]);
+            eventstore.commit('cat-2', [{ key: 2 }]);
+            const stream = eventstore.getEventStreamForCategory('cat', 1, -1, true);
+            expect(stream.raw).to.be(true);
+            const chunks = [...stream];
+            expect(chunks.length).to.be(2);
+            expect(Buffer.isBuffer(chunks[0])).to.be(true);
         });
 
     });
@@ -1275,8 +1407,10 @@ describe('EventStore', function() {
 
             consumer2.on('caught-up', () =>
                 eventstore.scanConsumers((err, consumers) => {
-                    expect(consumers).to.contain('_all.consumer1');
-                    expect(consumers).to.contain('stream-foo-bar.consumer2');
+                    expect(consumers.map(c => c.name)).to.contain('_all.consumer1');
+                    expect(consumers.map(c => c.name)).to.contain('stream-foo-bar.consumer2');
+                    expect(consumers.find(c => c.identifier === 'consumer1')).to.eql({ name: '_all.consumer1', stream: '_all', identifier: 'consumer1' });
+                    expect(consumers.find(c => c.identifier === 'consumer2')).to.eql({ name: 'stream-foo-bar.consumer2', stream: 'foo-bar', identifier: 'consumer2' });
                     done();
                 })
             );
@@ -1779,6 +1913,46 @@ describe('EventStore', function() {
             expect(stream.events.length).to.be(0);
         });
 
+        it('supports raw mode and object matcher', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 'a' }], () => {
+                eventstore.commit('order-2', [{ type: 'OrderPlaced', orderId: 'b' }], () => {
+                    const { stream, condition } = eventstore.query(
+                        ['OrderPlaced'],
+                        { payload: { orderId: 'b' } },
+                        1,
+                        true
+                    );
+                    const chunks = [...stream];
+                    expect(chunks.length).to.be(1);
+                    expect(typeof condition.matcher).to.be('object');
+                    const parsed = JSON.parse(chunks[0].toString('utf8'));
+                    expect(parsed.payload.orderId).to.be('b');
+                    done();
+                });
+            });
+        });
+
+        it('stores function matcher and raw flag for raw-mode function matchers', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 'a' }], () => {
+                eventstore.commit('order-2', [{ type: 'OrderPlaced', orderId: 'b' }], () => {
+                    const matcher = (buffer) => buffer.includes(Buffer.from('"orderId":"b"', 'utf8'));
+                    const { stream, condition } = eventstore.query(
+                        ['OrderPlaced'],
+                        matcher,
+                        1,
+                        true
+                    );
+                    const chunks = [...stream];
+                    expect(chunks.length).to.be(1);
+                    expect(condition.matcher).to.be(matcher);
+                    expect(condition.raw).to.be(true);
+                    done();
+                });
+            });
+        });
+
     });
 
     // -------------------------------------------------------------------------
@@ -1920,6 +2094,14 @@ describe('EventStore', function() {
             });
         });
 
+        it('accepts dotted type stream names when they match the stream-name rules', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'Order.Placed', orderId: 1 }], () => {
+                expect(eventstore.getStreamVersion('Order.Placed')).to.be(1);
+                done();
+            });
+        });
+
         it('creates type streams for all event types in a multi-event commit', function(done) {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
             eventstore.commit('order-1', [
@@ -1930,6 +2112,18 @@ describe('EventStore', function() {
                 expect(eventstore.getStreamVersion('OrderShipped')).to.be(1);
                 done();
             });
+        });
+
+        it('throws when typeAccessor returns a non-string value', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            expect(() => eventstore.commit('s', [{ type: 42 }])).to.throwError(/typeAccessor must return a string/);
+            expect(eventstore.length).to.be(0);
+        });
+
+        it('throws when typeAccessor returns a string that is not a valid stream name', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            expect(() => eventstore.commit('s', [{ type: 'Order..Placed' }])).to.throwError(/typeAccessor must return a valid stream name/);
+            expect(eventstore.length).to.be(0);
         });
 
         it('silently skips type stream creation when typeAccessor returns a falsy value', function(done) {

@@ -3,6 +3,8 @@ import path from 'path';
 import events from 'events';
 import { assert, alignTo, hash, binarySearch } from '../util.js';
 
+
+
 const DEFAULT_READ_BUFFER_SIZE = 64 * 1024;
 const DOCUMENT_HEADER_SIZE = 16;
 const DOCUMENT_ALIGNMENT = 4;
@@ -210,6 +212,68 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
+     * Read the data from the given position.
+     *
+     * @api
+     * @param {number} position The file position to read from.
+     * @param {number} [size] The expected byte size of the document at the given position.
+     * @param {object|null} [headerOut] Optional object to populate with the document header fields
+     *   (`dataSize`, `sequenceNumber`, `time64`). Pass an existing object to avoid extra allocation.
+     * @param {boolean} [backwardsHint] If set to true, will optimize buffering for backwards reads.
+     * @returns {Buffer|boolean} The data stored at the given position or false if no data could be read.
+     * @throws {Error} if the storage entry at the given position is corrupted.
+     * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
+     * @throws {CorruptFileError} if the document at the given position can not be read completely.
+     */
+    readFrom(position, size = 0, headerOut = null, backwardsHint = false) {
+        assert(this.fd, 'Partition is not opened.');
+        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
+
+        const bufferOffset = size > 0 && backwardsHint ? DOCUMENT_HEADER_SIZE + size : 0;
+        const reader = size > 0 && backwardsHint
+            ? this.prepareReadBufferBackwards(position + bufferOffset, bufferOffset)
+            : this.prepareReadBuffer(position);
+        if (reader.length < DOCUMENT_HEADER_SIZE) {
+            return false;
+        }
+
+        // prepareReadBufferBackwards positions the cursor at position + bufferOffset (the end of
+        // the document data), so the previous document in file order lands inside the buffer on the next
+        // backwards read. Adjust the cursor back to the document header start before reading.
+        reader.cursor -= bufferOffset;
+        let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
+        const header = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
+        const dataSize = header.dataSize;
+        if (headerOut !== null) {
+            headerOut.dataSize = header.dataSize;
+            headerOut.sequenceNumber = header.sequenceNumber;
+            // Denormalize time64 relative to this partition's epoch so callers can compare
+            // timestamps across partitions without needing to know the epoch value.
+            headerOut.time64 = this.metadata.epoch + header.time64;
+        }
+
+        const writeSize = this.documentWriteSize(dataSize);
+        if (position + writeSize > this.size) {
+            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
+        }
+
+        if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
+            const tempReadBuffer = Buffer.allocUnsafe(dataSize);
+            fs.readSync(this.fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
+            return tempReadBuffer;
+        }
+
+        if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
+            this.fillBuffer(position);
+            dataPosition = DOCUMENT_HEADER_SIZE;
+        }
+
+        // reader.buffer is a shared buffer filled by fillBuffer; callers must consume the returned
+        // view before the next readFrom call (which may fill the same buffer region).
+        return reader.buffer.subarray(dataPosition, dataPosition + dataSize);
+    }
+
+    /**
      * Prepare the read buffer for reading from the specified position.
      *
      * @protected
@@ -229,73 +293,23 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * Prepare the read buffer for reading *before* the specified position. Don't try to reader *after* the returned cursor.
+     * Prepare the read buffer for reading *before* the specified position. Don't try to read *after* the returned cursor.
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading before.
+     * @param {number} [size] The amount of bytes that need to be buffered before position. By default, only guarantees that the document footer can be read.
      * @returns {{ buffer: Buffer|null, cursor: number, length: number }} A reader object with properties `buffer`, `cursor` and `length`.
      */
-    prepareReadBufferBackwards(position) {
+    prepareReadBufferBackwards(position, size = 0) {
         if (position < 0) {
             return ({ buffer: null, cursor: 0, length: 0 });
         }
         let bufferCursor = position - this.readBufferPos;
-        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < DOCUMENT_FOOTER_SIZE) || bufferCursor > this.readBufferLength) {
+        if (this.readBufferPos < 0 || (this.readBufferPos > 0 && bufferCursor < size + DOCUMENT_FOOTER_SIZE) || bufferCursor > this.readBufferLength) {
             this.fillBuffer(Math.max(position - this.readBuffer.byteLength, 0));
             bufferCursor = position - this.readBufferPos;
         }
         return ({ buffer: this.readBuffer, cursor: bufferCursor, length: this.readBufferLength });
-    }
-
-    /**
-     * Read the data from the given position.
-     *
-     * @api
-     * @param {number} position The file position to read from.
-     * @param {number} [size] The expected byte size of the document at the given position.
-     * @param {object|null} [headerOut] Optional object to populate with the document header fields
-     *   (`dataSize`, `sequenceNumber`, `time64`). Pass an existing object to avoid extra allocation.
-     * @returns {string|boolean} The data stored at the given position or false if no data could be read.
-     * @throws {Error} if the storage entry at the given position is corrupted.
-     * @throws {InvalidDataSizeError} if the document size at the given position does not match the provided size.
-     * @throws {CorruptFileError} if the document at the given position can not be read completely.
-     */
-    readFrom(position, size = 0, headerOut = null) {
-        assert(this.fd, 'Partition is not opened.');
-        assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
-
-        const reader = this.prepareReadBuffer(position);
-        if (reader.length < size + DOCUMENT_HEADER_SIZE) {
-            return false;
-        }
-
-        let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
-        const { dataSize, sequenceNumber, time64 } = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
-        if (headerOut !== null) {
-            headerOut.dataSize = dataSize;
-            headerOut.sequenceNumber = sequenceNumber;
-            headerOut.time64 = time64;
-        }
-
-        // TODO: This should only be checked on opening
-        const writeSize = this.documentWriteSize(dataSize);
-        if (position + writeSize > this.size) {
-            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
-        }
-
-        if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
-            //console.log('sync read for large document size', dataLength, 'at position', position);
-            const tempReadBuffer = Buffer.allocUnsafe(dataSize);
-            fs.readSync(this.fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
-            return tempReadBuffer.toString('utf8');
-        }
-
-        if (reader.cursor > 0 && dataPosition + dataSize > reader.length) {
-            this.fillBuffer(position);
-            dataPosition = DOCUMENT_HEADER_SIZE;
-        }
-
-        return reader.buffer.toString('utf8', dataPosition, dataPosition + dataSize);
     }
 
     /**
@@ -307,7 +321,7 @@ class ReadablePartition extends events.EventEmitter {
      */
     findDocumentPositionBefore(position) {
         assert(this.fd, 'Partition is not opened.');
-        position -= (position % DOCUMENT_ALIGNMENT);
+        if (position > 0) position -= (position % DOCUMENT_ALIGNMENT);
         if (position <= 0) {
             return false;
         }
@@ -373,49 +387,49 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     /**
-     * Find the first document whose sequenceNumber is >= the given value.
+     * Find a document around the target sequence number using one of two binary-search modes.
      * Uses readLast() to short-circuit when the partition contains no such document.
      * Uses a binary search over file positions via readDocumentBefore() to locate the
-     * document. The search tracks both the lower bound (position just after the last
-     * confirmed "< sequenceNumber" doc) and the upper bound (minimum position of any
-     * probed doc with sequenceNumber >= target). The upper bound, when available, is
-     * the exact target document, so no further linear scan is needed.
+     * document and tracks nearest candidates on both sides of the target.
      *
      * @api
      * @param {number} sequenceNumber The 0-based sequence number to search for.
-     * @returns {{ reader: Generator<string>, headerOut: object, data: string }|null}
-     *   The matched document with its reader and shared headerOut, or null if no such document exists.
+     * @param {boolean} [min=true] When true, returns the first document with sequenceNumber >= target.
+     *   When false, returns the last document with sequenceNumber <= target.
+     * @returns {{ data: Buffer, header: object, position: number }|null}
+     *   The matched document with its header and position, or null if no such document exists.
      */
-    findDocument(sequenceNumber) {
+    findDocument(sequenceNumber, min = true) {
         const last = this.readLast();
-        if (!last || last.header.sequenceNumber < sequenceNumber) {
+        if (!last) {
             return null;
         }
 
-        let startPosition = this.size;
-        binarySearch(
+        if (min && last.header.sequenceNumber < sequenceNumber) {
+            return null;
+        }
+
+        const [low, high] = binarySearch(
             sequenceNumber,
             this.size,
             (pos) => {
                 const doc = this.readDocumentBefore(pos);
-                if (!doc) return sequenceNumber;
-                if (doc.header.sequenceNumber < sequenceNumber) {
-                    startPosition = Math.max(startPosition, doc.position + this.documentWriteSize(doc.header.dataSize));
-                } else {
-                    startPosition = Math.min(startPosition, doc.position);
-                }
-                return doc.header.sequenceNumber;
+                return doc ? doc.header.sequenceNumber : Number.MIN_SAFE_INTEGER;
             }
         );
 
-        const headerOut = {};
-        const data = this.readFrom(startPosition, 0, headerOut);
+        const position = this.findDocumentPositionBefore(min ? low : high);
+        if (position === false || position < 0) {
+            return null;
+        }
+
+        const header = {};
+        const data = this.readFrom(position, 0, header);
         /* istanbul ignore if */
         if (data === false) {
             return null;
         }
-        headerOut.position = startPosition;
-        return { headerOut, data };
+        return { data, header, position };
     }
 
     /**
@@ -424,7 +438,7 @@ class ReadablePartition extends events.EventEmitter {
      * @param {object|null} [headerOut] Optional object to populate with document header fields
      *   (`dataSize`, `sequenceNumber`, `time64`, `position`) on each yield. Pass an existing object
      *   to avoid extra allocation. The object is mutated in place before each yield.
-     * @returns {Generator<string>} A generator that returns all documents in this partition.
+     * @returns {Generator<Buffer>} A generator that returns all documents in this partition.
      */
     *readAll(after = 0, headerOut = null) {
         let position = after < 0 ? this.size + after + 1 : after;
@@ -442,15 +456,58 @@ class ReadablePartition extends events.EventEmitter {
     /**
      * @api
      * @param {number} [before] The document position to start reading backward from.
-     * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
+     * @param {object|null} [headerOut] Optional object to populate with document header fields
+     *   (`dataSize`, `sequenceNumber`, `time64`, `position`) on each yield.
+     * @returns {Generator<Buffer>} A generator that returns all documents in this partition in reverse order.
      */
-    *readAllBackwards(before = -1) {
+    *readAllBackwards(before = -1, headerOut = null) {
         let position = before < 0 ? this.size + before + 1 : before;
+        const internalHeader = headerOut !== null ? headerOut : {};
         while ((position = this.findDocumentPositionBefore(position)) !== false) {
-            const data = this.readFrom(position);
+            const data = this.readFrom(position, 0, internalHeader, true);
+            if (headerOut !== null) {
+                headerOut.position = position;
+            }
             yield data;
         }
     }
+
+    /**
+     * Read documents with sequenceNumber in the inclusive range [from, until].
+     * If from > until, documents are yielded in reverse order.
+     *
+     * @api
+     * @param {number} [from=0]
+     * @param {number} [until=Number.MAX_SAFE_INTEGER]
+     * @returns {Generator<{ data: Buffer, header: object, entry: object }>}
+     */
+    *readRange(from = 0, until = Number.MAX_SAFE_INTEGER) {
+        const forwards = from <= until;
+        const lo = Math.min(from, until);
+        const hi = Math.max(from, until);
+        const found = this.findDocument(forwards ? lo : hi, forwards);
+        if (!found || found.header.sequenceNumber < lo || found.header.sequenceNumber > hi) {
+            return;
+        }
+
+        const entry = { partition: this.id };
+        const header = {};
+        const iterator = forwards
+            ? this.readAll(found.position, header)
+            : this.readAllBackwards(found.position + this.documentWriteSize(found.header.dataSize), header);
+
+        for (const data of iterator) {
+            if (header.sequenceNumber < lo || header.sequenceNumber > hi) {
+                return;
+            }
+            entry.number = header.sequenceNumber;
+            entry.position = header.position;
+            entry.size = header.dataSize;
+            yield { data, header, entry };
+        }
+    }
+
+
 }
 
 export default ReadablePartition;

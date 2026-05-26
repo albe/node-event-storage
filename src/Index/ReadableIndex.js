@@ -353,7 +353,7 @@ class ReadableIndex extends events.EventEmitter {
      *
      * @api
      * @param {number} from The 1-based index position from where to get entries from (inclusive). If < 0 will start at that position from end.
-     * @param {number} [until] The 1-based index position until where to get entries to (inclusive). If < 0 will get until that position from the end. Defaults to this.length.
+     * @param {number} [until=-1] The 1-based index position until where to get entries to (inclusive). If < 0 will get until that position from the end. Defaults to this.length.
      * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
      */
     range(from, until = -1) {
@@ -387,7 +387,7 @@ class ReadableIndex extends events.EventEmitter {
      *
      * @api
      * @param {number} number The sequence number to search for.
-     * @param {boolean} [min] If set to true, will return the first entry that has a sequence number greater than or equal to `number`.
+     * @param {boolean} [min=false] If set to true, will return the first entry that has a sequence number greater than or equal to `number`.
      * @returns {number} The last index entry position that is lower than or equal to the `number`. Returns 0 if no index matches.
      */
     find(number, min = false) {

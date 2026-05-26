@@ -300,15 +300,16 @@ class WritablePartition extends ReadablePartition {
      *
      * @protected
      * @param {number} position The position in the file to prepare the read buffer for reading before.
+     * @param {number} [size] The amount of bytes that need to be buffered before position. By default, only guarantees that the document footer can be read.
      * @returns {object} A reader object with properties `buffer`, `cursor` and `length`.
      */
-    prepareReadBufferBackwards(position) {
+    prepareReadBufferBackwards(position, size = 0) {
         const bufferPos = this.size - this.writeBufferCursor;
         // Handle the case when data that is still in write buffer is supposed to be read backwards
         if (this.dirtyReads && this.writeBufferCursor > 0 && position > bufferPos) {
             return { buffer: this.writeBuffer, cursor: position - bufferPos, length: this.writeBufferCursor };
         }
-        return super.prepareReadBufferBackwards(position);
+        return super.prepareReadBufferBackwards(position, size);
     }
 
     /**
@@ -317,16 +318,17 @@ class WritablePartition extends ReadablePartition {
      *
      * @api
      * @param {number} [before] The document position to start reading backward from.
-     * @returns {Generator<string>} A generator that returns all documents in this partition in reverse order.
+     * @param {object|null} [headerOut] Optional object to populate with document header fields on each yield.
+     * @returns {Generator<Buffer>} A generator that returns all documents in this partition in reverse order.
      */
-    *readAllBackwards(before = -1) {
+    *readAllBackwards(before = -1, headerOut = null) {
         if (!this.dirtyReads && this.writeBufferCursor > 0) {
             const flushedSize = this.size - this.writeBufferCursor;
             const clampedBefore = before < 0 ? flushedSize : Math.min(before, flushedSize);
-            yield* super.readAllBackwards(clampedBefore);
+            yield* super.readAllBackwards(clampedBefore, headerOut);
             return;
         }
-        yield* super.readAllBackwards(before);
+        yield* super.readAllBackwards(before, headerOut);
     }
 
     /**

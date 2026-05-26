@@ -75,6 +75,27 @@ eventstore.on('ready', () => {
 
 ---
 
+## HTTP API
+
+To expose an event store over HTTP, see the companion package **[event-storage-http](https://github.com/albe/node-event-storage-http)**:
+
+```bash
+npm install event-storage-http
+```
+
+```javascript
+import EventStore from 'event-storage';
+import { createEventStoreHttpServer } from 'event-storage-http';
+
+const eventStore = new EventStore('my-store', { storageDirectory: './data' });
+const server = createEventStoreHttpServer(eventStore);
+server.listen(3000);
+```
+
+The package exposes NDJSON stream endpoints, durable consumer management, and an `HttpEventStream` client helper for consuming event streams over fetch.
+
+---
+
 ## Documentation
 
 The full documentation is hosted at **<https://node-event-storage.readthedocs.io/en/latest/>** and covers:

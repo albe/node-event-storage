@@ -116,11 +116,197 @@ function buildTypeMatcherFn(payloadPath) {
     };
 }
 
+/**
+ * Builds a raw-buffer matcher.
+ * It expects the Buffer to contain compact stringified JSON
+ * and supports matcher objects with sub properties and multi-value matches (OR/any of).
+ *
+ * @param {object} matcher Object matcher.
+ * @returns {function(Buffer): boolean}
+ */
+function buildRawBufferMatcher(matcher = {}) {
+    if (!matcher || typeof matcher !== 'object' || Array.isArray(matcher)) {
+        throw new TypeError('Matcher must be an object.');
+    }
+
+    const root = buildMatcherTree(matcher);
+    if (root.children.length === 0) {
+        return () => true;
+    }
+
+    return function matchesRawBuffer(buffer) {
+        if (buffer[0] !== 0x7b) { // '{'
+            return false;
+        }
+        if (!preCheck(buffer, 1, root)) {
+            return false;
+        }
+        return matchesNode(buffer, 1, root);
+    };
+}
+
+/**
+ * Optimization pass: check that every required byte pattern is present anywhere in the buffer
+ * before spending the more expensive per-depth scan in `matchesNode`.
+ */
+function preCheck(buffer, startOffset, node) {
+    for (const child of node.children) {
+        let i = 0;
+        if (child.valuePatterns && !child.valuePatterns.some(pattern => (child.valueMatches[i++] = buffer.indexOf(pattern, startOffset)) !== -1)) {
+            return false;
+        }
+        if (child.objectPattern) {
+            if ((child.objMatch = buffer.indexOf(child.objectPattern, startOffset)) === -1) {
+                return false;
+            }
+            if (!preCheck(buffer, child.objMatch, child.node)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Pre-compile a plain object matcher into a tree of byte patterns so `matchesNode` can scan
+ * raw JSON buffers without deserializing them.
+ */
+function buildMatcherTree(matcher) {
+    const node = { children: [] };
+
+    for (const [key, value] of Object.entries(matcher)) {
+        const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
+        const child = { objectPattern: null, valuePatterns: null, node: null, objMatch: null, valueMatches: [] };
+
+        if (Array.isArray(value)) {
+            if (value.some(item => item && typeof item === 'object')) {
+                throw new TypeError('Array matcher values must be scalars.');
+            }
+            child.valuePatterns = value.map(item => Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(item), 'utf8')]));
+        } else if (value && typeof value === 'object') {
+            child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
+            child.node = buildMatcherTree(value);
+        } else {
+            child.valuePatterns = [Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(value), 'utf8')])];
+        }
+
+        node.children.push(child);
+    }
+
+    return node;
+}
+
+/**
+ * Verify that each required byte pattern in the tree is present at the correct JSON nesting
+ * depth so values inside nested objects don't satisfy a top-level match requirement.
+ */
+function matchesNode(buffer, startOffset, node) {
+    for (const child of node.children) {
+        if (child.valuePatterns) {
+            let i = 0;
+            if (!child.valuePatterns.some(pattern => indexOfSameLevel(buffer, pattern, startOffset, child.valueMatches[i++]) !== -1)) {
+                return false;
+            }
+        }
+
+        if (child.node) {
+            const objectIndex = indexOfSameLevel(buffer, child.objectPattern, startOffset, child.objMatch);
+            if (objectIndex === -1) {
+                return false;
+            }
+            if (!matchesNode(buffer, objectIndex + child.objectPattern.length, child.node)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Find the position of `pattern` within `buffer` at depth 0 (the top-level object), starting
+ * from `startOffset`.  It scans character-by-character tracking JSON nesting depth and string
+ * quoting.  If `matchPosition` arrives at depth > 0 it means the pattern is inside a nested
+ * object/array, so the scan continues searching for the next candidate at depth 0.  Returns -1
+ * when no such position exists before the end of the buffer or when a closing brace reduces depth
+ * below zero (the top-level object has ended).
+ */
+function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
+    /* c8 ignore start */
+    // Defensive fallback: public call path precomputes an initial candidate in preCheck.
+    if (matchPosition === undefined) {
+        matchPosition = buffer.indexOf(pattern, startOffset);
+    }
+    if (matchPosition === -1) {
+        return -1;
+    }
+    /* c8 ignore stop */
+
+    let depth = 0;
+    let inString = false;
+    let i = startOffset;
+
+    while (i < buffer.length) {
+        if (inString) {
+            if (buffer[i] === 0x5c) { // '\\'
+                i += 2;
+                continue;
+            }
+            if (buffer[i] === 0x22) { // '"'
+                inString = false;
+            }
+            i++;
+            continue;
+        }
+
+        const ch = buffer[i];
+        if (ch === 0x7b || ch === 0x5b) { // '{' or '['
+            depth++;
+            i++;
+            continue;
+        } else if (ch === 0x7d || ch === 0x5d) { // '}' or ']'
+            depth--;
+
+            if (depth < 0) {
+                return -1;
+            }
+
+            i++;
+            continue;
+        } else if (ch === 0x22) { // '"'
+            inString = true;
+        }
+
+        if (i >= matchPosition) {
+            if (i === matchPosition && ch === 0x22 && depth === 0) { // '"'
+                const end = i + pattern.length;
+                if (pattern[pattern.length - 1] === 0x7b) { // '{'
+                    return i;
+                }
+                if (buffer[end] === 0x2c || buffer[end] === 0x7d || buffer[end] === 0x5d) { // ',' or '}' or ']'
+                    return i;
+                }
+            }
+
+            matchPosition = buffer.indexOf(pattern, matchPosition + 1);
+            if (matchPosition < 0) {
+                return -1;
+            }
+        }
+
+        i++;
+    }
+
+    /* c8 ignore next */
+    return -1;
+}
+
 export {
     createHmac,
     matches,
     buildMetadataHeader,
     buildMetadataForMatcher,
     buildMatcherFromMetadata,
-    buildTypeMatcherFn
+    buildTypeMatcherFn,
+    buildRawBufferMatcher
 };

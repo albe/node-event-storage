@@ -1,5 +1,5 @@
 import EventStream from './EventStream.js';
-import { wrapAndCheck } from './util.js';
+import { kWayMerge } from './util.js';
 
 /** Reusable sentinel used for missing or empty per-stream iterators. */
 const emptyIterator = Object.freeze({ next() { return { done: true }; } });
@@ -27,11 +27,11 @@ class JoinEventStream extends EventStream {
      * @param {EventStore} eventStore The event store to get the stream from.
      * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {function(object, object): boolean|null} [predicate] An optional filter function
-     *   `(payload, metadata) => boolean`.  Only events for which this returns truthy are yielded.
+     * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
+     * @param {boolean} [raw=false] If true, emit NDJSON Buffers.
      */
-    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {
-        super(name, eventStore, minRevision, maxRevision, predicate);
+    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        super(name, eventStore, minRevision, maxRevision, predicate, raw);
         if (!(streams instanceof Array) || streams.length === 0) {
             throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
         }
@@ -41,7 +41,6 @@ class JoinEventStream extends EventStream {
         this.minRevision = normalizeVersion(minRevision, eventStore.length);
         this.maxRevision = normalizeVersion(maxRevision, eventStore.length);
         this.fetch = function() {
-            this._next = new Array(streams.length).fill(undefined);
             return streams.map(streamName => {
                 const streamIndex = eventStore.streams[streamName]?.index;
                 if (!streamIndex || streamIndex.length === 0) {
@@ -54,60 +53,47 @@ class JoinEventStream extends EventStream {
                     // (e.g. minRevision > all entries, or maxRevision < all entries).
                     return emptyIterator;
                 }
-                return eventStore.storage.readRange(from, until, streamIndex);
+                // Raw mode: get { buffer, time64, sequenceNumber } for binary-header ordering.
+                // Object mode: storage deserializes for us and we order by metadata.commitId.
+                return eventStore.storage.readRange(from, until, streamIndex, this.raw);
             });
         }
         this._iterator = null;
     }
 
     /**
-     * Returns the value of the iterator at position `index`
-     * @param {number} index The iterator position for which to return the next value
-     * @returns {*}
+     * @returns {Generator<object>}
      */
-    getValue(index) {
-        const next = this._iterator[index].next();
-        return next.done ? false : next.value;
+    createMergedIterator() {
+        const ascending = this.minRevision <= this.maxRevision;
+        const raw = this.raw;
+        return kWayMerge(
+            this.fetch(),
+            entry => raw ? entry.sequenceNumber : entry.metadata.commitId,
+            ascending
+        );
     }
 
     /**
-     * @private
-     * @param {number} first
-     * @param {number} second
-     * @returns {boolean} If the first item follows after the second in the given read order determined by this.minRevision and this.maxRevision.
-     */
-    follows(first, second) {
-        return (this.minRevision > this.maxRevision ? first < second : first > second);
-    }
-
-    /**
-     * @private
-     * @returns {object|boolean} The next event or false if no more events in the stream.
+     * Returns the next event in merge order.
+     *
+     * In raw mode: returns `{ buffer, time64, sequenceNumber }` from the binary header — no JSON
+     * deserialization. In object mode: returns a deserialized `{ stream, payload, metadata }` document
+     * produced by the storage layer.
+     * @returns {object|false} The next event, or `false` when the stream is exhausted.
      */
     next() {
         if (!this._iterator) {
-            this._iterator = this.fetch();
+            this._iterator = this.createMergedIterator();
         }
         while (true) {
-            let nextIndex = -1;
-            this._next.forEach((value, index) => {
-                if (typeof value === 'undefined') {
-                    value = this._next[index] = this.getValue(index);
-                }
-                if (value === false) {
-                    return;
-                }
-                if (nextIndex === -1 || this.follows(this._next[nextIndex].metadata.commitId, value.metadata.commitId)) {
-                    nextIndex = index;
-                }
-            });
-
-            if (nextIndex === -1) {
+            const step = this._iterator.next();
+            if (step.done) {
                 return false;
             }
-            const next = this._next[nextIndex];
-            this._next[nextIndex] = undefined;
-            if (!this.predicate || this.predicate(next.payload, next.metadata)) {
+            const next = step.value;
+
+            if (this.matchesPredicate(next)) {
                 return next;
             }
         }

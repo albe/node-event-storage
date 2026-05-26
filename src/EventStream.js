@@ -1,5 +1,8 @@
 import stream from 'stream';
 import { assert } from './util.js';
+import { buildRawBufferMatcher, matches } from './metadataUtil.js';
+
+const NDJSON_NEWLINE = Buffer.from('\n');
 
 /**
  * Calculate the actual version number from a possibly relative (negative) version number.
@@ -33,25 +36,31 @@ class EventStream extends stream.Readable {
      * @param {EventStore} eventStore The event store to get the stream from.
      * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
-     * @param {function(object, object): boolean|null} [predicate] An optional filter function
-     *   `(payload, metadata) => boolean`.  Only events for which this returns truthy are yielded.
+     * @param {function|object|null} [predicate] Optional matcher:
+     *   - object mode: function `(payload, metadata) => boolean` or object matcher against `{ stream, payload, metadata }`
+     *   - raw mode: function `(buffer) => boolean` or object matcher against compact NDJSON bytes.
+     * @param {boolean} [raw=false] If true, emit NDJSON Buffers instead of event payload objects.
      */
-    constructor(name, eventStore, minRevision = 1, maxRevision = -1, predicate = null) {
-        super({ objectMode: true });
+    constructor(name, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        if (typeof predicate === 'boolean' && raw === false) {
+            raw = predicate;
+            predicate = null;
+        }
+        super({ objectMode: !raw });
         assert(typeof name === 'string' && name !== '', 'Need to specify a stream name.');
         assert(typeof eventStore === 'object' && eventStore !== null, `Need to provide EventStore instance to create EventStream ${name}.`);
 
         this.name = name;
+        this.raw = raw;
         this.predicate = predicate || null;
+        this.rawMatcher = null;
         if (eventStore.streams[name]) {
             this.streamIndex = eventStore.streams[name].index;
             this.minRevision = normalizeVersion(minRevision, this.streamIndex.length);
             this.maxRevision = normalizeVersion(maxRevision, this.streamIndex.length);
             this.version = minVersion(this.streamIndex.length, maxRevision);
             this._iterator = null;
-            this.fetch = function() {
-                return eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex);
-            }
+            this.fetch = () => eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex, raw);
         } else {
             this.streamIndex = { length: 0 };
             this.version = -1;
@@ -233,8 +242,16 @@ class EventStream extends stream.Readable {
     *[Symbol.iterator]() {
         let next;
         while ((next = this.next()) !== false) {
-            yield next.payload;
+            yield this.raw ? this.toRawBuffer(next) : next.payload;
         }
+    }
+
+    /**
+     * @param {{ buffer: Buffer }} entry
+     * @returns {Buffer}
+     */
+    toRawBuffer(entry) {
+        return Buffer.concat([entry.buffer, NDJSON_NEWLINE]);
     }
 
     /**
@@ -259,9 +276,30 @@ class EventStream extends stream.Readable {
      */
     filter(predicate) {
         this.predicate = predicate || null;
+        this.rawMatcher = null;
         this._iterator = null;
         this._events = null;
         return this;
+    }
+
+    matchesPredicate(entry) {
+        if (!this.predicate) {
+            return true;
+        }
+        if (this.raw) {
+            if (typeof this.predicate === 'function') {
+                return this.predicate(entry.buffer);
+            }
+            if (!this.rawMatcher) {
+                this.rawMatcher = buildRawBufferMatcher(this.predicate);
+            }
+            return this.rawMatcher(entry.buffer);
+        }
+
+        if (typeof this.predicate === 'function') {
+            return this.predicate(entry.payload, entry.metadata);
+        }
+        return matches(entry, this.predicate);
     }
 
     /**
@@ -275,7 +313,7 @@ class EventStream extends stream.Readable {
             while (true) {
                 const result = this._iterator.next();
                 if (result.done) return false;
-                if (!this.predicate || this.predicate(result.value.payload, result.value.metadata)) {
+                if (this.matchesPredicate(result.value)) {
                     return result.value;
                 }
             }
@@ -291,7 +329,7 @@ class EventStream extends stream.Readable {
      */
     _read() {
         const next = this.next();
-        this.push(next ? next.payload : null);
+        this.push(next ? (this.raw ? this.toRawBuffer(next) : next.payload) : null);
     }
 
 }

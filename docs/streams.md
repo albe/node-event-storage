@@ -73,6 +73,34 @@ stream.forEach((event, metadata, streamName) => {
 });
 ```
 
+### Raw Mode (NDJSON for Network Streaming)
+
+Use raw mode when you want to stream events directly over HTTP/TCP without deserializing and re-serializing each document in userland.
+
+```javascript
+const stream = eventstore.getEventStream(
+    'user-123',
+    1,
+    -1,
+    { payload: { type: 'UserRegistered' } },
+    true
+);
+
+// Each chunk is one compact JSON document plus "\n"
+stream.pipe(httpResponse);
+```
+
+Raw mode is available on all stream-reading APIs (`getEventStream`, `getAllEvents`, `fromStreams`, `getEventStreamForCategory`) and also on `query()`.
+
+Matcher semantics differ by mode:
+
+| Mode | Function matcher | Object matcher |
+|------|------------------|----------------|
+| `raw=false` (default) | `(payload, metadata) => boolean` | Matched against `{ stream, payload, metadata }` |
+| `raw=true` | `(buffer) => boolean` | Byte-level matcher against compact JSON bytes |
+
+Important: raw object matchers require the default compact JSON serializer format. If you use a custom serializer, use a raw function matcher instead.
+
 ### Revision Ranges
 
 Retrieve only a slice of the stream by passing `minRevision` and `maxRevision`:

@@ -19,6 +19,7 @@ const ExpectedVersion = {
  * Default matcher property paths mirroring the Storage default, used for index optimization.
  */
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
+const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
 
 class OptimisticConcurrencyError extends Error {}
 
@@ -37,12 +38,14 @@ class OptimisticConcurrencyError extends Error {}
 class CommitCondition {
     /**
      * @param {string[]} types
-     * @param {function(object, object): boolean|null} [matcher]
+     * @param {function(object, object): boolean|object|null} [matcher]
      * @param {number}   noneMatchAfter
+     * @param {boolean}  [raw=false]
      */
-    constructor(types, matcher = null, noneMatchAfter) {
+    constructor(types, matcher = null, noneMatchAfter, raw = false) {
         this.types = types;
         this.matcher = matcher;
+        this.raw = raw;
         this.noneMatchAfter = noneMatchAfter;
     }
 }
@@ -132,6 +135,7 @@ class EventStore extends events.EventEmitter {
                         : new Storage(storeName, storageConfig);
         this.streams = Object.create(null);
         this.streams._all = { index: this.storage.index };
+        this.consumers = new Map();
 
         this.storage.on('index-created', this.registerStream.bind(this));
 
@@ -214,10 +218,15 @@ class EventStore extends events.EventEmitter {
 
     /**
      * Close the event store and free up all resources.
+     * Stops all registered consumers before closing storage.
      *
      * @api
      */
     close() {
+        for (const consumer of this.consumers.values()) {
+            consumer.stop();
+        }
+        this.consumers.clear();
         this.storage.close();
     }
 
@@ -378,19 +387,20 @@ class EventStore extends events.EventEmitter {
         if (existingTypes.length === 0) return;
 
         // Only events after condition.noneMatchAfter can be conflicts.
+        // Pass the original matcher and raw flag so the stream filters at the source.
         const stream = this.fromStreams(
             '_check_' + condition.types.join('_'),
             existingTypes,
-            condition.noneMatchAfter + 1
+            condition.noneMatchAfter + 1,
+            -1,
+            condition.matcher,
+            condition.raw
         );
 
-        let next;
-        while ((next = stream.next()) !== false) {
-            if (!condition.matcher || condition.matcher(next.payload, next.metadata)) {
-                throw new OptimisticConcurrencyError(
-                    `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
-                );
-            }
+        if (stream.next() !== false) {
+            throw new OptimisticConcurrencyError(
+                `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
+            );
         }
     }
 
@@ -403,7 +413,7 @@ class EventStore extends events.EventEmitter {
     ensureTypeStreams(events) {
         if (!this.typeAccessor) return;
         for (const event of events) {
-            const type = this.typeAccessor(event);
+            const type = this.resolveValidatedTypeStreamName(event);
             if (type && !(type in this.streams)) {
                 const matcher = this.typeMatcherFn
                     ? this.typeMatcherFn(type)
@@ -411,6 +421,16 @@ class EventStore extends events.EventEmitter {
                 this.createEventStream(type, matcher, false);
             }
         }
+    }
+
+    resolveValidatedTypeStreamName(event) {
+        const type = this.typeAccessor(event);
+        if (type === undefined || type === null || type === '') {
+            return null;
+        }
+        assert(typeof type === 'string', 'typeAccessor must return a string.');
+        assert(STREAM_NAME_PATTERN.test(type), `typeAccessor must return a valid stream name. Got: "${type}"`);
+        return type;
     }
 
     /**
@@ -514,16 +534,17 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string[]} types A non-empty array of event-type names to query.
-     * @param {function(object, object): boolean|null} [matcher] An optional filter function `(payload, metadata) => boolean`
-     *   passed to the returned {@link CommitCondition}.
+     * @param {function|object|null} [matcher] Optional matcher used for stream pre-filtering.
+     *   In object mode, function predicates receive `(payload, metadata)`.
      * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned stream (inclusive).
+     * @param {boolean} [raw=false] If true, return NDJSON buffers from the query stream.
      * @returns {{ condition: CommitCondition, stream: EventStream }} An object with:
      *   - `condition` — the {@link CommitCondition} to pass to {@link EventStore#commit}.
      *   - `stream` — a read-only event stream containing all matching events.
      * @throws {Error} if `types` is not a non-empty array.
      * @throws {Error} if `typeAccessor` is not configured and any of the listed type streams do not exist.
      */
-    query(types, matcher = null, minRevision = 1) {
+    query(types, matcher = null, minRevision = 1, raw = false) {
         assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for query.');
 
         const queryTypes = [];
@@ -541,8 +562,8 @@ class EventStore extends events.EventEmitter {
             queryTypes.push(type);
         }
 
-        const condition = new CommitCondition(types, matcher, this.storage.length);
-        const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher);
+        const condition = new CommitCondition(types, matcher, this.storage.length, raw);
+        const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher, raw);
         return { stream, condition };
     }
 
@@ -551,15 +572,21 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string} streamName The name of the stream to get.
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
+     * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream|boolean} The event stream or false if a stream with the name doesn't exist.
      */
-    getEventStream(streamName, minRevision = 1, maxRevision = -1) {
+    getEventStream(streamName, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        if (typeof predicate === 'boolean' && raw === false) {
+            raw = predicate;
+            predicate = null;
+        }
         if (!(streamName in this.streams)) {
             return false;
         }
-        return new EventStream(streamName, this, minRevision, maxRevision);
+        return new EventStream(streamName, this, minRevision, maxRevision, predicate, raw);
     }
 
     /**
@@ -567,12 +594,18 @@ class EventStore extends events.EventEmitter {
      * This is the same as `getEventStream('_all', ...)`.
      *
      * @api
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
+     * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream} The event stream.
      */
-    getAllEvents(minRevision = 1, maxRevision = -1) {
-        return this.getEventStream('_all', minRevision, maxRevision);
+    getAllEvents(minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        if (typeof predicate === 'boolean' && raw === false) {
+            raw = predicate;
+            predicate = null;
+        }
+        return this.getEventStream('_all', minRevision, maxRevision, predicate, raw);
     }
 
     /**
@@ -580,14 +613,18 @@ class EventStore extends events.EventEmitter {
      *
      * @param {string} streamName The (transient) name of the joined stream.
      * @param {Array<string>} streamNames An array of the stream names to join.
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {function(object, object): boolean|null} [predicate] An optional filter predicate
-     *   `(payload, metadata) => boolean`. Only events for which this returns truthy are yielded.
+     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
+     * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream} The joined event stream.
      * @throws {Error} if any of the streams doesn't exist.
      */
-    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null) {
+    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        if (typeof predicate === 'boolean' && raw === false) {
+            raw = predicate;
+            predicate = null;
+        }
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
         if (streamNames.length === 0) {
@@ -599,12 +636,12 @@ class EventStore extends events.EventEmitter {
         }
 
         if (streamNames.length === 1) {
-            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate);
+            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate, raw);
             stream.name = streamName;
             return stream;
         }
 
-        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate);
+        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate, raw);
     }
 
     /**
@@ -618,14 +655,20 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string} categoryName The name of the category to get a stream for. A category is a stream name prefix.
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
+     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
+     * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream} The joined event stream for all streams of the given category.
      * @throws {Error} If no stream for this category exists.
      */
-    getEventStreamForCategory(categoryName, minRevision = 1, maxRevision = -1) {
+    getEventStreamForCategory(categoryName, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+        if (typeof predicate === 'boolean' && raw === false) {
+            raw = predicate;
+            predicate = null;
+        }
         if (categoryName in this.streams) {
-            return this.getEventStream(categoryName, minRevision, maxRevision);
+            return this.getEventStream(categoryName, minRevision, maxRevision, predicate, raw);
         }
         const categoryStreams = Object.keys(this.streams).filter(streamName =>
             streamName.startsWith(categoryName + '-') ||
@@ -635,7 +678,7 @@ class EventStore extends events.EventEmitter {
         if (categoryStreams.length === 0) {
             throw new Error(`No streams for category '${categoryName}' exist.`);
         }
-        return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision);
+        return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision, predicate, raw);
     }
 
     /**
@@ -729,39 +772,82 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Get a durable consumer for the given stream that will keep receiving events from the last position.
+     * Get a durable consumer for the given stream, or look up an existing consumer by identifier.
      *
-     * @param {string} streamName The name of the stream to consume.
-     * @param {string} identifier The unique identifying name of this consumer.
+     * When called with a single argument, returns the running consumer registered under that
+     * identifier, or `null` if none is found — useful for read endpoints that need the live
+     * in-memory instance without creating a new one.
+     *
+     * When called with two or more arguments, creates (or re-uses) a Consumer for the given
+     * stream and identifier, registers it in `this.consumers`, and returns it.
+     *
+     * @param {string} streamNameOrIdentifier The stream name, or the consumer identifier when used as a registry lookup.
+     * @param {string} [identifier] The unique identifying name of this consumer. Omit for registry-only lookup.
      * @param {object} [initialState] The initial state of the consumer.
      * @param {number} [since] The stream revision to start consuming from.
-     * @returns {Consumer} A durable consumer for the given stream.
+     * @returns {Consumer|null} A durable consumer, or `null` when looking up by identifier and none is registered.
      */
-    getConsumer(streamName, identifier, initialState = {}, since = 0) {
+    getConsumer(streamNameOrIdentifier, identifier, initialState = {}, since = 0) {
+        if (identifier === undefined) {
+            return this.consumers.get(streamNameOrIdentifier) ?? null;
+        }
+        const streamName = streamNameOrIdentifier;
+        if (this.consumers.has(identifier)) {
+            return this.consumers.get(identifier);
+        }
         const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
         consumer.streamName = streamName;
+        this.consumers.set(identifier, consumer);
         return consumer;
     }
 
     /**
-     * Scan the existing consumers on this EventStore and asynchronously return a list of their names.
-     * @param {function(error: Error, consumers: array)} callback A callback that will receive an error as first and the list of consumers as second argument.
+     * Scan the existing consumers on this EventStore and asynchronously invoke a callback with the parsed list.
+     *
+     * Each consumer entry provides `{ name, stream, identifier }` parsed from the on-disk filename.
+     * Pass `autoStart = true` to eagerly open every discovered consumer and register it in
+     * `this.consumers` so that it is immediately available for registry lookups.
+     *
+     * @param {function(error: Error|null, consumers: Array<{name: string, stream: string, identifier: string}>)} callback
+     * @param {boolean} [autoStart=false] When true, calls `getConsumer(stream, identifier)` for each discovered consumer.
      */
-    scanConsumers(callback) {
+    scanConsumers(callback, autoStart = false) {
         const consumersPath = path.join(this.storage.indexDirectory, 'consumers');
         if (!fs.existsSync(consumersPath)) {
             callback(null, []);
             return;
         }
         const regex = new RegExp(`^${this.storage.storageFile}\\.([^.]*\\..*)$`);
-        const consumers = [];
-        scanForFiles(consumersPath, regex, consumers.push.bind(consumers), /* istanbul ignore next */ (err) => {
+        const consumerNames = [];
+        scanForFiles(consumersPath, regex, consumerNames.push.bind(consumerNames), /* istanbul ignore next */ (err) => {
             if (err) {
                 return callback(err, []);
+            }
+            const consumers = consumerNames.map(name => {
+                const splitIndex = name.lastIndexOf('.');
+                const indexName = name.slice(0, splitIndex);
+                const identifier = name.slice(splitIndex + 1);
+                const stream = parseStreamFromIndexName(indexName);
+                return { name, stream, identifier };
+            });
+            if (autoStart) {
+                for (const { stream, identifier } of consumers) {
+                    this.getConsumer(stream, identifier);
+                }
             }
             callback(null, consumers);
         });
     }
+}
+
+function parseStreamFromIndexName(indexName) {
+    if (indexName === '_all') {
+        return '_all';
+    }
+    if (indexName.startsWith('stream-')) {
+        return indexName.slice(7);
+    }
+    return indexName;
 }
 
 EventStore.Storage = Storage;

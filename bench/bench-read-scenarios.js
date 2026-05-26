@@ -21,6 +21,14 @@ function countAll(iter) {
     return n;
 }
 
+function countAllExact(iter, expected, label) {
+    const count = countAll(iter);
+    if (count !== expected) {
+        throw new Error(`${label}: expected ${expected} items but got ${count}`);
+    }
+    return count;
+}
+
 function populateStore(EventStore, directory) {
     return new Promise((resolve, reject) => {
         fs.emptyDirSync(directory);
@@ -57,12 +65,16 @@ populateStore(Stable, 'data/stable')
         Suite
             .add('1 - forward full scan [stable]',   () => countAll(stableStore.getAllEvents()))
             .add('1 - forward full scan [latest]',   () => countAll(latestStore.getAllEvents()))
+            .add('1 - forward full scan [latest(raw)]',   () => countAllExact(latestStore.getAllEvents(1, -1, true), EVENTS, 'latest raw'))
             .add('2 - backwards full scan [stable]', () => countAll(stableStore.getAllEvents(-1, 1)))
             .add('2 - backwards full scan [latest]', () => countAll(latestStore.getAllEvents(-1, 1)))
+            .add('2 - backwards full scan [latest(raw)]', () => countAll(latestStore.getAllEvents(-1, 1, true)))
             .add('3 - join stream [stable]',         () => countAll(stableStore.fromStreams('join', [STREAM_1, STREAM_2])))
             .add('3 - join stream [latest]',         () => countAll(latestStore.fromStreams('join', [STREAM_1, STREAM_2])))
+            .add('3 - join stream [latest(raw)]',         () => countAll(latestStore.fromStreams('join', [STREAM_1, STREAM_2], 0, -1, true)))
             .add('4 - range scan [stable]',          () => countAll(stableStore.getAllEvents(third, twoThirds)))
             .add('4 - range scan [latest]',          () => countAll(latestStore.getAllEvents(third, twoThirds)))
+            .add('4 - range scan [latest(raw)]',          () => countAll(latestStore.getAllEvents(third, twoThirds, true)))
             .run();
     })
     .catch((e) => { console.error(e); process.exit(1); });
