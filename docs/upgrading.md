@@ -172,3 +172,110 @@ const require = createRequire(import.meta.url);
 ```
 
 This is a compatibility shim and is generally not needed when consuming `event-storage` itself.
+
+---
+
+# Upgrading from 1.0 / 1.1 to 1.2
+
+Version 1.2 refines the Consumer API and tightens Stream-naming validation based on real-world usage patterns.
+
+---
+
+## 1. `scanConsumers()` callback shape changed
+
+The callback passed to `scanConsumers()` now receives a more useful descriptor object instead of raw filenames.
+
+### Before (1.0/1.1)
+
+```js
+eventstore.scanConsumers((err, consumers) => {
+    if (err) throw err;
+    // consumers is string[]
+    consumers.forEach(filename => {
+        console.log(filename); // e.g., "my-store.my-id.json"
+    });
+});
+```
+
+### After (1.2)
+
+```js
+eventstore.scanConsumers((err, consumers) => {
+    if (err) throw err;
+    // consumers is Array<{ name: string, stream: string, identifier: string }>
+    consumers.forEach(({ stream, identifier }) => {
+        console.log(stream, identifier); // e.g., "my-stream", "my-id"
+        
+        // Open the consumer directly
+        const consumer = eventstore.getConsumer(stream, identifier);
+    });
+});
+```
+
+**Why the change?** The raw filename was rarely useful; the parsed stream/identifier pair enables automatic consumer discovery and re-registration. If you need auto-start on boot, use:
+
+```js
+eventstore.scanConsumers((err, consumers) => {
+    if (err) throw err;
+    // autoStart=true opens all discovered consumers and registers them
+    // (or call .getConsumer(stream, identifier) explicitly for each one)
+}, autoStart = true);
+```
+
+---
+
+## 2. Stream-naming conventions expanded (and `typeAccessor` stricter)
+
+The `typeAccessor` (used when registering event types as streams) now **validates stream names** against a whitelist of safe characters.
+
+### What's allowed now
+
+| Character | Example | Notes |
+|---|---|---|
+| Alphanumeric + underscore | `user.created` | unchanged |
+| Dot, slash, hyphen | `payment-v2/created` | unchanged |
+| Colon | `account:verified` | Common in event sourcing patterns |
+| At-sign | `email@confirmed` | Safe for domain-style naming |
+| Tilde, plus, equals, hash | `saga~id`, `order+sku`, `version=1`, `tag#final` | Additional safe characters |
+
+### What's NOT allowed
+
+- **Whitespace** (space, tab, newline) — stream names must be single tokens
+- Other special chars — `*`, `?`, `"`, `<`, `>`, `|`, `\` are forbidden
+- Repeated separators are not allowed: names like `Order..Placed`, `order//created`, `a::b`, or trailing separators like `order-` are rejected
+
+### Before (1.0/1.1)
+
+Would silently accept any string from `typeAccessor`:
+
+```js
+const eventstore = new EventStore('my-store', {
+    typeAccessor: (e) => e.type
+});
+eventstore.commit('stream-1', [{ type: 'user created', payload: {} }], (err) => {
+    // 1.0: accepted "user created" (with space)
+    // 1.2: throws "Invalid stream name"
+});
+```
+
+### After (1.2)
+
+Validates on each commit and raises a clear error if the stream name is invalid:
+
+```js
+// Before committing, ensure typeAccessor returns valid names:
+const eventstore = new EventStore('my-store', {
+    typeAccessor: (e) => e.type
+});
+eventstore.commit('stream-1', [{ type: 'user_created', payload: {} }], (err) => {
+    // 1.2: accepted (underscores are fine)
+});
+
+// Or use separators like colon/dash instead of spaces:
+eventstore.commit('stream-1', [{ type: 'user:created', payload: {} }], (err) => {
+    // 1.2: accepted (colon is now allowed)
+});
+```
+
+**Action required:** If your `typeAccessor` returns names with spaces (or other disallowed chars), update it to use safe separators (`_`, `:`, `-`, `.`, etc.).
+
