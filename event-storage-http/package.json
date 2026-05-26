@@ -8,12 +8,16 @@
     ".": "./src/index.js"
   },
   "scripts": {
-    "benchmark": "node ./bench/compare-readable-partitions.js",
+    "bench:http": "node ./bench/bench-http-layer.js",
+    "bench:http:write": "node ./bench/bench-http-layer.js write",
     "benchmark:streaming": "node ./bench/bench-raw-vs-ndjson-streaming.js",
     "test": "node --test ./test/*.test.js"
   },
   "engines": {
     "node": ">=18.0"
+  },
+  "peerDependencies": {
+    "event-storage": ">=1.0.0"
   },
   "dependencies": {
     "express": "^5.2.1"

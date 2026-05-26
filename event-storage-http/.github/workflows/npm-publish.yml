@@ -1,0 +1,112 @@
+name: npm publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v0.1.0)'
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.target_commitish }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+
+      - run: npm ci --ignore-scripts
+
+      - name: Validate package is not marked private
+        run: |
+          PRIVATE=$(node -p "require('./package.json').private || false")
+          test "$PRIVATE" = "false" || { echo "ERROR: package.json has \"private\": true — remove it before publishing"; exit 1; }
+
+      - name: Validate version
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] \
+            || { echo "ERROR: invalid tag format '$TAG'"; exit 1; }
+          echo "tag=$TAG  version=$VERSION"
+          test "v$VERSION" = "$TAG" || { echo "ERROR: Tag ($TAG) does not match package.json version (v$VERSION)"; exit 1; }
+
+      - name: Pack
+        run: npm pack
+
+      - name: Verify pack contents
+        run: |
+          TARBALL=$(ls event-storage-http-*.tgz)
+          FILES=$(tar tzf "$TARBALL")
+          echo "$FILES"
+
+          # Required files must be present
+          REQUIRED=(
+            "package/src/index.js"
+            "package/src/EventStoreHttpApi.js"
+            "package/README.md"
+          )
+          for f in "${REQUIRED[@]}"; do
+            echo "$FILES" | grep -qF "$f" || { echo "ERROR: required file '$f' is missing from the package"; exit 1; }
+          done
+
+          # Sensitive / unwanted files must not be present
+          FORBIDDEN=(
+            "\.env"
+            "node_modules/"
+            "/data/"
+          )
+          for pattern in "${FORBIDDEN[@]}"; do
+            if echo "$FILES" | grep -qE "$pattern"; then
+              echo "ERROR: package contains files matching forbidden pattern '$pattern'"
+              exit 1
+            fi
+          done
+
+          echo "Package contents verified successfully."
+
+      - name: Run tests
+        run: npm test
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.target_commitish }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - run: npm ci --ignore-scripts
+
+      - run: npm publish --provenance --access public
+
