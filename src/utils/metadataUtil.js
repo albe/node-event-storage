@@ -9,15 +9,15 @@ const BYTE_OPEN_ARRAY = 0x5b;
 const BYTE_CLOSE_ARRAY = 0x5d;
 const BYTE_COMMA = 0x2c;
 
-function isNonArrayObject(value) {
+function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function matchesProperty(documentValue, matcherValue) {
+function propertyMatchesValue(documentValue, matcherValue) {
     if (Array.isArray(matcherValue)) {
         return matcherValue.includes(documentValue);
     }
-    if (isNonArrayObject(matcherValue)) {
+    if (isPlainObject(matcherValue)) {
         return matches(documentValue, matcherValue);
     }
     return typeof matcherValue === 'undefined' || documentValue === matcherValue;
@@ -71,7 +71,7 @@ function matches(document, matcher) {
     if (typeof matcher === 'function') return matcher(document);
 
     for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (!matchesProperty(document[prop], matcher[prop])) {
+        if (!propertyMatchesValue(document[prop], matcher[prop])) {
             return false;
         }
     }
@@ -165,14 +165,16 @@ function buildRawBufferMatcher(matcher = {}) {
  */
 function preCheck(buffer, startOffset, node) {
     for (const child of node.children) {
-        if (child.valuePatterns && !findPatternOffset(buffer, startOffset, child.valuePatterns, child.valueMatches)) {
+        if (child.valuePatterns && !populatePatternMatches(buffer, startOffset, child.valuePatterns, child.valueMatches)) {
             return false;
         }
         if (child.objectPattern) {
-            if ((child.objMatch = buffer.indexOf(child.objectPattern, startOffset)) === -1) {
+            const objectMatch = buffer.indexOf(child.objectPattern, startOffset);
+            if (objectMatch === -1) {
                 return false;
             }
-            if (!preCheck(buffer, child.objMatch, child.node)) {
+            child.objMatch = objectMatch;
+            if (!preCheck(buffer, objectMatch, child.node)) {
                 return false;
             }
         }
@@ -204,7 +206,7 @@ function buildMatcherTreeChild(key, value) {
         child.valuePatterns = value.map(item => buildValuePattern(keyPrefix, item));
         return child;
     }
-    if (isNonArrayObject(value)) {
+    if (isPlainObject(value)) {
         child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
         child.node = buildMatcherTree(value);
         return child;
@@ -243,7 +245,7 @@ function matchesNode(buffer, startOffset, node) {
     return true;
 }
 
-function findPatternOffset(buffer, startOffset, patterns, matchesOut) {
+function populatePatternMatches(buffer, startOffset, patterns, matchesOut) {
     for (let i = 0; i < patterns.length; i++) {
         const match = buffer.indexOf(patterns[i], startOffset);
         matchesOut[i] = match;
