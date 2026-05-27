@@ -430,11 +430,7 @@ class WritableStorage extends ReadableStorage {
             try {
                 this.forEachDocument((document, indexEntry) => {
                     if (matches(document, matcher)) {
-                        if (!index.isOpen()) {
-                            index.open();
-                        }
                         index.add(indexEntry);
-                        this.emit('index-add', name, index.length, document);
                     }
                 });
             } catch (e) {
