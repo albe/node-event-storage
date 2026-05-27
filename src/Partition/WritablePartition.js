@@ -196,7 +196,7 @@ class WritablePartition extends ReadablePartition {
     /**
      * Write the given data to the partition without buffering.
      * @private
-     * @param {string} data The (padded) data to write to storage.
+     * @param {string|Buffer} data The data to write to storage.
      * @param {number} dataSize The size of the raw document without padding.
      * @param {number} [sequenceNumber] The external sequence number to store with the document.
      * @param {function} [callback] A function that will be called when the document is written to disk.
@@ -208,7 +208,9 @@ class WritablePartition extends ReadablePartition {
 
         let bytesWritten = 0;
         bytesWritten += fs.writeSync(this.fd, this.writeMetaBuffer, 0, DOCUMENT_HEADER_SIZE);
-        bytesWritten += fs.writeSync(this.fd, data);
+        bytesWritten += Buffer.isBuffer(data)
+            ? fs.writeSync(this.fd, data, 0, dataSize)
+            : fs.writeSync(this.fd, data);
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
         bytesWritten += fs.writeSync(this.fd, DOCUMENT_PAD.substr(0, padSize));
         this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
@@ -223,7 +225,7 @@ class WritablePartition extends ReadablePartition {
     /**
      * Write the given data to the partition with buffering. Will flush the write buffer if it is necessary.
      * @private
-     * @param {string} data The (padded) data to write to storage.
+     * @param {string|Buffer} data The data to write to storage.
      * @param {number} dataSize The size of the raw document without padding.
      * @param {number} [sequenceNumber] The external sequence number to store with the document.
      * @param {function} [callback] A function that will be called when the document is written to disk.
@@ -235,7 +237,12 @@ class WritablePartition extends ReadablePartition {
 
         let bytesWritten = 0;
         bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
-        bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
+        if (Buffer.isBuffer(data)) {
+            data.copy(this.writeBuffer, this.writeBufferCursor + bytesWritten, 0, dataSize);
+            bytesWritten += dataSize;
+        } else {
+            bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
+        }
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
         bytesWritten += this.writeBuffer.write(DOCUMENT_PAD.substr(0, padSize), this.writeBufferCursor + bytesWritten, 'utf8');
         this.writeBuffer.writeUInt32BE(dataSize, this.writeBufferCursor + bytesWritten);
@@ -252,7 +259,7 @@ class WritablePartition extends ReadablePartition {
 
     /**
      * @api
-     * @param {string} data The data to write to storage.
+     * @param {string|Buffer} data The data to write to storage.
      * @param {number} [sequenceNumber] The external sequence number to store with the document.
      * @param {function} [callback] A function that will be called when the document is written to disk.
      * @returns {number|boolean} The file position at which the data was written or false on error.
@@ -263,7 +270,7 @@ class WritablePartition extends ReadablePartition {
             callback = sequenceNumber;
             sequenceNumber = null;
         }
-        const dataSize = Buffer.byteLength(data, 'utf8');
+        const dataSize = Buffer.isBuffer(data) ? data.byteLength : Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
         const dataPosition = this.size;
