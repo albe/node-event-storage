@@ -74,7 +74,7 @@ class WritableStorage extends ReadableStorage {
             ? config.serializeToBuffer
             : null;
         this.serializeBuffer = this.serializeToBuffer
-            ? Buffer.allocUnsafeSlow(config.writeBufferSize)
+            ? Buffer.alloc(config.writeBufferSize)
             : null;
         this.serializeBufferHelpers = this.serializeToBuffer
             ? { ensureCapacity: (requiredSize) => this.ensureSerializeBufferCapacity(requiredSize) }
@@ -89,6 +89,7 @@ class WritableStorage extends ReadableStorage {
      * @returns {Buffer}
      */
     ensureSerializeBufferCapacity(requiredSize) {
+        // Coerce to an unsigned integer to reject negative/fractional sizes via the bounds checks below.
         requiredSize = requiredSize >>> 0; // jshint ignore:line
         const current = this.serializeBuffer;
         if (requiredSize <= current.byteLength) {
@@ -98,7 +99,7 @@ class WritableStorage extends ReadableStorage {
         while (newSize < requiredSize) {
             newSize *= 2;
         }
-        const next = Buffer.allocUnsafeSlow(newSize);
+        const next = Buffer.alloc(newSize);
         current.copy(next, 0, 0, current.byteLength);
         this.serializeBuffer = next;
         return next;
