@@ -363,16 +363,6 @@ class WritableStorage extends ReadableStorage {
         return super.getPartition(partitionIdentifier);
     }
 
-    addToSecondaryIndexes(indexEntry, document) {
-        this.forEachSecondaryIndex((index, name) => {
-            if (!index.isOpen()) {
-                index.open();
-            }
-            index.add(indexEntry);
-            this.emit('index-add', name, index.length, document);
-        }, document);
-    }
-
     /**
      * @api
      * @param {object} document The document to write to storage.
@@ -392,7 +382,11 @@ class WritableStorage extends ReadableStorage {
         assert(position !== false, 'Error writing document.');
 
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
-        this.addToSecondaryIndexes(indexEntry, document);
+        this.forEachSecondaryIndex((index, name) => {
+            index.open();
+            index.add(indexEntry);
+            this.emit('index-add', name, index.length, document);
+        }, document);
 
         return this.index.length;
     }
