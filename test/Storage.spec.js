@@ -1199,10 +1199,13 @@ describe('Storage', function() {
     });
 
     it('prefers deserializeFromBuffer over serializer.deserialize', function() {
+        const deserializerShouldNotBeCalled = () => {
+            throw new Error('serializer.deserialize should not be used');
+        };
         storage = createStorage({
             serializer: {
                 serialize: JSON.stringify,
-                deserialize: () => { throw new Error('serializer.deserialize should not be used'); }
+                deserialize: deserializerShouldNotBeCalled
             },
             deserializeFromBuffer: (buffer) => JSON.parse(buffer.toString('utf8'))
         });
@@ -1214,10 +1217,13 @@ describe('Storage', function() {
 
     it('supports serializeToBuffer with dynamic buffer growth', function() {
         let grew = false;
+        const serializerShouldNotBeCalled = () => {
+            throw new Error('serializer.serialize should not be used');
+        };
         storage = createStorage({
             writeBufferSize: 64,
             serializer: {
-                serialize: () => { throw new Error('serializer.serialize should not be used'); },
+                serialize: serializerShouldNotBeCalled,
                 deserialize: JSON.parse
             },
             serializeToBuffer: (buffer, document, helpers) => {

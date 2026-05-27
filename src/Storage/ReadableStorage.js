@@ -293,12 +293,6 @@ class ReadableStorage extends events.EventEmitter {
         return raw ? { buffer, time64: headerOut.time64, sequenceNumber: headerOut.sequenceNumber } : this.deserializeDocument(buffer);
     }
 
-    /**
-     * Deserialize a document buffer using either the buffer-native deserializer or the string serializer fallback.
-     * @protected
-     * @param {Buffer} buffer
-     * @returns {object}
-     */
     deserializeDocument(buffer) {
         if (this.deserializeFromBuffer) {
             return this.deserializeFromBuffer(buffer);

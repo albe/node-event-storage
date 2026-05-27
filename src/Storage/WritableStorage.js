@@ -81,13 +81,7 @@ class WritableStorage extends ReadableStorage {
             : null;
     }
 
-    /**
-     * Ensure the serializer buffer can hold at least requiredSize bytes.
-     * Existing bytes are preserved for serializers that grow in multiple steps.
-     * @protected
-     * @param {number} requiredSize
-     * @returns {Buffer}
-     */
+    // Keep existing bytes when growing so serializers can grow in multiple steps.
     ensureSerializeBufferCapacity(requiredSize) {
         // Coerce to an unsigned integer to reject negative/fractional sizes via the bounds checks below.
         requiredSize = requiredSize >>> 0; // jshint ignore:line
@@ -105,18 +99,12 @@ class WritableStorage extends ReadableStorage {
         return next;
     }
 
-    /**
-     * Serialize one document either via buffer-native serializer or string serializer fallback.
-     * @protected
-     * @param {object} document
-     * @returns {string|Buffer}
-     */
     serializeDocument(document) {
         if (!this.serializeToBuffer) {
             return this.serializer.serialize(document).toString();
         }
         const written = this.serializeToBuffer(this.serializeBuffer, document, this.serializeBufferHelpers);
-        assert(Number.isInteger(written), 'serializeToBuffer must return the number of written bytes.');
+        assert(Number.isInteger(written), 'serializeToBuffer must return an integer number of written bytes.');
         assert(written > 0, 'serializeToBuffer must write at least one byte.');
         assert(written <= this.serializeBuffer.byteLength, 'serializeToBuffer wrote beyond the provided buffer.');
         return this.serializeBuffer.subarray(0, written);
