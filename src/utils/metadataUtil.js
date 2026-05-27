@@ -9,8 +9,7 @@ function isPlainObject(value) {
 function propertyMatchesValue(documentValue, matcherValue) {
     if (Array.isArray(matcherValue)) {
         return matcherValue.includes(documentValue);
-    }
-    if (isPlainObject(matcherValue)) {
+    } else if (matcherValue && typeof matcherValue === 'object') {
         return matches(documentValue, matcherValue);
     }
     return typeof matcherValue === 'undefined' || documentValue === matcherValue;
@@ -156,9 +155,8 @@ function buildRawBufferMatcher(matcher = {}) {
 function preCheck(buffer, startOffset, node) {
     for (const child of node.children) {
         if (child.valuePatterns && !child.valuePatterns.some((pattern, i) => {
-            const match = buffer.indexOf(pattern, startOffset);
-            child.valueMatches[i] = match;
-            return match !== -1;
+            child.valueMatches[i] = buffer.indexOf(pattern, startOffset);
+            return child.valueMatches[i] !== -1;
         })) {
             return false;
         }
