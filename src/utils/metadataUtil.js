@@ -202,8 +202,7 @@ function buildMatcherTreeChild(key, value) {
         }
         child.valuePatterns = value.map(item => buildValuePattern(keyPrefix, item));
         return child;
-    }
-    if (isPlainObject(value)) {
+    } else if (value && typeof value === 'object') {
         child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
         child.node = buildMatcherTree(value);
         return child;
