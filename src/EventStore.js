@@ -6,9 +6,9 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
-import { assert, getPropertyAtPath } from './util.js';
-import { ensureDirectory, scanForFiles } from './fsUtil.js';
-import { buildTypeMatcherFn } from './metadataUtil.js';
+import { assert, getPropertyAtPath } from './utils/util.js';
+import { ensureDirectory, scanForFiles } from './utils/fsUtil.js';
+import { buildTypeMatcherFn } from './utils/metadataUtil.js';
 
 const ExpectedVersion = {
     Any: -1,
@@ -20,6 +20,7 @@ const ExpectedVersion = {
  */
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
 const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
+const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 class OptimisticConcurrencyError extends Error {}
 
@@ -240,11 +241,8 @@ class EventStore extends events.EventEmitter {
      * @returns {this}
      */
     on(event, listener) {
-        if (event === 'preCommit' || event === 'preRead') {
-            if (event === 'preCommit') {
-                assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not register a preCommit handler on it.');
-            }
-            this.storage.on(event, listener);
+        if (this.isStorageHookEvent(event)) {
+            this.delegateStorageHookEvent('on', event, listener);
             return this;
         }
         return super.on(event, listener);
@@ -265,11 +263,8 @@ class EventStore extends events.EventEmitter {
      * @returns {this}
      */
     once(event, listener) {
-        if (event === 'preCommit' || event === 'preRead') {
-            if (event === 'preCommit') {
-                assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not register a preCommit handler on it.');
-            }
-            this.storage.once(event, listener);
+        if (this.isStorageHookEvent(event)) {
+            this.delegateStorageHookEvent('once', event, listener);
             return this;
         }
         return super.once(event, listener);
@@ -284,11 +279,22 @@ class EventStore extends events.EventEmitter {
      * @returns {this}
      */
     off(event, listener) {
-        if (event === 'preCommit' || event === 'preRead') {
+        if (this.isStorageHookEvent(event)) {
             this.storage.off(event, listener);
             return this;
         }
         return super.off(event, listener);
+    }
+
+    isStorageHookEvent(event) {
+        return STORAGE_HOOK_EVENTS.has(event);
+    }
+
+    delegateStorageHookEvent(method, event, listener) {
+        if (event === 'preCommit') {
+            assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not register a preCommit handler on it.');
+        }
+        this.storage[method](event, listener);
     }
 
     /**
@@ -433,6 +439,20 @@ class EventStore extends events.EventEmitter {
         return type;
     }
 
+    getExistingQueryTypes(types) {
+        const queryTypes = [];
+        for (const type of types) {
+            if (type in this.streams) {
+                queryTypes.push(type);
+                continue;
+            }
+            if (!this.typeAccessor) {
+                throw new Error(`Type stream "${type}" does not exist. Create it with createEventStream() first, or configure typeAccessor to have type streams created automatically on commit.`);
+            }
+        }
+        return queryTypes;
+    }
+
     /**
      * Commit a list of events for the given stream name, which is expected to be at the given version.
      * Note that the events committed may still appear in other streams too - the given stream name is only
@@ -546,22 +566,7 @@ class EventStore extends events.EventEmitter {
      */
     query(types, matcher = null, minRevision = 1, raw = false) {
         assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for query.');
-
-        const queryTypes = [];
-        for (const type of types) {
-            if (!(type in this.streams)) {
-                if (this.typeAccessor) {
-                    // typeAccessor is configured: type streams are created on commit, so a missing
-                    // stream simply means no event of this type has been committed yet — treat as empty.
-                    continue;
-                }
-                // No typeAccessor: the stream was never created; we cannot know whether events of
-                // this type exist in the store, so throw to avoid an unintentional full-store scan.
-                throw new Error(`Type stream "${type}" does not exist. Create it with createEventStream() first, or configure typeAccessor to have type streams created automatically on commit.`);
-            }
-            queryTypes.push(type);
-        }
-
+        const queryTypes = this.getExistingQueryTypes(types);
         const condition = new CommitCondition(types, matcher, this.storage.length, raw);
         const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher, raw);
         return { stream, condition };
@@ -579,10 +584,7 @@ class EventStore extends events.EventEmitter {
      * @returns {EventStream|boolean} The event stream or false if a stream with the name doesn't exist.
      */
     getEventStream(streamName, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        if (typeof predicate === 'boolean' && raw === false) {
-            raw = predicate;
-            predicate = null;
-        }
+        ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
         if (!(streamName in this.streams)) {
             return false;
         }
@@ -601,10 +603,7 @@ class EventStore extends events.EventEmitter {
      * @returns {EventStream} The event stream.
      */
     getAllEvents(minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        if (typeof predicate === 'boolean' && raw === false) {
-            raw = predicate;
-            predicate = null;
-        }
+        ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
         return this.getEventStream('_all', minRevision, maxRevision, predicate, raw);
     }
 
@@ -621,10 +620,7 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} if any of the streams doesn't exist.
      */
     fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        if (typeof predicate === 'boolean' && raw === false) {
-            raw = predicate;
-            predicate = null;
-        }
+        ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
         if (streamNames.length === 0) {
@@ -663,10 +659,7 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} If no stream for this category exists.
      */
     getEventStreamForCategory(categoryName, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        if (typeof predicate === 'boolean' && raw === false) {
-            raw = predicate;
-            predicate = null;
-        }
+        ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
         if (categoryName in this.streams) {
             return this.getEventStream(categoryName, minRevision, maxRevision, predicate, raw);
         }
@@ -848,6 +841,13 @@ function parseStreamFromIndexName(indexName) {
         return indexName.slice(7);
     }
     return indexName;
+}
+
+function normalizePredicateRaw(predicate, raw) {
+    if (typeof predicate === 'boolean' && raw === false) {
+        return { predicate: null, raw: predicate };
+    }
+    return { predicate, raw };
 }
 
 EventStore.Storage = Storage;

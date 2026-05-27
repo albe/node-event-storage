@@ -3,9 +3,9 @@ import path from 'path';
 import WritablePartition from '../Partition/WritablePartition.js';
 import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableIndex.js';
 import ReadableStorage from './ReadableStorage.js';
-import { assert } from '../util.js';
-import { ensureDirectory } from '../fsUtil.js';
-import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../metadataUtil.js';
+import { assert } from '../utils/util.js';
+import { ensureDirectory } from '../utils/fsUtil.js';
+import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
@@ -312,6 +312,36 @@ class WritableStorage extends ReadableStorage {
         this.on('preCommit', hook);
     }
 
+    getPartitionIdForName(partitionShortName, partitionName) {
+        const partitionId = this.partitionIds[partitionShortName] ?? WritablePartition.idFor(partitionName);
+        this.partitionIds[partitionShortName] = partitionId;
+        return partitionId;
+    }
+
+    buildPartitionConfig(partitionShortName) {
+        if (typeof this.partitionConfig.metadata !== 'function') {
+            return this.partitionConfig;
+        }
+        return { ...this.partitionConfig, metadata: this.partitionConfig.metadata(partitionShortName) };
+    }
+
+    ensurePartitionDirectory(partitionName) {
+        if (!partitionName.includes('/')) {
+            return;
+        }
+        ensureDirectory(path.join(this.dataDirectory, path.dirname(partitionName)));
+    }
+
+    createNamedPartition(partitionId, partitionName, partitionShortName) {
+        if (this.partitions.has(partitionId)) {
+            return;
+        }
+        const partitionConfig = this.buildPartitionConfig(partitionShortName);
+        this.ensurePartitionDirectory(partitionName);
+        this.partitions.add(partitionId, this.createPartition(partitionName, partitionConfig));
+        this.emit('partition-created', partitionId);
+    }
+
     /**
      * Get a partition either by name or by id.
      * If a partition with the given name does not exist, a new one will be created.
@@ -328,20 +358,20 @@ class WritableStorage extends ReadableStorage {
         if (typeof partitionIdentifier === 'string') {
             const partitionShortName = partitionIdentifier;
             const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
-            partitionIdentifier = this.partitionIds[partitionShortName] ?? WritablePartition.idFor(partitionName);
-            this.partitionIds[partitionShortName] = partitionIdentifier;
-            if (!this.partitions.has(partitionIdentifier)) {
-                const partitionConfig = typeof this.partitionConfig.metadata === 'function'
-                    ? { ...this.partitionConfig, metadata: this.partitionConfig.metadata(partitionShortName) }
-                    : this.partitionConfig;
-                if (partitionName.includes('/')) {
-                    ensureDirectory(path.join(this.dataDirectory, path.dirname(partitionName)));
-                }
-                this.partitions.add(partitionIdentifier, this.createPartition(partitionName, partitionConfig));
-                this.emit('partition-created', partitionIdentifier);
-            }
+            partitionIdentifier = this.getPartitionIdForName(partitionShortName, partitionName);
+            this.createNamedPartition(partitionIdentifier, partitionName, partitionShortName);
         }
         return super.getPartition(partitionIdentifier);
+    }
+
+    addToSecondaryIndexes(indexEntry, document) {
+        this.forEachSecondaryIndex((index, name) => {
+            if (!index.isOpen()) {
+                index.open();
+            }
+            index.add(indexEntry);
+            this.emit('index-add', name, index.length, document);
+        }, document);
     }
 
     /**
@@ -363,13 +393,7 @@ class WritableStorage extends ReadableStorage {
         assert(position !== false, 'Error writing document.');
 
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
-        this.forEachSecondaryIndex((index, name) => {
-            if (!index.isOpen()) {
-                index.open();
-            }
-            index.add(indexEntry);
-            this.emit('index-add', name, index.length, document);
-        }, document);
+        this.addToSecondaryIndexes(indexEntry, document);
 
         return this.index.length;
     }

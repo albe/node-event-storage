@@ -62,7 +62,7 @@ jobs:
             "package/src/Storage.js"
             "package/src/Partition.js"
             "package/src/Index.js"
-            "package/src/metadataUtil.js"
+            "package/src/utils/metadataUtil.js"
           )
           for f in "${REQUIRED[@]}"; do
             echo "$FILES" | grep -qF "$f" || { echo "ERROR: required file '$f' is missing from the package"; exit 1; }

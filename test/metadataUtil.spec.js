@@ -1,5 +1,5 @@
 import expect from 'expect.js';
-import { buildRawBufferMatcher } from '../src/metadataUtil.js';
+import { buildRawBufferMatcher } from '../src/utils/metadataUtil.js';
 
 describe('metadataUtil', function() {
 
@@ -131,5 +131,4 @@ describe('metadataUtil', function() {
     });
 
 });
-
 

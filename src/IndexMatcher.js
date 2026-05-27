@@ -1,5 +1,5 @@
-import { getPropertyAtPath } from './util.js';
-import { matches } from './metadataUtil.js';
+import { getPropertyAtPath } from './utils/util.js';
+import { matches } from './utils/metadataUtil.js';
 
 /**
  * @typedef {object|function(object):boolean} Matcher

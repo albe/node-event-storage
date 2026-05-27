@@ -1,6 +1,6 @@
 import stream from 'stream';
-import { assert } from './util.js';
-import { buildRawBufferMatcher, matches } from './metadataUtil.js';
+import { assert } from './utils/util.js';
+import { buildRawBufferMatcher, matches } from './utils/metadataUtil.js';
 
 const NDJSON_NEWLINE = Buffer.from('\n');
 

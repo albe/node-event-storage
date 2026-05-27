@@ -43,10 +43,8 @@
     "src/Partition/*.js",
     "src/Storage/*.js",
     "src/WatchesFile.js",
-    "src/util.js",
-    "src/fsUtil.js",
-    "src/metadataUtil.js",
-    "index.js"
+    "index.js",
+    "src/utils/*.js"
   ],
   "license": "MIT",
   "maintainers": [

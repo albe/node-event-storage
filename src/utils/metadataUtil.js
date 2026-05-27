@@ -1,6 +1,28 @@
 import crypto from 'crypto';
 import { assertEqual } from './util.js';
 
+const BYTE_QUOTE = 0x22;
+const BYTE_ESCAPE = 0x5c;
+const BYTE_OPEN_OBJECT = 0x7b;
+const BYTE_CLOSE_OBJECT = 0x7d;
+const BYTE_OPEN_ARRAY = 0x5b;
+const BYTE_CLOSE_ARRAY = 0x5d;
+const BYTE_COMMA = 0x2c;
+
+function isNonArrayObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function matchesProperty(documentValue, matcherValue) {
+    if (Array.isArray(matcherValue)) {
+        return matcherValue.includes(documentValue);
+    }
+    if (isNonArrayObject(matcherValue)) {
+        return matches(documentValue, matcherValue);
+    }
+    return typeof matcherValue === 'undefined' || documentValue === matcherValue;
+}
+
 /**
  * Build a buffer containing the file magic header and a JSON stringified metadata block, padded to be a multiple of 16 bytes long.
  *
@@ -49,15 +71,7 @@ function matches(document, matcher) {
     if (typeof matcher === 'function') return matcher(document);
 
     for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (Array.isArray(matcher[prop])) {
-            if (!matcher[prop].includes(document[prop])) {
-                return false;
-            }
-        } else if (typeof matcher[prop] === 'object') {
-            if (!matches(document[prop], matcher[prop])) {
-                return false;
-            }
-        } else if (typeof matcher[prop] !== 'undefined' && document[prop] !== matcher[prop]) {
+        if (!matchesProperty(document[prop], matcher[prop])) {
             return false;
         }
     }
@@ -151,8 +165,7 @@ function buildRawBufferMatcher(matcher = {}) {
  */
 function preCheck(buffer, startOffset, node) {
     for (const child of node.children) {
-        let i = 0;
-        if (child.valuePatterns && !child.valuePatterns.some(pattern => (child.valueMatches[i++] = buffer.indexOf(pattern, startOffset)) !== -1)) {
+        if (child.valuePatterns && !findPatternOffset(buffer, startOffset, child.valuePatterns, child.valueMatches)) {
             return false;
         }
         if (child.objectPattern) {
@@ -175,25 +188,33 @@ function buildMatcherTree(matcher) {
     const node = { children: [] };
 
     for (const [key, value] of Object.entries(matcher)) {
-        const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
-        const child = { objectPattern: null, valuePatterns: null, node: null, objMatch: null, valueMatches: [] };
-
-        if (Array.isArray(value)) {
-            if (value.some(item => item && typeof item === 'object')) {
-                throw new TypeError('Array matcher values must be scalars.');
-            }
-            child.valuePatterns = value.map(item => Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(item), 'utf8')]));
-        } else if (value && typeof value === 'object') {
-            child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
-            child.node = buildMatcherTree(value);
-        } else {
-            child.valuePatterns = [Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(value), 'utf8')])];
-        }
-
-        node.children.push(child);
+        node.children.push(buildMatcherTreeChild(key, value));
     }
 
     return node;
+}
+
+function buildMatcherTreeChild(key, value) {
+    const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
+    const child = { objectPattern: null, valuePatterns: null, node: null, objMatch: null, valueMatches: [] };
+    if (Array.isArray(value)) {
+        if (value.some(item => item && typeof item === 'object')) {
+            throw new TypeError('Array matcher values must be scalars.');
+        }
+        child.valuePatterns = value.map(item => buildValuePattern(keyPrefix, item));
+        return child;
+    }
+    if (isNonArrayObject(value)) {
+        child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
+        child.node = buildMatcherTree(value);
+        return child;
+    }
+    child.valuePatterns = [buildValuePattern(keyPrefix, value)];
+    return child;
+}
+
+function buildValuePattern(keyPrefix, value) {
+    return Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(value), 'utf8')]);
 }
 
 /**
@@ -203,8 +224,7 @@ function buildMatcherTree(matcher) {
 function matchesNode(buffer, startOffset, node) {
     for (const child of node.children) {
         if (child.valuePatterns) {
-            let i = 0;
-            if (!child.valuePatterns.some(pattern => indexOfSameLevel(buffer, pattern, startOffset, child.valueMatches[i++]) !== -1)) {
+            if (!findSameLevelPatternOffset(buffer, startOffset, child.valuePatterns, child.valueMatches)) {
                 return false;
             }
         }
@@ -221,6 +241,26 @@ function matchesNode(buffer, startOffset, node) {
     }
 
     return true;
+}
+
+function findPatternOffset(buffer, startOffset, patterns, matchesOut) {
+    for (let i = 0; i < patterns.length; i++) {
+        const match = buffer.indexOf(patterns[i], startOffset);
+        matchesOut[i] = match;
+        if (match !== -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function findSameLevelPatternOffset(buffer, startOffset, patterns, preMatches) {
+    for (let i = 0; i < patterns.length; i++) {
+        if (indexOfSameLevel(buffer, patterns[i], startOffset, preMatches[i]) !== -1) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -248,11 +288,11 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
 
     while (i < buffer.length) {
         if (inString) {
-            if (buffer[i] === 0x5c) { // '\\'
+            if (buffer[i] === BYTE_ESCAPE) { // '\\'
                 i += 2;
                 continue;
             }
-            if (buffer[i] === 0x22) { // '"'
+            if (buffer[i] === BYTE_QUOTE) { // '"'
                 inString = false;
             }
             i++;
@@ -260,11 +300,11 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
         }
 
         const ch = buffer[i];
-        if (ch === 0x7b || ch === 0x5b) { // '{' or '['
+        if (ch === BYTE_OPEN_OBJECT || ch === BYTE_OPEN_ARRAY) { // '{' or '['
             depth++;
             i++;
             continue;
-        } else if (ch === 0x7d || ch === 0x5d) { // '}' or ']'
+        } else if (ch === BYTE_CLOSE_OBJECT || ch === BYTE_CLOSE_ARRAY) { // '}' or ']'
             depth--;
 
             if (depth < 0) {
@@ -273,17 +313,17 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
 
             i++;
             continue;
-        } else if (ch === 0x22) { // '"'
+        } else if (ch === BYTE_QUOTE) { // '"'
             inString = true;
         }
 
         if (i >= matchPosition) {
-            if (i === matchPosition && ch === 0x22 && depth === 0) { // '"'
+            if (i === matchPosition && ch === BYTE_QUOTE && depth === 0) { // '"'
                 const end = i + pattern.length;
-                if (pattern[pattern.length - 1] === 0x7b) { // '{'
+                if (pattern[pattern.length - 1] === BYTE_OPEN_OBJECT) { // '{'
                     return i;
                 }
-                if (buffer[end] === 0x2c || buffer[end] === 0x7d || buffer[end] === 0x5d) { // ',' or '}' or ']'
+                if (buffer[end] === BYTE_COMMA || buffer[end] === BYTE_CLOSE_OBJECT || buffer[end] === BYTE_CLOSE_ARRAY) { // ',' or '}' or ']'
                     return i;
                 }
             }
