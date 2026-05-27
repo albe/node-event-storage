@@ -1,13 +1,6 @@
 import crypto from 'crypto';
 import { assertEqual } from './util.js';
-
-const BYTE_QUOTE = 0x22;
-const BYTE_ESCAPE = 0x5c;
-const BYTE_OPEN_OBJECT = 0x7b;
-const BYTE_CLOSE_OBJECT = 0x7d;
-const BYTE_OPEN_ARRAY = 0x5b;
-const BYTE_CLOSE_ARRAY = 0x5d;
-const BYTE_COMMA = 0x2c;
+import { BYTE_OPEN_OBJECT, indexOfSameLevel } from './jsonUtil.js';
 
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -149,7 +142,7 @@ function buildRawBufferMatcher(matcher = {}) {
     }
 
     return function matchesRawBuffer(buffer) {
-        if (buffer[0] !== 0x7b) { // '{'
+        if (buffer[0] !== BYTE_OPEN_OBJECT) {
             return false;
         }
         if (!preCheck(buffer, 1, root)) {
@@ -165,7 +158,11 @@ function buildRawBufferMatcher(matcher = {}) {
  */
 function preCheck(buffer, startOffset, node) {
     for (const child of node.children) {
-        if (child.valuePatterns && !populatePatternMatches(buffer, startOffset, child.valuePatterns, child.valueMatches)) {
+        if (child.valuePatterns && !child.valuePatterns.some((pattern, i) => {
+            const match = buffer.indexOf(pattern, startOffset);
+            child.valueMatches[i] = match;
+            return match !== -1;
+        })) {
             return false;
         }
         if (child.objectPattern) {
@@ -225,10 +222,8 @@ function buildValuePattern(keyPrefix, value) {
  */
 function matchesNode(buffer, startOffset, node) {
     for (const child of node.children) {
-        if (child.valuePatterns) {
-            if (!findSameLevelPatternOffset(buffer, startOffset, child.valuePatterns, child.valueMatches)) {
-                return false;
-            }
+        if (child.valuePatterns && !child.valuePatterns.some((pattern, i) => indexOfSameLevel(buffer, pattern, startOffset, child.valueMatches[i]) !== -1)) {
+            return false;
         }
 
         if (child.node) {
@@ -243,104 +238,6 @@ function matchesNode(buffer, startOffset, node) {
     }
 
     return true;
-}
-
-function populatePatternMatches(buffer, startOffset, patterns, matchesOut) {
-    for (let i = 0; i < patterns.length; i++) {
-        const match = buffer.indexOf(patterns[i], startOffset);
-        matchesOut[i] = match;
-        if (match !== -1) {
-            return true;
-        }
-    }
-    return false;
-}
-
-function findSameLevelPatternOffset(buffer, startOffset, patterns, preMatches) {
-    for (let i = 0; i < patterns.length; i++) {
-        if (indexOfSameLevel(buffer, patterns[i], startOffset, preMatches[i]) !== -1) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Find the position of `pattern` within `buffer` at depth 0 (the top-level object), starting
- * from `startOffset`.  It scans character-by-character tracking JSON nesting depth and string
- * quoting.  If `matchPosition` arrives at depth > 0 it means the pattern is inside a nested
- * object/array, so the scan continues searching for the next candidate at depth 0.  Returns -1
- * when no such position exists before the end of the buffer or when a closing brace reduces depth
- * below zero (the top-level object has ended).
- */
-function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
-    /* c8 ignore start */
-    // Defensive fallback: public call path precomputes an initial candidate in preCheck.
-    if (matchPosition === undefined) {
-        matchPosition = buffer.indexOf(pattern, startOffset);
-    }
-    if (matchPosition === -1) {
-        return -1;
-    }
-    /* c8 ignore stop */
-
-    let depth = 0;
-    let inString = false;
-    let i = startOffset;
-
-    while (i < buffer.length) {
-        if (inString) {
-            if (buffer[i] === BYTE_ESCAPE) { // '\\'
-                i += 2;
-                continue;
-            }
-            if (buffer[i] === BYTE_QUOTE) { // '"'
-                inString = false;
-            }
-            i++;
-            continue;
-        }
-
-        const ch = buffer[i];
-        if (ch === BYTE_OPEN_OBJECT || ch === BYTE_OPEN_ARRAY) { // '{' or '['
-            depth++;
-            i++;
-            continue;
-        } else if (ch === BYTE_CLOSE_OBJECT || ch === BYTE_CLOSE_ARRAY) { // '}' or ']'
-            depth--;
-
-            if (depth < 0) {
-                return -1;
-            }
-
-            i++;
-            continue;
-        } else if (ch === BYTE_QUOTE) { // '"'
-            inString = true;
-        }
-
-        if (i >= matchPosition) {
-            if (i === matchPosition && ch === BYTE_QUOTE && depth === 0) { // '"'
-                const end = i + pattern.length;
-                if (pattern[pattern.length - 1] === BYTE_OPEN_OBJECT) { // '{'
-                    return i;
-                }
-                if (buffer[end] === BYTE_COMMA || buffer[end] === BYTE_CLOSE_OBJECT || buffer[end] === BYTE_CLOSE_ARRAY) { // ',' or '}' or ']'
-                    return i;
-                }
-            }
-
-            matchPosition = buffer.indexOf(pattern, matchPosition + 1);
-            if (matchPosition < 0) {
-                return -1;
-            }
-        }
-
-        i++;
-    }
-
-    /* c8 ignore next */
-    return -1;
 }
 
 export {

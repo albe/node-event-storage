@@ -366,12 +366,16 @@ class WritableStorage extends ReadableStorage {
 
     addToSecondaryIndexes(indexEntry, document) {
         this.forEachSecondaryIndex((index, name) => {
-            if (!index.isOpen()) {
-                index.open();
-            }
-            index.add(indexEntry);
-            this.emit('index-add', name, index.length, document);
+            this.addToSecondaryIndex(index, name, indexEntry, document);
         }, document);
+    }
+
+    addToSecondaryIndex(index, name, indexEntry, document) {
+        if (!index.isOpen()) {
+            index.open();
+        }
+        index.add(indexEntry);
+        this.emit('index-add', name, index.length, document);
     }
 
     /**
@@ -430,7 +434,7 @@ class WritableStorage extends ReadableStorage {
             try {
                 this.forEachDocument((document, indexEntry) => {
                     if (matches(document, matcher)) {
-                        index.add(indexEntry);
+                        this.addToSecondaryIndex(index, name, indexEntry, document);
                     }
                 });
             } catch (e) {
