@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import { assert, alignTo, hash, binarySearch } from '../util.js';
+import { assert, alignTo, hash, binarySearch } from '../utils/util.js';
 
 
 
@@ -209,6 +209,30 @@ class ReadablePartition extends events.EventEmitter {
         return ({ dataSize, sequenceNumber, time64 });
     }
 
+    resolveIterationPosition(position) {
+        return position < 0 ? this.size + position + 1 : position;
+    }
+
+    selectReader(position, size, backwardsHint) {
+        if (size > 0 && backwardsHint) {
+            const bufferOffset = DOCUMENT_HEADER_SIZE + size;
+            const reader = this.prepareReadBufferBackwards(position + bufferOffset, bufferOffset);
+            return { reader, bufferOffset };
+        }
+        return { reader: this.prepareReadBuffer(position), bufferOffset: 0 };
+    }
+
+    assignHeaderOutput(headerOut, header) {
+        if (headerOut === null) {
+            return;
+        }
+        headerOut.dataSize = header.dataSize;
+        headerOut.sequenceNumber = header.sequenceNumber;
+        // Denormalize time64 relative to this partition's epoch so callers can compare
+        // timestamps across partitions without needing to know the epoch value.
+        headerOut.time64 = this.metadata.epoch + header.time64;
+    }
+
     /**
      * Read the data from the given position.
      *
@@ -227,10 +251,7 @@ class ReadablePartition extends events.EventEmitter {
         assert(this.fd, 'Partition is not opened.');
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
-        const bufferOffset = size > 0 && backwardsHint ? DOCUMENT_HEADER_SIZE + size : 0;
-        const reader = size > 0 && backwardsHint
-            ? this.prepareReadBufferBackwards(position + bufferOffset, bufferOffset)
-            : this.prepareReadBuffer(position);
+        const { reader, bufferOffset } = this.selectReader(position, size, backwardsHint);
         if (reader.length < DOCUMENT_HEADER_SIZE) {
             return false;
         }
@@ -242,13 +263,7 @@ class ReadablePartition extends events.EventEmitter {
         let dataPosition = reader.cursor + DOCUMENT_HEADER_SIZE;
         const header = this.readDocumentHeader(reader.buffer, reader.cursor, position, size);
         const dataSize = header.dataSize;
-        if (headerOut !== null) {
-            headerOut.dataSize = header.dataSize;
-            headerOut.sequenceNumber = header.sequenceNumber;
-            // Denormalize time64 relative to this partition's epoch so callers can compare
-            // timestamps across partitions without needing to know the epoch value.
-            headerOut.time64 = this.metadata.epoch + header.time64;
-        }
+        this.assignHeaderOutput(headerOut, header);
 
         const writeSize = this.documentWriteSize(dataSize);
         assert(position + writeSize <= this.size, `Invalid document at position ${position}. This may be caused by an unfinished write.`, CorruptFileError);
@@ -437,7 +452,7 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {Generator<Buffer>} A generator that returns all documents in this partition.
      */
     *readAll(after = 0, headerOut = null) {
-        let position = after < 0 ? this.size + after + 1 : after;
+        let position = this.resolveIterationPosition(after);
         const internalHeader = headerOut !== null ? headerOut : {};
         let data;
         while ((data = this.readFrom(position, 0, internalHeader)) !== false) {
@@ -457,7 +472,7 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {Generator<Buffer>} A generator that returns all documents in this partition in reverse order.
      */
     *readAllBackwards(before = -1, headerOut = null) {
-        let position = before < 0 ? this.size + before + 1 : before;
+        let position = this.resolveIterationPosition(before);
         const internalHeader = headerOut !== null ? headerOut : {};
         while ((position = this.findDocumentPositionBefore(position)) !== false) {
             const data = this.readFrom(position, 0, internalHeader, true);

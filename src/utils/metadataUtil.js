@@ -1,5 +1,19 @@
 import crypto from 'crypto';
-import {assert, assertEqual} from './util.js';
+import { assert, assertEqual } from './util.js';
+import { BYTE_OPEN_OBJECT, indexOfSameLevel } from './jsonUtil.js';
+
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function propertyMatchesValue(documentValue, matcherValue) {
+    if (Array.isArray(matcherValue)) {
+        return matcherValue.includes(documentValue);
+    } else if (matcherValue && typeof matcherValue === 'object') {
+        return matches(documentValue, matcherValue);
+    }
+    return typeof matcherValue === 'undefined' || documentValue === matcherValue;
+}
 
 /**
  * Build a buffer containing the file magic header and a JSON stringified metadata block, padded to be a multiple of 16 bytes long.
@@ -49,15 +63,7 @@ function matches(document, matcher) {
     if (typeof matcher === 'function') return matcher(document);
 
     for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (Array.isArray(matcher[prop])) {
-            if (!matcher[prop].includes(document[prop])) {
-                return false;
-            }
-        } else if (typeof matcher[prop] === 'object') {
-            if (!matches(document[prop], matcher[prop])) {
-                return false;
-            }
-        } else if (typeof matcher[prop] !== 'undefined' && document[prop] !== matcher[prop]) {
+        if (!propertyMatchesValue(document[prop], matcher[prop])) {
             return false;
         }
     }
@@ -132,7 +138,7 @@ function buildRawBufferMatcher(matcher = {}) {
     }
 
     return function matchesRawBuffer(buffer) {
-        if (buffer[0] !== 0x7b) { // '{'
+        if (buffer[0] !== BYTE_OPEN_OBJECT) {
             return false;
         }
         if (!preCheck(buffer, 1, root)) {
@@ -148,15 +154,19 @@ function buildRawBufferMatcher(matcher = {}) {
  */
 function preCheck(buffer, startOffset, node) {
     for (const child of node.children) {
-        let i = 0;
-        if (child.valuePatterns && !child.valuePatterns.some(pattern => (child.valueMatches[i++] = buffer.indexOf(pattern, startOffset)) !== -1)) {
+        if (child.valuePatterns && !child.valuePatterns.some((pattern, i) => {
+            child.valueMatches[i] = buffer.indexOf(pattern, startOffset);
+            return child.valueMatches[i] !== -1;
+        })) {
             return false;
         }
         if (child.objectPattern) {
-            if ((child.objMatch = buffer.indexOf(child.objectPattern, startOffset)) === -1) {
+            const objectMatch = buffer.indexOf(child.objectPattern, startOffset);
+            if (objectMatch === -1) {
                 return false;
             }
-            if (!preCheck(buffer, child.objMatch, child.node)) {
+            child.objMatch = objectMatch;
+            if (!preCheck(buffer, objectMatch, child.node)) {
                 return false;
             }
         }
@@ -172,24 +182,32 @@ function buildMatcherTree(matcher) {
     const node = { children: [] };
 
     for (const [key, value] of Object.entries(matcher)) {
-        const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
-        const child = { objectPattern: null, valuePatterns: null, node: null, objMatch: null, valueMatches: [] };
-
-        if (Array.isArray(value)) {
-            assert(!value.some(item => item && typeof item === 'object'), 'Array matcher values must be scalars.', TypeError);
-
-            child.valuePatterns = value.map(item => Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(item), 'utf8')]));
-        } else if (value && typeof value === 'object') {
-            child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
-            child.node = buildMatcherTree(value);
-        } else {
-            child.valuePatterns = [Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(value), 'utf8')])];
-        }
-
-        node.children.push(child);
+        node.children.push(buildMatcherTreeChild(key, value));
     }
 
     return node;
+}
+
+function buildMatcherTreeChild(key, value) {
+    const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
+    const child = { objectPattern: null, valuePatterns: null, node: null, objMatch: null, valueMatches: [] };
+    if (Array.isArray(value)) {
+        if (value.some(item => item && typeof item === 'object')) {
+            throw new TypeError('Array matcher values must be scalars.');
+        }
+        child.valuePatterns = value.map(item => buildValuePattern(keyPrefix, item));
+        return child;
+    } else if (value && typeof value === 'object') {
+        child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
+        child.node = buildMatcherTree(value);
+        return child;
+    }
+    child.valuePatterns = [buildValuePattern(keyPrefix, value)];
+    return child;
+}
+
+function buildValuePattern(keyPrefix, value) {
+    return Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(value), 'utf8')]);
 }
 
 /**
@@ -198,11 +216,10 @@ function buildMatcherTree(matcher) {
  */
 function matchesNode(buffer, startOffset, node) {
     for (const child of node.children) {
-        if (child.valuePatterns) {
-            let i = 0;
-            if (!child.valuePatterns.some(pattern => indexOfSameLevel(buffer, pattern, startOffset, child.valueMatches[i++]) !== -1)) {
-                return false;
-            }
+        if (child.valuePatterns && !child.valuePatterns.some((pattern, i) => {
+            return indexOfSameLevel(buffer, pattern, startOffset, child.valueMatches[i]) !== -1;
+        })) {
+            return false;
         }
 
         if (child.node) {
@@ -217,84 +234,6 @@ function matchesNode(buffer, startOffset, node) {
     }
 
     return true;
-}
-
-/**
- * Find the position of `pattern` within `buffer` at depth 0 (the top-level object), starting
- * from `startOffset`.  It scans character-by-character tracking JSON nesting depth and string
- * quoting.  If `matchPosition` arrives at depth > 0 it means the pattern is inside a nested
- * object/array, so the scan continues searching for the next candidate at depth 0.  Returns -1
- * when no such position exists before the end of the buffer or when a closing brace reduces depth
- * below zero (the top-level object has ended).
- */
-function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
-    /* c8 ignore start */
-    // Defensive fallback: public call path precomputes an initial candidate in preCheck.
-    if (matchPosition === undefined) {
-        matchPosition = buffer.indexOf(pattern, startOffset);
-    }
-    if (matchPosition === -1) {
-        return -1;
-    }
-    /* c8 ignore stop */
-
-    let depth = 0;
-    let inString = false;
-    let i = startOffset;
-
-    while (i < buffer.length) {
-        if (inString) {
-            if (buffer[i] === 0x5c) { // '\\'
-                i += 2;
-                continue;
-            }
-            if (buffer[i] === 0x22) { // '"'
-                inString = false;
-            }
-            i++;
-            continue;
-        }
-
-        const ch = buffer[i];
-        if (ch === 0x7b || ch === 0x5b) { // '{' or '['
-            depth++;
-            i++;
-            continue;
-        } else if (ch === 0x7d || ch === 0x5d) { // '}' or ']'
-            depth--;
-
-            if (depth < 0) {
-                return -1;
-            }
-
-            i++;
-            continue;
-        } else if (ch === 0x22) { // '"'
-            inString = true;
-        }
-
-        if (i >= matchPosition) {
-            if (i === matchPosition && ch === 0x22 && depth === 0) { // '"'
-                const end = i + pattern.length;
-                if (pattern[pattern.length - 1] === 0x7b) { // '{'
-                    return i;
-                }
-                if (buffer[end] === 0x2c || buffer[end] === 0x7d || buffer[end] === 0x5d) { // ',' or '}' or ']'
-                    return i;
-                }
-            }
-
-            matchPosition = buffer.indexOf(pattern, matchPosition + 1);
-            if (matchPosition < 0) {
-                return -1;
-            }
-        }
-
-        i++;
-    }
-
-    /* c8 ignore next */
-    return -1;
 }
 
 export {

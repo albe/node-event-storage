@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import { assert } from './util.js';
+import { assert } from './utils/util.js';
 
 /** @type {Map<string, DirectoryWatcher>} */
 const directoryWatchers = new Map();

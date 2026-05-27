@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import events from 'events';
 import Entry, { assertValidEntryClass } from '../IndexEntry.js';
-import { assert, wrapAndCheck, binarySearch } from '../util.js';
+import { assert, wrapAndCheck, binarySearch } from '../utils/util.js';
 
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";

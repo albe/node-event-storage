@@ -1,5 +1,5 @@
 import EventStream from './EventStream.js';
-import {assert, kWayMerge} from './util.js';
+import { assert, kWayMerge } from './utils/util.js';
 
 /** Reusable sentinel used for missing or empty per-stream iterators. */
 const emptyIterator = Object.freeze({ next() { return { done: true }; } });

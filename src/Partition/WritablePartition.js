@@ -1,8 +1,8 @@
 import fs from 'fs';
 import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
-import { assert, alignTo } from '../util.js';
-import { buildMetadataHeader } from '../metadataUtil.js';
-import { ensureDirectory } from '../fsUtil.js';
+import { assert, alignTo } from '../utils/util.js';
+import { buildMetadataHeader } from '../utils/metadataUtil.js';
+import { ensureDirectory } from '../utils/fsUtil.js';
 import Clock from '../Clock.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
@@ -177,12 +177,7 @@ class WritablePartition extends ReadablePartition {
      * @returns {number} The size of the document header
      */
     writeDocumentHeader(buffer, offset, dataSize, sequenceNumber = null, time64 = null) {
-        if (sequenceNumber === null) {
-            sequenceNumber = 0;
-        }
-        if (time64 === null) {
-            time64 = this.clock.time();
-        }
+        ({ sequenceNumber, time64 } = this.normalizeWriteMetadata(sequenceNumber, time64));
         /* istanbul ignore if */
         assert(time64 >= 0, 'Time may not be negative!');
 
@@ -190,6 +185,24 @@ class WritablePartition extends ReadablePartition {
         buffer.writeUInt32BE(sequenceNumber, offset + 4);
         buffer.writeDoubleBE(time64, offset + 8);
         return DOCUMENT_HEADER_SIZE;
+    }
+
+    normalizeWriteMetadata(sequenceNumber, time64) {
+        return {
+            sequenceNumber: sequenceNumber === null ? 0 : sequenceNumber,
+            time64: time64 === null ? this.clock.time() : time64
+        };
+    }
+
+    normalizeWriteArguments(sequenceNumber, callback) {
+        if (typeof sequenceNumber === 'function') {
+            return { sequenceNumber: null, callback: sequenceNumber };
+        }
+        return { sequenceNumber, callback };
+    }
+
+    shouldWriteUnbuffered(dataSize) {
+        return dataSize + DOCUMENT_HEADER_SIZE >= this.writeBuffer.byteLength * 4 / 5;
     }
 
     /**
@@ -258,15 +271,12 @@ class WritablePartition extends ReadablePartition {
      */
     write(data, sequenceNumber, callback) {
         assert(this.fd, 'Partition is not opened.');
-        if (typeof sequenceNumber === 'function') {
-            callback = sequenceNumber;
-            sequenceNumber = null;
-        }
+        ({ sequenceNumber, callback } = this.normalizeWriteArguments(sequenceNumber, callback));
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
 
         const dataPosition = this.size;
-        if (dataSize + DOCUMENT_HEADER_SIZE >= this.writeBuffer.byteLength * 4 / 5) {
+        if (this.shouldWriteUnbuffered(dataSize)) {
             this.size += this.writeUnbuffered(data, dataSize, sequenceNumber, callback);
         } else {
             this.size += this.writeBuffered(data, dataSize, sequenceNumber, callback);

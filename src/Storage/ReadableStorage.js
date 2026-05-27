@@ -3,9 +3,9 @@ import path from 'path';
 import events from 'events';
 import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
-import { assert, wrapAndCheck, iterate, kWayMerge } from '../util.js';
-import { scanForFiles } from '../fsUtil.js';
-import { createHmac, matches, buildMetadataForMatcher } from '../metadataUtil.js';
+import { assert, wrapAndCheck, iterate, kWayMerge } from '../utils/util.js';
+import { scanForFiles } from '../utils/fsUtil.js';
+import { createHmac, matches, buildMetadataForMatcher } from '../utils/metadataUtil.js';
 import IndexMatcher from '../IndexMatcher.js';
 import PartitionPool from '../PartitionPool.js';
 
