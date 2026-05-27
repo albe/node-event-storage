@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { assertEqual } from './util.js';
+import { assert, assertEqual } from './util.js';
 import { BYTE_OPEN_OBJECT, indexOfSameLevel } from './jsonUtil.js';
 
 function isPlainObject(value) {
@@ -97,9 +97,8 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
     if (typeof matcherMetadata.matcher === 'object') {
         matcher = matcherMetadata.matcher;
     } else {
-        if (matcherMetadata.hmac !== hmac(matcherMetadata.matcher)) {
-            throw new Error('Invalid HMAC for matcher.');
-        }
+        assert(matcherMetadata.hmac === hmac(matcherMetadata.matcher), 'Invalid HMAC for matcher.');
+
         matcher = eval('(' + matcherMetadata.matcher + ')').bind({}); // jshint ignore:line
     }
     return matcher;
@@ -132,9 +131,7 @@ function buildTypeMatcherFn(payloadPath) {
  * @returns {function(Buffer): boolean}
  */
 function buildRawBufferMatcher(matcher = {}) {
-    if (!matcher || typeof matcher !== 'object' || Array.isArray(matcher)) {
-        throw new TypeError('Matcher must be an object.');
-    }
+    assert(matcher && typeof matcher ==='object' && !Array.isArray(matcher), 'Matcher must be an object.', TypeError);
 
     const root = buildMatcherTree(matcher);
     if (root.children.length === 0) {

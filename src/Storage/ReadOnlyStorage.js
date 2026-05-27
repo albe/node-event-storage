@@ -23,7 +23,7 @@ class ReadOnlyStorage extends ReadableStorage {
      * @returns {boolean}
      */
     storageFilesFilter(filename) {
-        return filename.substr(-7) !== '.branch' && filename.substr(0, this.storageFile.length) === this.storageFile;
+        return !filename.endsWith('.branch') && filename.substring(0, this.storageFile.length) === this.storageFile;
     }
 
     /**
@@ -46,8 +46,8 @@ class ReadOnlyStorage extends ReadableStorage {
      * @param {string} filename
      */
     onStorageFileChanged(filename) {
-        if (filename.substr(-6) === '.index') {
-            const indexName = filename.substr(this.storageFile.length + 1, filename.length - this.storageFile.length - 7);
+        if (filename.endsWith('.index')) {
+            const indexName = filename.substring(this.storageFile.length + 1, filename.length - 6);
             // New indexes are not automatically opened in the reader
             this.emit('index-created', indexName);
             return;

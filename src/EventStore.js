@@ -403,11 +403,7 @@ class EventStore extends events.EventEmitter {
             condition.raw
         );
 
-        if (stream.next() !== false) {
-            throw new OptimisticConcurrencyError(
-                `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
-            );
-        }
+        assert(stream.next() === false, `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`, OptimisticConcurrencyError);
     }
 
     /**
@@ -490,9 +486,10 @@ class EventStore extends events.EventEmitter {
         }
         assert(!this.streams[streamName].closed, `Stream "${streamName}" is closed and cannot be written to.`);
         let streamVersion = this.streams[streamName].index.length;
-        if (expectedVersion !== ExpectedVersion.Any && streamVersion !== expectedVersion) {
-            throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
-        }
+        assert(expectedVersion === ExpectedVersion.Any || streamVersion === expectedVersion,
+            `Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`,
+            OptimisticConcurrencyError
+        );
 
         if (events.length > 1) {
             delete metadata.commitVersion;
@@ -668,9 +665,8 @@ class EventStore extends events.EventEmitter {
             streamName.startsWith(categoryName + '/')
         );
 
-        if (categoryStreams.length === 0) {
-            throw new Error(`No streams for category '${categoryName}' exist.`);
-        }
+        assert(categoryStreams.length > 0, `No streams for category '${categoryName}' exist.`);
+
         return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision, predicate, raw);
     }
 

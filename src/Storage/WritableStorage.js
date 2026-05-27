@@ -232,9 +232,8 @@ class WritableStorage extends ReadableStorage {
             this.locked = true;
         } catch (e) {
             /* istanbul ignore if */
-            if (e.code !== 'EEXIST') {
-                throw new Error(`Error creating lock for storage ${this.storageFile}: ` + e.message);
-            }
+            assert(e.code === 'EEXIST', `Error creating lock for storage ${this.storageFile}: ` + e.message)
+
             throw new StorageLockedError(`Storage ${this.storageFile} is locked by another process`);
         }
         return true;
