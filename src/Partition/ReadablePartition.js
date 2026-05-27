@@ -116,10 +116,10 @@ class ReadablePartition extends events.EventEmitter {
         fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
 
-        assert(headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6), `Invalid file header in partition ${this.name}.`);
+        assert(headerMagic.substring(0, 6) === HEADER_MAGIC.substring(0, 6), `Invalid file header in partition ${this.name}.`);
 
         this.header = headerMagic;
-        assert(headerMagic === HEADER_MAGIC, `Invalid file version. The partition ${this.name} was created with a different library version (${headerMagic.substr(6)}).`);
+        assert(headerMagic === HEADER_MAGIC, `Invalid file version. The partition ${this.name} was created with a different library version (${headerMagic.substring(6)}).`);
 
         const metadataSize = headerBuffer.readUInt32BE(8);
         assert(metadataSize > 2 && metadataSize <= 4096, 'Invalid metadata size.');
@@ -202,9 +202,7 @@ class ReadablePartition extends events.EventEmitter {
         const dataSize = buffer.readUInt32BE(offset + 0);
         assert(dataSize > 0 && dataSize <= 64 * 1024 * 1024, `Error reading document size from ${position}, got ${dataSize}.`);
 
-        if (size && dataSize !== size) {
-            throw new InvalidDataSizeError(`Invalid document size ${dataSize} at position ${position}, expected ${size}.`);
-        }
+        assert(!size || dataSize === size, `Invalid document size ${dataSize} at position ${position}, expected ${size}.`, InvalidDataSizeError);
 
         const sequenceNumber = buffer.readUInt32BE(offset + 4);
         const time64 = buffer.readDoubleBE(offset + 8);
@@ -268,9 +266,7 @@ class ReadablePartition extends events.EventEmitter {
         this.assignHeaderOutput(headerOut, header);
 
         const writeSize = this.documentWriteSize(dataSize);
-        if (position + writeSize > this.size) {
-            throw new CorruptFileError(`Invalid document at position ${position}. This may be caused by an unfinished write.`);
-        }
+        assert(position + writeSize <= this.size, `Invalid document at position ${position}. This may be caused by an unfinished write.`, CorruptFileError);
 
         if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
             const tempReadBuffer = Buffer.allocUnsafe(dataSize);

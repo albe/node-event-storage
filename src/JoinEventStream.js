@@ -1,5 +1,5 @@
 import EventStream from './EventStream.js';
-import { kWayMerge } from './utils/util.js';
+import { assert, kWayMerge } from './utils/util.js';
 
 /** Reusable sentinel used for missing or empty per-stream iterators. */
 const emptyIterator = Object.freeze({ next() { return { done: true }; } });
@@ -32,9 +32,7 @@ class JoinEventStream extends EventStream {
      */
     constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
         super(name, eventStore, minRevision, maxRevision, predicate, raw);
-        if (!(streams instanceof Array) || streams.length === 0) {
-            throw new Error(`Invalid list of streams supplied to JoinStream ${name}.`);
-        }
+        assert(streams instanceof Array && streams.length > 0, `Invalid list of streams supplied to JoinStream ${name}.`);
 
         this.streamIndex = eventStore.storage.index;
         // Translate revisions to index numbers (1-based) and wrap around negatives
