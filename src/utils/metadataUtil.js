@@ -222,7 +222,9 @@ function buildValuePattern(keyPrefix, value) {
  */
 function matchesNode(buffer, startOffset, node) {
     for (const child of node.children) {
-        if (child.valuePatterns && !child.valuePatterns.some((pattern, i) => indexOfSameLevel(buffer, pattern, startOffset, child.valueMatches[i]) !== -1)) {
+        if (child.valuePatterns && !child.valuePatterns.some((pattern, i) => {
+            return indexOfSameLevel(buffer, pattern, startOffset, child.valueMatches[i]) !== -1;
+        })) {
             return false;
         }
 
