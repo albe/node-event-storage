@@ -1,6 +1,6 @@
 import fs from 'fs';
 import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC } from './ReadableIndex.js';
-import { assertEqual } from '../util.js';
+import { assert, assertEqual } from '../util.js';
 import { buildMetadataHeader } from '../metadataUtil.js';
 import { ensureDirectory } from '../fsUtil.js';
 
@@ -191,9 +191,7 @@ class WritableIndex extends ReadableIndex {
         assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size.`);
 
         const dataLen = this.data.length;
-        if (dataLen > 0 && this.data[dataLen - 1].number >= entry.number) {
-            throw new Error('Consistency error. Tried to add an index that should come before existing last entry.');
-        }
+        assert(dataLen === 0 || this.data.at(-1).number < entry.number, 'Consistency error. Tried to add an index that should come before existing last entry.');
 
         if (this.readUntil === dataLen - 1) {
             this.readUntil++;

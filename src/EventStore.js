@@ -397,11 +397,7 @@ class EventStore extends events.EventEmitter {
             condition.raw
         );
 
-        if (stream.next() !== false) {
-            throw new OptimisticConcurrencyError(
-                `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`
-            );
-        }
+        assert(stream.next() === false, `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`, OptimisticConcurrencyError);
     }
 
     /**
@@ -470,9 +466,10 @@ class EventStore extends events.EventEmitter {
         }
         assert(!this.streams[streamName].closed, `Stream "${streamName}" is closed and cannot be written to.`);
         let streamVersion = this.streams[streamName].index.length;
-        if (expectedVersion !== ExpectedVersion.Any && streamVersion !== expectedVersion) {
-            throw new OptimisticConcurrencyError(`Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`);
-        }
+        assert(expectedVersion === ExpectedVersion.Any || streamVersion === expectedVersion,
+            `Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`,
+            OptimisticConcurrencyError
+        );
 
         if (events.length > 1) {
             delete metadata.commitVersion;
@@ -550,14 +547,12 @@ class EventStore extends events.EventEmitter {
         const queryTypes = [];
         for (const type of types) {
             if (!(type in this.streams)) {
-                if (this.typeAccessor) {
-                    // typeAccessor is configured: type streams are created on commit, so a missing
-                    // stream simply means no event of this type has been committed yet — treat as empty.
-                    continue;
-                }
                 // No typeAccessor: the stream was never created; we cannot know whether events of
                 // this type exist in the store, so throw to avoid an unintentional full-store scan.
-                throw new Error(`Type stream "${type}" does not exist. Create it with createEventStream() first, or configure typeAccessor to have type streams created automatically on commit.`);
+                assert(!!this.typeAccessor, `Type stream "${type}" does not exist. Create it with createEventStream() first, or configure typeAccessor to have type streams created automatically on commit.`);
+                // typeAccessor is configured: type streams are created on commit, so a missing
+                // stream simply means no event of this type has been committed yet — treat as empty.
+                continue;
             }
             queryTypes.push(type);
         }
@@ -675,9 +670,8 @@ class EventStore extends events.EventEmitter {
             streamName.startsWith(categoryName + '/')
         );
 
-        if (categoryStreams.length === 0) {
-            throw new Error(`No streams for category '${categoryName}' exist.`);
-        }
+        assert(categoryStreams.length > 0, `No streams for category '${categoryName}' exist.`);
+
         return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision, predicate, raw);
     }
 

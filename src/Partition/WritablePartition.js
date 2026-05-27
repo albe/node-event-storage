@@ -184,9 +184,8 @@ class WritablePartition extends ReadablePartition {
             time64 = this.clock.time();
         }
         /* istanbul ignore if */
-        if (time64 < 0) {
-            throw new Error('Time may not be negative!');
-        }
+        assert(time64 >= 0, 'Time may not be negative!');
+
         buffer.writeUInt32BE(dataSize, offset);
         buffer.writeUInt32BE(sequenceNumber, offset + 4);
         buffer.writeDoubleBE(time64, offset + 8);
@@ -210,7 +209,7 @@ class WritablePartition extends ReadablePartition {
         bytesWritten += fs.writeSync(this.fd, this.writeMetaBuffer, 0, DOCUMENT_HEADER_SIZE);
         bytesWritten += fs.writeSync(this.fd, data);
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
-        bytesWritten += fs.writeSync(this.fd, DOCUMENT_PAD.substr(0, padSize));
+        bytesWritten += fs.writeSync(this.fd, DOCUMENT_PAD.substring(0, padSize));
         this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
         bytesWritten += fs.writeSync(this.fd, this.writeMetaBuffer, 0, 4);
         bytesWritten += fs.writeSync(this.fd, DOCUMENT_SEPARATOR);
@@ -237,7 +236,7 @@ class WritablePartition extends ReadablePartition {
         bytesWritten += this.writeDocumentHeader(this.writeBuffer, this.writeBufferCursor, dataSize, sequenceNumber);
         bytesWritten += this.writeBuffer.write(data, this.writeBufferCursor + bytesWritten, 'utf8');
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
-        bytesWritten += this.writeBuffer.write(DOCUMENT_PAD.substr(0, padSize), this.writeBufferCursor + bytesWritten, 'utf8');
+        bytesWritten += this.writeBuffer.write(DOCUMENT_PAD.substring(0, padSize), this.writeBufferCursor + bytesWritten, 'utf8');
         this.writeBuffer.writeUInt32BE(dataSize, this.writeBufferCursor + bytesWritten);
         bytesWritten += 4;
         bytesWritten += this.writeBuffer.write(DOCUMENT_SEPARATOR, this.writeBufferCursor + bytesWritten, 'utf8');
@@ -390,9 +389,7 @@ class WritablePartition extends ReadablePartition {
         try {
             this.readFrom(after);
         } catch (e) {
-            if (!(e instanceof CorruptFileError)) {
-                throw new Error('Can only truncate on valid document boundaries.');
-            }
+            assert(e instanceof CorruptFileError, 'Can only truncate on valid document boundaries.');
         }
 
         fs.truncateSync(this.fileName, this.headerSize + after);

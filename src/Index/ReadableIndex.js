@@ -214,8 +214,8 @@ class ReadableIndex extends events.EventEmitter {
         fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
 
-        assert(headerMagic.substr(0, 6) === HEADER_MAGIC.substr(0, 6), 'Invalid file header.');
-        assert(headerMagic === HEADER_MAGIC, `Invalid file version. The index ${this.fileName} was created with a different library version (${headerMagic.substr(6)}).`);
+        assert(headerMagic.substring(0, 6) === HEADER_MAGIC.substring(0, 6), 'Invalid file header.');
+        assert(headerMagic === HEADER_MAGIC, `Invalid file version. The index ${this.fileName} was created with a different library version (${headerMagic.substring(6)}).`);
 
         const metadataSize = headerBuffer.readUInt32BE(8);
         assert(metadataSize >= 3, 'Invalid metadata size.');

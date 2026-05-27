@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { assertEqual } from './util.js';
+import {assert, assertEqual} from './util.js';
 
 /**
  * Build a buffer containing the file magic header and a JSON stringified metadata block, padded to be a multiple of 16 bytes long.
@@ -90,9 +90,8 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
     if (typeof matcherMetadata.matcher === 'object') {
         matcher = matcherMetadata.matcher;
     } else {
-        if (matcherMetadata.hmac !== hmac(matcherMetadata.matcher)) {
-            throw new Error('Invalid HMAC for matcher.');
-        }
+        assert(matcherMetadata.hmac === hmac(matcherMetadata.matcher), 'Invalid HMAC for matcher.');
+
         matcher = eval('(' + matcherMetadata.matcher + ')').bind({}); // jshint ignore:line
     }
     return matcher;
@@ -125,9 +124,7 @@ function buildTypeMatcherFn(payloadPath) {
  * @returns {function(Buffer): boolean}
  */
 function buildRawBufferMatcher(matcher = {}) {
-    if (!matcher || typeof matcher !== 'object' || Array.isArray(matcher)) {
-        throw new TypeError('Matcher must be an object.');
-    }
+    assert(matcher && typeof matcher ==='object' && !Array.isArray(matcher), 'Matcher must be an object.', TypeError);
 
     const root = buildMatcherTree(matcher);
     if (root.children.length === 0) {
@@ -179,9 +176,8 @@ function buildMatcherTree(matcher) {
         const child = { objectPattern: null, valuePatterns: null, node: null, objMatch: null, valueMatches: [] };
 
         if (Array.isArray(value)) {
-            if (value.some(item => item && typeof item === 'object')) {
-                throw new TypeError('Array matcher values must be scalars.');
-            }
+            assert(!value.some(item => item && typeof item === 'object'), 'Array matcher values must be scalars.', TypeError);
+
             child.valuePatterns = value.map(item => Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(item), 'utf8')]));
         } else if (value && typeof value === 'object') {
             child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
