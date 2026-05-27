@@ -105,3 +105,26 @@ new Storage('events', {
 
 !!! note
     At 10 000 partitions with the default cap of 1 024, every write touches a different partition in the sample, so every write triggers a close+reopen.  Setting `maxOpenPartitions` to `0` (or ≥ 10 000) reduces write latency at that scale from ~0.40 ms back to ~0.09 ms.
+
+
+### Raw mode benchmarks
+
+These benchmarks measure pure **read operations** (no writes). The range scan reads the middle third of the log.
+
+| Scenario | Variant | Events/sec | Deviation | Runs |
+|----------|---------|-----------:|----------:|-----:|
+| forward full scan | stable | 452,500 | ±0.83% | 60 |
+| forward full scan | latest | 411,800 | ±1.25% | 55 |
+| forward full scan | latest(raw) | 877,300 | ±0.83% | 75 |
+| --- | --- | ---: | ---: | ---: |
+| backwards full scan | stable | 421,000 | ±0.56% | 56 |
+| backwards full scan | latest | 421,400 | ±0.32% | 56 |
+| backwards full scan | latest(raw) | 871,600 | ±0.66% | 75 |
+| --- | --- | ---: | ---: | ---: |
+| join stream | stable | 424,500 | ±0.35% | 56 |
+| join stream | latest | 396,500 | ±0.43% | 53 |
+| join stream | latest(raw) | 798,000 | ±0.77% | 69 |
+| --- | --- | ---: | ---: | ---: |
+| range scan | stable | 453,288 | ±0.28% | 86 |
+| range scan | latest | 423,291 | ±0.45% | 81 |
+| range scan | latest(raw) | 886,578 | ±0.59% | 90 |
