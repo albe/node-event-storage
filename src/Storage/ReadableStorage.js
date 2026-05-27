@@ -43,6 +43,8 @@ class ReadableStorage extends events.EventEmitter {
      * @param {object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
      * @param {function(object): string} config.serializer.serialize Default is JSON.stringify.
      * @param {function(string): object} config.serializer.deserialize Default is JSON.parse.
+     * @param {function(Buffer): object} [config.deserializeFromBuffer] Buffer-native deserializer.
+     *   When provided it overrides `config.serializer.deserialize`.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {string} [config.indexDirectory] The path where the indexes should be stored. Defaults to dataDirectory.
      * @param {string} [config.indexFile] The name of the primary index. Default '{storageName}.index'.
@@ -78,6 +80,9 @@ class ReadableStorage extends events.EventEmitter {
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
+        this.deserializeFromBuffer = typeof config.deserializeFromBuffer === 'function'
+            ? config.deserializeFromBuffer
+            : null;
 
         this.hmac = createHmac(config.hmacSecret);
 
@@ -285,7 +290,20 @@ class ReadableStorage extends events.EventEmitter {
         }
         const headerOut = {};
         const buffer = partition.readFrom(position, size, headerOut, backwardsHint);
-        return raw ? { buffer, time64: headerOut.time64, sequenceNumber: headerOut.sequenceNumber } : this.serializer.deserialize(buffer.toString('utf8'));
+        return raw ? { buffer, time64: headerOut.time64, sequenceNumber: headerOut.sequenceNumber } : this.deserializeDocument(buffer);
+    }
+
+    /**
+     * Deserialize a document buffer using either the buffer-native deserializer or the string serializer fallback.
+     * @protected
+     * @param {Buffer} buffer
+     * @returns {object}
+     */
+    deserializeDocument(buffer) {
+        if (this.deserializeFromBuffer) {
+            return this.deserializeFromBuffer(buffer);
+        }
+        return this.serializer.deserialize(buffer.toString('utf8'));
     }
 
     /**
@@ -438,7 +456,7 @@ class ReadableStorage extends events.EventEmitter {
       */
      buildDocumentEntry(readItem) {
          return {
-             document: this.serializer.deserialize(readItem.data.toString('utf8')),
+            document: this.deserializeDocument(readItem.data),
              // Replicate the index entry structure here, so iteration can be used easily to reindex
              entry: readItem.entry
          };

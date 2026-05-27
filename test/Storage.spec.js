@@ -1198,6 +1198,51 @@ describe('Storage', function() {
         expect(storage.read(2)).to.be.eql(doc);
     });
 
+    it('prefers deserializeFromBuffer over serializer.deserialize', function() {
+        storage = createStorage({
+            serializer: {
+                serialize: JSON.stringify,
+                deserialize: () => { throw new Error('serializer.deserialize should not be used'); }
+            },
+            deserializeFromBuffer: (buffer) => JSON.parse(buffer.toString('utf8'))
+        });
+        storage.open();
+        storage.write({ foo: 'bar' });
+
+        expect(storage.read(1)).to.be.eql({ foo: 'bar' });
+    });
+
+    it('supports serializeToBuffer with dynamic buffer growth', function() {
+        let grew = false;
+        storage = createStorage({
+            writeBufferSize: 64,
+            serializer: {
+                serialize: () => { throw new Error('serializer.serialize should not be used'); },
+                deserialize: JSON.parse
+            },
+            serializeToBuffer: (buffer, document, helpers) => {
+                const encoded = Buffer.from(JSON.stringify(document), 'utf8');
+                if (encoded.byteLength > buffer.byteLength) {
+                    buffer = helpers.ensureCapacity(encoded.byteLength);
+                    grew = true;
+                }
+                encoded.copy(buffer, 0, 0, encoded.byteLength);
+                return encoded.byteLength;
+            },
+            deserializeFromBuffer: (buffer) => JSON.parse(buffer.toString('utf8'))
+        });
+        storage.open();
+
+        const largeDocument = { foo: 'x'.repeat(200), nested: { bar: 42 } };
+        const smallDocument = { foo: 'bar' };
+        storage.write(largeDocument);
+        storage.write(smallDocument);
+
+        expect(grew).to.be(true);
+        expect(storage.read(1)).to.be.eql(largeDocument);
+        expect(storage.read(2)).to.be.eql(smallDocument);
+    });
+
     describe('concurrency', function() {
 
         it('allows multiple writers to different partitions', function () {

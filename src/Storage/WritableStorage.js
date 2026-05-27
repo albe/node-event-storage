@@ -30,6 +30,11 @@ class WritableStorage extends ReadableStorage {
      * @param {object} [config.serializer] A serializer object with methods serialize(document) and deserialize(data).
      * @param {function(object): string} config.serializer.serialize Default is JSON.stringify.
      * @param {function(string): object} config.serializer.deserialize Default is JSON.parse.
+     * @param {function(Buffer, object, { ensureCapacity: function(number): Buffer }): number} [config.serializeToBuffer]
+     *   Buffer-native serializer. Receives `(buffer, document, helpers)` and must return written bytes.
+     *   When provided it overrides `config.serializer.serialize`.
+     * @param {function(Buffer): object} [config.deserializeFromBuffer] Buffer-native deserializer.
+     *   When provided it overrides `config.serializer.deserialize`.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {string} [config.indexDirectory] The path where the indexes should be stored. Defaults to dataDirectory.
      * @param {string} [config.indexFile] The name of the primary index. Default '{storageName}.index'.
@@ -65,6 +70,55 @@ class WritableStorage extends ReadableStorage {
         this._lockMode = config.lock;
         this.partitioner = config.partitioner;
         this.partitionIds = {};
+        this.serializeToBuffer = typeof config.serializeToBuffer === 'function'
+            ? config.serializeToBuffer
+            : null;
+        this.serializeBuffer = this.serializeToBuffer
+            ? Buffer.allocUnsafeSlow(config.writeBufferSize)
+            : null;
+        this.serializeBufferHelpers = this.serializeToBuffer
+            ? { ensureCapacity: (requiredSize) => this.ensureSerializeBufferCapacity(requiredSize) }
+            : null;
+    }
+
+    /**
+     * Ensure the serializer buffer can hold at least requiredSize bytes.
+     * Existing bytes are preserved for serializers that grow in multiple steps.
+     * @protected
+     * @param {number} requiredSize
+     * @returns {Buffer}
+     */
+    ensureSerializeBufferCapacity(requiredSize) {
+        requiredSize = requiredSize >>> 0; // jshint ignore:line
+        const current = this.serializeBuffer;
+        if (requiredSize <= current.byteLength) {
+            return current;
+        }
+        let newSize = current.byteLength;
+        while (newSize < requiredSize) {
+            newSize *= 2;
+        }
+        const next = Buffer.allocUnsafeSlow(newSize);
+        current.copy(next, 0, 0, current.byteLength);
+        this.serializeBuffer = next;
+        return next;
+    }
+
+    /**
+     * Serialize one document either via buffer-native serializer or string serializer fallback.
+     * @protected
+     * @param {object} document
+     * @returns {string|Buffer}
+     */
+    serializeDocument(document) {
+        if (!this.serializeToBuffer) {
+            return this.serializer.serialize(document).toString();
+        }
+        const written = this.serializeToBuffer(this.serializeBuffer, document, this.serializeBufferHelpers);
+        assert(Number.isInteger(written), 'serializeToBuffer must return the number of written bytes.');
+        assert(written > 0, 'serializeToBuffer must write at least one byte.');
+        assert(written <= this.serializeBuffer.byteLength, 'serializeToBuffer wrote beyond the provided buffer.');
+        return this.serializeBuffer.subarray(0, written);
     }
 
     /**
@@ -351,8 +405,8 @@ class WritableStorage extends ReadableStorage {
      * @returns {number} The 1-based document sequence number in the storage.
      */
     write(document, callback) {
-        const data = this.serializer.serialize(document).toString();
-        const dataSize = Buffer.byteLength(data, 'utf8');
+        const data = this.serializeDocument(document);
+        const dataSize = Buffer.isBuffer(data) ? data.byteLength : Buffer.byteLength(data, 'utf8');
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);

@@ -70,6 +70,8 @@ Pass these options inside `config.storageConfig`:
 | `indexDirectory` | `string` | `storageDirectory/streams` | Where index files are stored. |
 | `partitioner` | `function` | stream-per-event | `(document, sequenceNumber) => partitionName`. |
 | `serializer` | `object` | JSON | `{ serialize(doc), deserialize(string) }` — custom serialization. |
+| `serializeToBuffer` | `function` | — | Buffer-native serializer `(buffer, doc, helpers) => bytesWritten` overriding `serializer.serialize`. |
+| `deserializeFromBuffer` | `function` | — | Buffer-native deserializer `(buffer) => doc` overriding `serializer.deserialize`. |
 | `writeBufferSize` | `number` | `16384` | Write-buffer size in bytes. |
 | `maxWriteBufferDocuments` | `number` | unlimited | Maximum events per write buffer. |
 | `syncOnFlush` | `boolean` | `false` | Call `fsync` on every flush. |
@@ -241,6 +243,27 @@ const eventstore = new EventStore('my-event-store', {
 ```
 
 `@msgpack/msgpack` is often faster than `JSON.parse` for deserialization, while producing smaller files, but makes the storage files non-human-readable.
+
+If your codec works directly with `Buffer`, prefer `serializeToBuffer` / `deserializeFromBuffer` to avoid string conversions:
+
+```javascript
+const eventstore = new EventStore('my-event-store', {
+    storageConfig: {
+        writeBufferSize: 16 * 1024,
+        serializeToBuffer: (buffer, doc, { ensureCapacity }) => {
+            const encoded = myCodec.encode(doc); // returns Buffer
+            if (encoded.byteLength > buffer.byteLength) {
+                buffer = ensureCapacity(encoded.byteLength);
+            }
+            encoded.copy(buffer, 0);
+            return encoded.byteLength;
+        },
+        deserializeFromBuffer: (buffer) => myCodec.decode(buffer)
+    }
+});
+```
+
+`ensureCapacity(minSize)` returns a buffer that is at least `minSize` bytes and can be used when the initially provided buffer is too small.
 
 ## Compression
 

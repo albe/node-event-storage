@@ -552,6 +552,8 @@ Inherits all options from `Storage.ReadOnly` plus:
 | `config.indexDirectory` | `string` | `config.dataDirectory` | Directory for index files. |
 | `config.indexFile` | `string` | `'{storageName}.index'` | File name of the primary index. |
 | `config.serializer` | `object` | JSON | Object with `serialize(doc)` and `deserialize(data)` methods. |
+| `config.serializeToBuffer` | `function(buffer, doc, helpers)` | — | Buffer-native serializer that returns written byte count and overrides `config.serializer.serialize`. |
+| `config.deserializeFromBuffer` | `function(buffer)` | — | Buffer-native deserializer that overrides `config.serializer.deserialize`. |
 | `config.readBufferSize` | `number` | `4096` | Read buffer size in bytes. |
 | `config.writeBufferSize` | `number` | `16384` | Write buffer size in bytes. |
 | `config.maxWriteBufferDocuments` | `number` | `0` (unlimited) | Maximum number of buffered documents before an automatic flush. |
