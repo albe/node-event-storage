@@ -260,6 +260,27 @@ Asynchronously scan all consumer state files and return their identifiers.
 
 ---
 
+#### `consumer.createProjection(projectionFn, [options])`
+
+```javascript
+consumer.createProjection(projectionFn [, options])
+```
+
+Register a reducer-style projection as the consumer's `'data'` handler and persist it so it is auto-restored when reopening the same consumer.
+
+`projectionFn` can be either:
+
+- a reducer function: `(state, event) => state`
+- an object map: `{ [eventType]: (state, event) => state }`
+
+Options:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `options.hmac` | `function(string): string` | storage HMAC | HMAC function used to sign/verify serialized function projections. Required for trusted function projection restore. |
+
+---
+
 ### Events emitted
 
 | Event | Payload | Description |

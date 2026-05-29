@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import fsNative from 'fs';
 import Storage from '../src/Storage.js';
 import Consumer from '../src/Consumer.js';
+import { createHmac } from '../src/utils/metadataUtil.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -517,6 +518,47 @@ describe('Consumer', function() {
             storage.write({ type: 'Foobar', id: 2 });
             storage.write({ type: 'Foobar', id: 3 });
         });
+    });
+
+    it('can create projections from a reducer function', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-projection', { count: 0 });
+        consumer.createProjection((state, event) => ({ ...state, count: state.count + event.id }), { hmac: createHmac('test-secret') });
+        consumer.on('caught-up', () => {
+            expect(consumer.state.count).to.be(6);
+            done();
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('can create projections from event-type reducer maps and restore them on reopen', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-projection-map', { count: 0 });
+        consumer.createProjection({
+            Foobar: (state, event) => ({ ...state, count: state.count + event.id }),
+            Bazinga: (state) => state
+        }, { hmac: createHmac('test-secret') });
+
+        consumer.on('caught-up', () => {
+            consumer.stop();
+            consumer = new Consumer(storage, 'foobar', 'consumer-projection-map');
+            consumer.on('caught-up', () => {
+                expect(consumer.state.count).to.be(10);
+                done();
+            });
+            storage.write({ type: 'Foobar', id: 4 });
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('throws if function projection is restored without trusted hmac', function() {
+        consumer = new Consumer(storage, 'foobar', 'consumer-projection-hmac');
+        consumer.createProjection((state, event) => ({ ...state, lastId: event.id }), { hmac: createHmac('test-secret') });
+        expect(() => new Consumer(storage, 'foobar', 'consumer-projection-hmac', {}, 0, { hmac: createHmac('wrong-secret') })).to.throwError(/Invalid HMAC/);
     });
 
     it('can build consistency guards (aggregates)', function(done) {
