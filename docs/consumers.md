@@ -69,6 +69,32 @@ consumer.setState({ count: 0 });
 consumer.setState((state) => ({ ...state, count: state.count + 1 }));
 ```
 
+## Projections
+
+Instead of registering `'data'` manually, you can register a projection reducer via `createProjection`.  
+The reducer is persisted and automatically reloaded when the same consumer is reopened.
+
+```javascript
+import crypto from 'crypto';
+
+const hmac = (code) => crypto.createHmac('sha256', 'your-private-secret').update(code).digest('hex');
+
+const consumer = eventstore.getConsumer('orders', 'orders-projection', { total: 0 });
+consumer.createProjection(
+    (state, event) => ({ ...state, total: state.total + (event.amount || 0) }),
+    { hmac }
+);
+```
+
+You can also pass per-event reducers:
+
+```javascript
+consumer.createProjection({
+    OrderCreated: (state, event) => ({ ...state, orders: [...state.orders, event] }),
+    OrderCancelled: (state, event) => ({ ...state, cancelled: state.cancelled + 1 })
+}, { hmac });
+```
+
 ## Resetting a Consumer
 
 Force the consumer to reprocess events from a given position:

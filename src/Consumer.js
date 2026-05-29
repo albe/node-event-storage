@@ -4,6 +4,7 @@ import path from 'path';
 import { assert } from './utils/util.js';
 import { ensureDirectory } from './utils/fsUtil.js';
 import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
+import { buildMetadataForMatcher, buildMatcherFromMetadata } from './utils/metadataUtil.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
 
@@ -34,7 +35,7 @@ class Consumer extends stream.Readable {
      * @param {object} [initialState={}] The initial state of the consumer.
      * @param {number} [startFrom=0] The revision to start from within the index to consume.
      */
-    constructor(storage, indexName, identifier, initialState = {}, startFrom = 0) {
+    constructor(storage, indexName, identifier, initialState = {}, startFrom = 0, options = {}) {
         super({ objectMode: true });
 
         assert(storage instanceof Storage, 'Must provide a storage for the consumer.');
@@ -43,6 +44,7 @@ class Consumer extends stream.Readable {
 
         this.initializeStorage(storage, indexName, identifier);
         this.restoreState(initialState, startFrom);
+        this.restoreProjection(options);
         this.handler = this.handleNewDocument.bind(this);
         this.on('error', () => (this.handleDocument = false));
     }
@@ -59,6 +61,7 @@ class Consumer extends stream.Readable {
         this.indexName = indexName;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
+        this.projectionFileName = this.fileName + '.projection';
         if (ensureDirectory(consumerDirectory)) {
             this.cleanUpFailedWrites();
         }
@@ -73,7 +76,8 @@ class Consumer extends stream.Readable {
         const consumerDirectory = path.dirname(this.fileName);
         const files = fs.readdirSync(consumerDirectory);
         for (let file of files) {
-            if (file.startsWith(consumerNamePrefix)) {
+            const suffix = file.slice(consumerNamePrefix.length);
+            if (file.startsWith(consumerNamePrefix) && /^\d+$/.test(suffix)) {
                 safeUnlink(path.join(consumerDirectory, file));
             }
         }
@@ -102,6 +106,84 @@ class Consumer extends stream.Readable {
 
         this.persisting = null;
         this.consuming = false;
+    }
+
+    /**
+     * Restore a persisted projection and register it as data handler.
+     * @private
+     * @param {object} [options={}]
+     * @param {function(string): string} [options.hmac]
+     */
+    restoreProjection(options = {}) {
+        this.projection = null;
+        this.projectionHandler = null;
+        if (!this.projectionFileName || !fs.existsSync(this.projectionFileName)) {
+            return;
+        }
+        const projectionMetadata = JSON.parse(fs.readFileSync(this.projectionFileName, 'utf8'));
+        const hmac = options.hmac || this.storage.hmac;
+        if (typeof projectionMetadata.matcher === 'string') {
+            assert(typeof hmac === 'function', 'Must provide options.hmac to restore a function projection.');
+        }
+        const projection = buildMatcherFromMetadata(projectionMetadata, hmac);
+        this.registerProjection(projection);
+    }
+
+    /**
+     * Register a projection function as `data` event handler.
+     * @private
+     * @param {function|object} projection
+     */
+    registerProjection(projection) {
+        if (this.projectionHandler) {
+            this.removeListener('data', this.projectionHandler);
+        }
+        this.projection = projection;
+        this.projectionHandler = (event) => {
+            let reducer = projection;
+            if (typeof projection === 'object') {
+                const type = event?.type || event?.payload?.type;
+                reducer = projection[type];
+                if (typeof reducer !== 'function') {
+                    return;
+                }
+            }
+            this.setState(reducer(this.state, event));
+        };
+        this.on('data', this.projectionHandler);
+    }
+
+    /**
+     * Create and persist a projection reducer and register it as data handler.
+     *
+     * @api
+     * @param {function(object, object): object|object<string, function(object, object): object>} projectionFn
+     * @param {object} [options]
+     * @param {function(string): string} [options.hmac] Required for function projections.
+     */
+    createProjection(projectionFn, options = {}) {
+        assert((typeof projectionFn === 'function') || (projectionFn && typeof projectionFn === 'object' && !Array.isArray(projectionFn)), 'Projection must be a reducer function or an object map of reducer functions.');
+        if (typeof projectionFn === 'object') {
+            for (const reducer of Object.values(projectionFn)) {
+                assert(typeof reducer === 'function', 'Projection object values must be reducer functions.');
+            }
+        }
+        const hmac = options.hmac || this.storage.hmac;
+        if (typeof projectionFn === 'function') {
+            assert(typeof hmac === 'function', 'Must provide options.hmac for function projections.');
+        }
+
+        const projectionMetadata = buildMetadataForMatcher(projectionFn, hmac);
+        const tmpProjectionFileName = this.projectionFileName + '.tmp';
+        try {
+            fs.writeFileSync(tmpProjectionFileName, JSON.stringify(projectionMetadata), 'utf8');
+            fs.renameSync(tmpProjectionFileName, this.projectionFileName);
+        } catch (e) {
+            safeUnlink(tmpProjectionFileName);
+            throw e;
+        }
+
+        this.registerProjection(projectionFn);
     }
 
     /**
