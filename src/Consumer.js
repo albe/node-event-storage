@@ -71,12 +71,17 @@ class Consumer extends stream.Readable {
      * @private
      */
     cleanUpFailedWrites() {
-        const consumerNamePrefix = path.basename(this.fileName) + '.';
+        const consumerBaseName = path.basename(this.fileName);
+        const projectionBaseName = consumerBaseName + '.projection';
+        const escapedConsumerBaseName = consumerBaseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const failedStateFilePattern = new RegExp(`^${escapedConsumerBaseName}\\.\\d+$`);
         const consumerDirectory = path.dirname(this.fileName);
         const files = fs.readdirSync(consumerDirectory);
         for (let file of files) {
-            const suffix = file.slice(consumerNamePrefix.length);
-            if (file.startsWith(consumerNamePrefix) && /^\d+$/.test(suffix)) {
+            if (file === projectionBaseName) {
+                continue;
+            }
+            if (file === projectionBaseName + '.tmp' || failedStateFilePattern.test(file)) {
                 safeUnlink(path.join(consumerDirectory, file));
             }
         }
@@ -124,11 +129,31 @@ class Consumer extends stream.Readable {
         }
         const projectionMetadata = JSON.parse(fs.readFileSync(this.projectionFileName, 'utf8'));
         const hmac = options.hmac || this.storage.hmac;
-        if (typeof projectionMetadata.matcher === 'string') {
-            assert(typeof hmac === 'function', 'Must provide options.hmac to restore a function projection.');
-        }
-        const projection = buildMatcherFromMetadata(projectionMetadata, hmac);
+        const projection = this.deserializeProjectionMetadata(projectionMetadata, hmac);
         this.registerProjection(projection);
+    }
+
+    /**
+     * @private
+     * @param {{kind?: string, projection?: object, matcher?: string|object, hmac?: string}} metadata
+     * @param {function(string): string} hmac
+     * @returns {function|object}
+     */
+    deserializeProjectionMetadata(metadata, hmac) {
+        assert(metadata && typeof metadata === 'object', 'Invalid projection metadata.');
+        if (metadata.kind === 'map') {
+            assert(typeof hmac === 'function', 'Must provide options.hmac to restore mapped function projections.');
+            const projectionMap = {};
+            for (const [eventType, reducerMetadata] of Object.entries(metadata.projection || {})) {
+                projectionMap[eventType] = buildMatcherFromMetadata(reducerMetadata, hmac);
+            }
+            return projectionMap;
+        }
+        assert(metadata.kind === 'function', 'Invalid projection metadata kind.');
+        if (typeof metadata.projection?.matcher === 'string') {
+            assert(typeof hmac === 'function', 'Must provide options.hmac to restore function projections.');
+        }
+        return buildMatcherFromMetadata(metadata.projection, hmac);
     }
 
     /**
@@ -144,6 +169,7 @@ class Consumer extends stream.Readable {
         this.projectionHandler = (event) => {
             let reducer = projection;
             if (typeof projection === 'object') {
+                // Direct Storage consumers emit `{ type }`, EventStore consumers emit `{ payload: { type } }`.
                 const type = event?.type || event?.payload?.type;
                 reducer = projection[type];
                 if (typeof reducer !== 'function') {
@@ -171,11 +197,15 @@ class Consumer extends stream.Readable {
             }
         }
         const hmac = options.hmac || this.storage.hmac;
-        if (typeof projectionFn === 'function') {
-            assert(typeof hmac === 'function', 'Must provide options.hmac for function projections.');
-        }
-
-        const projectionMetadata = buildMetadataForMatcher(projectionFn, hmac);
+        assert(typeof hmac === 'function', 'Must provide options.hmac for projections.');
+        const projectionMetadata = (typeof projectionFn === 'function')
+            ? { kind: 'function', projection: buildMetadataForMatcher(projectionFn, hmac) }
+            : {
+                kind: 'map',
+                projection: Object.fromEntries(
+                    Object.entries(projectionFn).map(([eventType, reducer]) => [eventType, buildMetadataForMatcher(reducer, hmac)])
+                )
+            };
         const tmpProjectionFileName = this.projectionFileName + '.tmp';
         try {
             fs.writeFileSync(tmpProjectionFileName, JSON.stringify(projectionMetadata), 'utf8');

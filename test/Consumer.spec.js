@@ -542,10 +542,11 @@ describe('Consumer', function() {
 
         consumer.on('caught-up', () => {
             consumer.stop();
-            consumer = new Consumer(storage, 'foobar', 'consumer-projection-map');
-            consumer.on('caught-up', () => {
-                expect(consumer.state.count).to.be(10);
-                done();
+            consumer = new Consumer(storage, 'foobar', 'consumer-projection-map', {}, 0, { hmac: createHmac('test-secret') });
+            consumer.on('progress', () => {
+                if (consumer.state.count === 10) {
+                    done();
+                }
             });
             storage.write({ type: 'Foobar', id: 4 });
         });

@@ -277,7 +277,7 @@ Options:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `options.hmac` | `function(string): string` | storage HMAC | HMAC function used to sign/verify serialized function projections. Required for trusted function projection restore. |
+| `options.hmac` | `function(string): string` | storage HMAC | HMAC function used to sign/verify serialized projections. Required when no storage-level HMAC is configured. |
 
 ---
 
