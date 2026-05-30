@@ -6,6 +6,7 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
+import Projection from './Projection.js';
 import { assert, getPropertyAtPath } from './utils/util.js';
 import { ensureDirectory, scanForFiles } from './utils/fsUtil.js';
 import { buildTypeMatcherFn } from './utils/metadataUtil.js';
@@ -815,10 +816,42 @@ class EventStore extends events.EventEmitter {
             // identifier already exists for another stream.
             existingConsumer.stop();
         }
-        const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
+        const projectionTypeAccessor = this.typeAccessor
+            ? (event) => this.typeAccessor(event?.payload || event)
+            : undefined;
+        const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since, {
+            hmac: this.storage.hmac,
+            typeAccessor: projectionTypeAccessor
+        });
         consumer.streamName = streamName;
         this.consumers.set(identifier, consumer);
         return consumer;
+    }
+
+    /**
+     * Get or create a projection with EventStore defaults.
+     *
+     * @param {string} name Projection name.
+     * @param {object} [definition] Projection definition.
+     * @param {object} [options] Projection options.
+     * @returns {Projection}
+     */
+    getProjection(name, definition, options = {}) {
+        assert(typeof name === 'string' && name !== '', 'Must provide a projection name.');
+        const projectionTypeAccessor = this.typeAccessor
+            ? (event) => this.typeAccessor(event?.payload || event)
+            : options.typeAccessor;
+        const projectionFileName = path.join(this.storage.indexDirectory, 'projections', this.storage.storageFile + '.' + name + '.projection');
+        const projectionOptions = {
+            ...options,
+            fileName: options.fileName || projectionFileName,
+            hmac: options.hmac || this.storage.hmac,
+            typeAccessor: projectionTypeAccessor
+        };
+        if (definition) {
+            return new Projection(name, definition, projectionOptions);
+        }
+        return Projection.restore(name, projectionOptions);
     }
 
     /**

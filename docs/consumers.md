@@ -71,28 +71,42 @@ consumer.setState((state) => ({ ...state, count: state.count + 1 }));
 
 ## Projections
 
-Instead of registering `'data'` manually, you can register a projection reducer via `createProjection`.  
-The reducer is persisted and automatically reloaded when the same consumer is reopened.
+Use a `Projection` to define *how* events are projected into state, then connect it to a `Consumer` for durable continuous updates.
 
 ```javascript
 import crypto from 'crypto';
 
 const hmac = (code) => crypto.createHmac('sha256', 'your-private-secret').update(code).digest('hex');
 
-const consumer = eventstore.getConsumer('orders', 'orders-projection', { total: 0 });
-consumer.createProjection(
-    (state, event) => ({ ...state, total: state.total + (event.amount || 0) }),
-    { hmac }
-);
+const projection = eventstore.getProjection('orders-total', {
+    initialState: { total: 0 },
+    handlers: {
+        OrderCreated: (state, event) => ({ ...state, total: state.total + (event.payload.amount || 0) })
+    }
+}, { hmac });
+
+const consumer = eventstore.getConsumer('orders', 'orders-projection', projection.initialState);
+consumer.project(projection);
 ```
 
-You can also pass per-event reducers:
+You can still use `consumer.createProjection(...)` for the shorter in-place API:
 
 ```javascript
 consumer.createProjection({
     OrderCreated: (state, event) => ({ ...state, orders: [...state.orders, event] }),
     OrderCancelled: (state, event) => ({ ...state, cancelled: state.cancelled + 1 })
 }, { hmac });
+```
+
+Projections are composable via `CompositeProjection`:
+
+```javascript
+import { CompositeProjection } from 'event-storage';
+
+const overview = new CompositeProjection('overview', {
+    count: { initialState: 0, handlers: { OrderCreated: (state) => state + 1 } },
+    last: { initialState: null, handlers: { OrderCreated: (state, event) => event.payload } }
+});
 ```
 
 ## Resetting a Consumer

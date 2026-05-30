@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import fsNative from 'fs';
 import Storage from '../src/Storage.js';
 import Consumer from '../src/Consumer.js';
+import Projection, { CompositeProjection } from '../src/Projection.js';
 import { createHmac } from '../src/utils/metadataUtil.js';
 import { fileURLToPath } from 'url';
 
@@ -560,6 +561,48 @@ describe('Consumer', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer-projection-hmac');
         consumer.createProjection((state, event) => ({ ...state, lastId: event.id }), { hmac: createHmac('test-secret') });
         expect(() => new Consumer(storage, 'foobar', 'consumer-projection-hmac', {}, 0, { hmac: createHmac('wrong-secret') })).to.throwError(/Invalid HMAC/);
+    });
+
+    it('can attach a projection instance and restore it on reopen', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-projection-instance', { count: 0 });
+        const projection = new Projection('consumer-projection-instance', {
+            initialState: { count: 0 },
+            handlers: {
+                Foobar: (state, event) => ({ ...state, count: state.count + event.id })
+            }
+        }, {
+            hmac: createHmac('test-secret')
+        });
+        consumer.project(projection);
+        consumer.on('caught-up', () => {
+            expect(consumer.state.count).to.be(6);
+            consumer.stop();
+            consumer = new Consumer(storage, 'foobar', 'consumer-projection-instance', {}, 0, { hmac: createHmac('test-secret') });
+            consumer.on('progress', () => {
+                if (consumer.state.count === 10) {
+                    done();
+                }
+            });
+            storage.write({ type: 'Foobar', id: 4 });
+        });
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('supports composite projections', function() {
+        const projection = new CompositeProjection('overview', {
+            count: {
+                initialState: 0,
+                handlers: { Foobar: (state) => state + 1 }
+            },
+            last: {
+                initialState: null,
+                handlers: { Foobar: (state, event) => event.id || state }
+            }
+        });
+        projection.handle([{ type: 'Foobar', id: 1 }, { type: 'Foobar', id: 2 }]);
+        expect(projection.state).to.eql({ count: 2, last: 2 });
     });
 
     it('can build consistency guards (aggregates)', function(done) {
