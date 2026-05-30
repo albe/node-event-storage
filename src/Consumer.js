@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
 import { ensureDirectory } from './utils/fsUtil.js';
-import { buildMetadataForMatcher, buildMatcherFromMetadata } from './utils/metadataUtil.js';
+import Projection from './Projection.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
 
@@ -58,6 +58,7 @@ class Consumer extends stream.Readable {
         this.storage = storage;
         this.index = this.storage.openIndex(indexName);
         this.indexName = indexName;
+        this.identifier = identifier;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
         this.projectionFileName = this.fileName + '.projection';
@@ -127,58 +128,39 @@ class Consumer extends stream.Readable {
         if (!this.projectionFileName || !fs.existsSync(this.projectionFileName)) {
             return;
         }
-        const projectionMetadata = JSON.parse(fs.readFileSync(this.projectionFileName, 'utf8'));
-        const hmac = options.hmac || this.storage.hmac;
-        const projection = this.deserializeProjectionMetadata(projectionMetadata, hmac);
-        this.registerProjection(projection);
-    }
-
-    /**
-     * @private
-     * @param {{kind?: string, projection?: object, matcher?: string|object, hmac?: string}} metadata
-     * @param {function(string): string} hmac
-     * @returns {function|object}
-     */
-    deserializeProjectionMetadata(metadata, hmac) {
-        assert(metadata && typeof metadata === 'object', 'Invalid projection metadata.');
-        if (metadata.kind === 'map') {
-            assert(typeof hmac === 'function', 'Must provide options.hmac to restore mapped function projections.');
-            const projectionMap = {};
-            for (const [eventType, reducerMetadata] of Object.entries(metadata.projection || {})) {
-                projectionMap[eventType] = buildMatcherFromMetadata(reducerMetadata, hmac);
-            }
-            return projectionMap;
-        }
-        assert(metadata.kind === 'function', 'Invalid projection metadata kind.');
-        if (typeof metadata.projection?.matcher === 'string') {
-            assert(typeof hmac === 'function', 'Must provide options.hmac to restore function projections.');
-        }
-        return buildMatcherFromMetadata(metadata.projection, hmac);
+        const projection = Projection.restoreFromFile(this.projectionFileName, {
+            hmac: options.hmac || this.storage.hmac,
+            typeAccessor: options.typeAccessor
+        });
+        this.project(projection, { persist: false });
     }
 
     /**
      * Register a projection function as `data` event handler.
      * @private
-     * @param {function|object} projection
+     * @param {Projection} projection
+     * @param {object} [options]
+     * @param {boolean} [options.persist=true]
+     * @param {function(string): string} [options.hmac]
      */
-    registerProjection(projection) {
+    project(projection, options = {}) {
+        assert(projection instanceof Projection, 'Projection must be an instance of Projection.');
+        const { persist = true, hmac } = options;
         if (this.projectionHandler) {
             this.removeListener('data', this.projectionHandler);
         }
         this.projection = projection;
         this.projectionHandler = (event) => {
-            let reducer = projection;
-            if (typeof projection === 'object') {
-                // Direct Storage consumers emit `{ type }`, EventStore consumers emit `{ payload: { type } }`.
-                const type = event?.type || event?.payload?.type;
-                reducer = projection[type];
-                if (typeof reducer !== 'function') {
-                    return;
-                }
-            }
-            this.setState(reducer(this.state, event));
+            this.setState(projection.apply(this.state, event));
         };
         this.on('data', this.projectionHandler);
+        if (persist) {
+            projection.persist({
+                fileName: this.projectionFileName,
+                hmac: hmac || projection.hmac || this.storage.hmac
+            });
+        }
+        return projection;
     }
 
     /**
@@ -190,32 +172,17 @@ class Consumer extends stream.Readable {
      * @param {function(string): string} [options.hmac] Required for function projections.
      */
     createProjection(projectionFn, options = {}) {
-        assert((typeof projectionFn === 'function') || (projectionFn && typeof projectionFn === 'object' && !Array.isArray(projectionFn)), 'Projection must be a reducer function or an object map of reducer functions.');
-        if (typeof projectionFn === 'object') {
-            for (const reducer of Object.values(projectionFn)) {
-                assert(typeof reducer === 'function', 'Projection object values must be reducer functions.');
-            }
-        }
-        const hmac = options.hmac || this.storage.hmac;
-        assert(typeof hmac === 'function', 'Must provide options.hmac for projections.');
-        const projectionMetadata = (typeof projectionFn === 'function')
-            ? { kind: 'function', projection: buildMetadataForMatcher(projectionFn, hmac) }
-            : {
-                kind: 'map',
-                projection: Object.fromEntries(
-                    Object.entries(projectionFn).map(([eventType, reducer]) => [eventType, buildMetadataForMatcher(reducer, hmac)])
-                )
-            };
-        const tmpProjectionFileName = this.projectionFileName + '.tmp';
-        try {
-            fs.writeFileSync(tmpProjectionFileName, JSON.stringify(projectionMetadata), 'utf8');
-            fs.renameSync(tmpProjectionFileName, this.projectionFileName);
-        } catch (e) {
-            safeUnlink(tmpProjectionFileName);
-            throw e;
-        }
-
-        this.registerProjection(projectionFn);
+        const projection = projectionFn instanceof Projection
+            ? projectionFn
+            : new Projection(options.name || this.identifier, {
+                initialState: this.state,
+                matcher: options.matcher,
+                handlers: projectionFn
+            }, {
+                hmac: options.hmac || this.storage.hmac,
+                typeAccessor: options.typeAccessor
+            });
+        return this.project(projection, options);
     }
 
     /**

@@ -281,6 +281,46 @@ Options:
 
 ---
 
+#### `eventstore.getProjection(name, [definition], [options])`
+
+```javascript
+eventstore.getProjection(name [, definition [, options]]) → Projection
+```
+
+Create a `Projection` with EventStore defaults (`typeAccessor`, storage HMAC), or restore a previously persisted one when `definition` is omitted.
+
+`definition` shape:
+
+```javascript
+{
+  initialState: any,
+  handlers: (state, event) => state | { [eventType]: (state, event) => state },
+  matcher: object|function // optional
+}
+```
+
+---
+
+#### `consumer.project(projection, [options])`
+
+```javascript
+consumer.project(projection [, options])
+```
+
+Attach a `Projection` instance to a durable consumer and persist its definition for automatic restore when reopening the same consumer.
+
+---
+
+#### `projection.subscribe(consumer, [options])`
+
+```javascript
+projection.subscribe(consumer [, options])
+```
+
+Alias for `consumer.project(projection, options)`.
+
+---
+
 ### Events emitted
 
 | Event | Payload | Description |
