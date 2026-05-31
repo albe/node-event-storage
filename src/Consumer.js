@@ -56,6 +56,7 @@ class Consumer extends stream.Readable {
         this.storage = storage;
         this.index = this.storage.openIndex(indexName);
         this.indexName = indexName;
+        this.identifier = identifier;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
         if (ensureDirectory(consumerDirectory)) {
@@ -68,11 +69,13 @@ class Consumer extends stream.Readable {
      * @private
      */
     cleanUpFailedWrites() {
-        const consumerNamePrefix = path.basename(this.fileName) + '.';
+        const consumerBaseName = path.basename(this.fileName);
+        const escapedConsumerBaseName = consumerBaseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const failedStateFilePattern = new RegExp(`^${escapedConsumerBaseName}\\.\\d+$`);
         const consumerDirectory = path.dirname(this.fileName);
         const files = fs.readdirSync(consumerDirectory);
         for (let file of files) {
-            if (file.startsWith(consumerNamePrefix)) {
+            if (failedStateFilePattern.test(file)) {
                 safeUnlink(path.join(consumerDirectory, file));
             }
         }
@@ -104,6 +107,24 @@ class Consumer extends stream.Readable {
 
         this.persisting = null;
         this.consuming = false;
+    }
+
+    /**
+     * Register a projection as `data` event handler.
+     * @api
+     * @param {{ apply: function(object, object): object }} projection
+     */
+    project(projection) {
+        assert(projection && typeof projection.apply === 'function', 'Projection must implement apply(state, event).');
+        if (this.projectionHandler) {
+            this.removeListener('data', this.projectionHandler);
+        }
+        this.projection = projection;
+        this.projectionHandler = (event) => {
+            this.setState(projection.apply(this.state, event));
+        };
+        this.on('data', this.projectionHandler);
+        return this;
     }
 
     /**

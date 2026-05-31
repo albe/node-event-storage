@@ -260,6 +260,46 @@ Asynchronously scan all consumer state files and return their identifiers.
 
 ---
 
+#### `eventstore.getProjection(name, [definition])`
+
+```javascript
+eventstore.getProjection(name [, definition]) → Projection
+```
+
+Create a `Projection` with EventStore defaults (`typeAccessor`, storage HMAC), or restore a previously persisted one when `definition` is omitted.
+
+`definition` shape:
+
+```javascript
+{
+  initialState: any,
+  handlers: (state, event) => state | { [eventType]: (state, event) => state },
+  matcher: object|function // optional
+}
+```
+
+---
+
+#### `consumer.project(projection)`
+
+```javascript
+consumer.project(projection)
+```
+
+Attach a projection-like object (`apply(state, event)`) as the consumer `'data'` handler.
+
+---
+
+#### `projection.subscribe(consumer)`
+
+```javascript
+projection.subscribe(consumer)
+```
+
+Attach this projection to the consumer and persist its definition next to the consumer state file so `eventstore.getConsumer(...)` can restore and reconnect it automatically.
+
+---
+
 ### Events emitted
 
 | Event | Payload | Description |

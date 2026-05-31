@@ -6,6 +6,7 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
+import Projection from './Projection.js';
 import { assert, getPropertyAtPath } from './utils/util.js';
 import { ensureDirectory, scanForFiles } from './utils/fsUtil.js';
 import { buildTypeMatcherFn } from './utils/metadataUtil.js';
@@ -120,6 +121,9 @@ class EventStore extends events.EventEmitter {
         }
 
         this.initialize(storeName, storageConfig);
+        this.projectionHmac = typeof storageConfig.hmac === 'function'
+            ? storageConfig.hmac
+            : this.storage.hmac;
     }
 
     /**
@@ -784,10 +788,44 @@ class EventStore extends events.EventEmitter {
         if (this.consumers.has(identifier)) {
             return this.consumers.get(identifier);
         }
+        const projectionTypeAccessor = this.typeAccessor
+            ? (event) => this.typeAccessor(event?.payload || event)
+            : undefined;
         const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
+        const consumerProjectionFileName = `${consumer.fileName}.projection`;
+        if (fs.existsSync(consumerProjectionFileName)) {
+            Projection.restoreFromFile(consumerProjectionFileName, {
+                hmac: this.projectionHmac,
+                typeAccessor: projectionTypeAccessor
+            }).subscribe(consumer);
+        }
         consumer.streamName = streamName;
         this.consumers.set(identifier, consumer);
         return consumer;
+    }
+
+    /**
+     * Get or create a projection with EventStore defaults.
+     *
+     * @param {string} name Projection name.
+     * @param {object} [definition] Projection definition.
+     * @returns {Projection}
+     */
+    getProjection(name, definition) {
+        assert(typeof name === 'string' && name !== '', 'Must provide a projection name.');
+        const projectionTypeAccessor = this.typeAccessor
+            ? (event) => this.typeAccessor(event?.payload || event)
+            : undefined;
+        const projectionFileName = path.join(this.storage.indexDirectory, 'projections', this.storage.storageFile + '.' + name + '.projection');
+        const projectionOptions = {
+            fileName: projectionFileName,
+            hmac: this.projectionHmac,
+            typeAccessor: projectionTypeAccessor
+        };
+        if (definition) {
+            return new Projection(name, definition, projectionOptions);
+        }
+        return Projection.restore(name, projectionOptions);
     }
 
     /**
