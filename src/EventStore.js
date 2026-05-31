@@ -782,7 +782,13 @@ class EventStore extends events.EventEmitter {
         }
         const streamName = streamNameOrIdentifier;
         if (this.consumers.has(identifier)) {
-            return this.consumers.get(identifier);
+            const existingConsumer = this.consumers.get(identifier);
+            if (existingConsumer.streamName === streamName) {
+                return existingConsumer;
+            }
+            // Rebind identifier to the requested stream when a consumer with the same
+            // identifier already exists for another stream.
+            existingConsumer.stop();
         }
         const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
         consumer.streamName = streamName;

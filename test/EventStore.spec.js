@@ -1377,6 +1377,31 @@ describe('EventStore', function() {
             eventstore.commit('foo', { foo: 'bar', id: 1 });
             eventstore.commit('bar', { foo: 'baz', id: 2 });
         });
+
+        it('rebinds an existing identifier to a different stream when requested', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+
+            const consumerFoo = eventstore.getConsumer('foo-bar', 'consumer1');
+            const consumerAll = eventstore.getConsumer('_all', 'consumer1');
+
+            expect(consumerFoo).to.not.be(consumerAll);
+            expect(consumerAll.streamName).to.be('_all');
+
+            const seen = [];
+            consumerAll.on('data', event => {
+                seen.push(event.payload.id);
+                if (seen.length === 2) {
+                    expect(seen).to.eql([1, 2]);
+                    done();
+                }
+            });
+
+            eventstore.commit('foo', { foo: 'bar', id: 1 });
+            eventstore.commit('bar', { foo: 'baz', id: 2 });
+        });
     });
 
     describe('scanConsumers', function() {
