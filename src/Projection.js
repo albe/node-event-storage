@@ -85,9 +85,17 @@ class Projection {
         return matches(event, this.matcher);
     }
 
-    subscribe(consumer, options = {}) {
+    subscribe(consumer) {
         assert(consumer && typeof consumer.project === 'function', 'Projection.subscribe expects a Consumer instance.');
-        consumer.project(this, options);
+        const projectionFileName = consumer.fileName ? `${consumer.fileName}.projection` : null;
+        const isAlreadySubscribed = consumer.projection === this;
+        const isAlreadyPersisted = projectionFileName && this.fileName === projectionFileName && fs.existsSync(projectionFileName);
+        consumer.project(this);
+        if (!isAlreadySubscribed && !isAlreadyPersisted) {
+            this.persist({
+                fileName: projectionFileName || this.fileName
+            });
+        }
         return this;
     }
 

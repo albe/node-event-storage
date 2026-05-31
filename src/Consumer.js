@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
 import { ensureDirectory } from './utils/fsUtil.js';
-import Projection from './Projection.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
 
@@ -34,7 +33,7 @@ class Consumer extends stream.Readable {
      * @param {object} [initialState={}] The initial state of the consumer.
      * @param {number} [startFrom=0] The revision to start from within the index to consume.
      */
-    constructor(storage, indexName, identifier, initialState = {}, startFrom = 0, options = {}) {
+    constructor(storage, indexName, identifier, initialState = {}, startFrom = 0) {
         super({ objectMode: true });
 
         assert(storage instanceof Storage, 'Must provide a storage for the consumer.');
@@ -43,7 +42,6 @@ class Consumer extends stream.Readable {
 
         this.initializeStorage(storage, indexName, identifier);
         this.restoreState(initialState, startFrom);
-        this.restoreProjection(options);
         this.handler = this.handleNewDocument.bind(this);
         this.on('error', () => (this.handleDocument = false));
     }
@@ -61,7 +59,6 @@ class Consumer extends stream.Readable {
         this.identifier = identifier;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
-        this.projectionFileName = this.fileName + '.projection';
         if (ensureDirectory(consumerDirectory)) {
             this.cleanUpFailedWrites();
         }
@@ -73,16 +70,12 @@ class Consumer extends stream.Readable {
      */
     cleanUpFailedWrites() {
         const consumerBaseName = path.basename(this.fileName);
-        const projectionBaseName = consumerBaseName + '.projection';
         const escapedConsumerBaseName = consumerBaseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const failedStateFilePattern = new RegExp(`^${escapedConsumerBaseName}\\.\\d+$`);
         const consumerDirectory = path.dirname(this.fileName);
         const files = fs.readdirSync(consumerDirectory);
         for (let file of files) {
-            if (file === projectionBaseName) {
-                continue;
-            }
-            if (file === projectionBaseName + '.tmp' || failedStateFilePattern.test(file)) {
+            if (failedStateFilePattern.test(file)) {
                 safeUnlink(path.join(consumerDirectory, file));
             }
         }
@@ -117,35 +110,12 @@ class Consumer extends stream.Readable {
     }
 
     /**
-     * Restore a persisted projection and register it as data handler.
-     * @private
-     * @param {object} [options={}]
-     * @param {function(string): string} [options.hmac]
+     * Register a projection as `data` event handler.
+     * @api
+     * @param {{ apply: function(object, object): object }} projection
      */
-    restoreProjection(options = {}) {
-        this.projection = null;
-        this.projectionHandler = null;
-        if (!this.projectionFileName || !fs.existsSync(this.projectionFileName)) {
-            return;
-        }
-        const projection = Projection.restoreFromFile(this.projectionFileName, {
-            hmac: options.hmac || this.storage.hmac,
-            typeAccessor: options.typeAccessor
-        });
-        this.project(projection, { persist: false });
-    }
-
-    /**
-     * Register a projection function as `data` event handler.
-     * @private
-     * @param {Projection} projection
-     * @param {object} [options]
-     * @param {boolean} [options.persist=true]
-     * @param {function(string): string} [options.hmac]
-     */
-    project(projection, options = {}) {
-        assert(projection instanceof Projection, 'Projection must be an instance of Projection.');
-        const { persist = true, hmac } = options;
+    project(projection) {
+        assert(projection && typeof projection.apply === 'function', 'Projection must implement apply(state, event).');
         if (this.projectionHandler) {
             this.removeListener('data', this.projectionHandler);
         }
@@ -154,35 +124,7 @@ class Consumer extends stream.Readable {
             this.setState(projection.apply(this.state, event));
         };
         this.on('data', this.projectionHandler);
-        if (persist) {
-            projection.persist({
-                fileName: this.projectionFileName,
-                hmac: hmac || projection.hmac || this.storage.hmac
-            });
-        }
-        return projection;
-    }
-
-    /**
-     * Create and persist a projection reducer and register it as data handler.
-     *
-     * @api
-     * @param {function(object, object): object|object<string, function(object, object): object>} projectionFn
-     * @param {object} [options]
-     * @param {function(string): string} [options.hmac] Required for function projections.
-     */
-    createProjection(projectionFn, options = {}) {
-        const projection = projectionFn instanceof Projection
-            ? projectionFn
-            : new Projection(options.name || this.identifier, {
-                initialState: this.state,
-                matcher: options.matcher,
-                handlers: projectionFn
-            }, {
-                hmac: options.hmac || this.storage.hmac,
-                typeAccessor: options.typeAccessor
-            });
-        return this.project(projection, options);
+        return this;
     }
 
     /**

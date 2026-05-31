@@ -260,31 +260,10 @@ Asynchronously scan all consumer state files and return their identifiers.
 
 ---
 
-#### `consumer.createProjection(projectionFn, [options])`
+#### `eventstore.getProjection(name, [definition])`
 
 ```javascript
-consumer.createProjection(projectionFn [, options])
-```
-
-Register a reducer-style projection as the consumer's `'data'` handler and persist it so it is auto-restored when reopening the same consumer.
-
-`projectionFn` can be either:
-
-- a reducer function: `(state, event) => state`
-- an object map: `{ [eventType]: (state, event) => state }`
-
-Options:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `options.hmac` | `function(string): string` | storage HMAC | HMAC function used to sign/verify serialized projections. Required when no storage-level HMAC is configured. |
-
----
-
-#### `eventstore.getProjection(name, [definition], [options])`
-
-```javascript
-eventstore.getProjection(name [, definition [, options]]) → Projection
+eventstore.getProjection(name [, definition]) → Projection
 ```
 
 Create a `Projection` with EventStore defaults (`typeAccessor`, storage HMAC), or restore a previously persisted one when `definition` is omitted.
@@ -301,23 +280,23 @@ Create a `Projection` with EventStore defaults (`typeAccessor`, storage HMAC), o
 
 ---
 
-#### `consumer.project(projection, [options])`
+#### `consumer.project(projection)`
 
 ```javascript
-consumer.project(projection [, options])
+consumer.project(projection)
 ```
 
-Attach a `Projection` instance to a durable consumer and persist its definition for automatic restore when reopening the same consumer.
+Attach a projection-like object (`apply(state, event)`) as the consumer `'data'` handler.
 
 ---
 
-#### `projection.subscribe(consumer, [options])`
+#### `projection.subscribe(consumer)`
 
 ```javascript
-projection.subscribe(consumer [, options])
+projection.subscribe(consumer)
 ```
 
-Alias for `consumer.project(projection, options)`.
+Attach this projection to the consumer and persist its definition next to the consumer state file so `eventstore.getConsumer(...)` can restore and reconnect it automatically.
 
 ---
 

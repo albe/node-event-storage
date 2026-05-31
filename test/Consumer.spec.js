@@ -521,9 +521,14 @@ describe('Consumer', function() {
         });
     });
 
-    it('can create projections from a reducer function', function(done) {
+    it('can attach projections from a reducer function', function(done) {
         consumer = new Consumer(storage, 'foobar', 'consumer-projection', { count: 0 });
-        consumer.createProjection((state, event) => ({ ...state, count: state.count + event.id }), { hmac: createHmac('test-secret') });
+        new Projection('consumer-projection', {
+            initialState: { count: 0 },
+            handlers: (state, event) => ({ ...state, count: state.count + event.id })
+        }, {
+            hmac: createHmac('test-secret')
+        }).subscribe(consumer);
         consumer.on('caught-up', () => {
             expect(consumer.state.count).to.be(6);
             done();
@@ -534,16 +539,23 @@ describe('Consumer', function() {
         storage.write({ type: 'Foobar', id: 3 });
     });
 
-    it('can create projections from event-type reducer maps and restore them on reopen', function(done) {
+    it('can attach and restore projections from event-type reducer maps', function(done) {
         consumer = new Consumer(storage, 'foobar', 'consumer-projection-map', { count: 0 });
-        consumer.createProjection({
-            Foobar: (state, event) => ({ ...state, count: state.count + event.id }),
-            Bazinga: (state) => state
+        const projection = new Projection('consumer-projection-map', {
+            initialState: { count: 0 },
+            handlers: {
+                Foobar: (state, event) => ({ ...state, count: state.count + event.id }),
+                Bazinga: (state) => state
+            }
         }, { hmac: createHmac('test-secret') });
+        projection.subscribe(consumer);
 
         consumer.on('caught-up', () => {
             consumer.stop();
-            consumer = new Consumer(storage, 'foobar', 'consumer-projection-map', {}, 0, { hmac: createHmac('test-secret') });
+            consumer = new Consumer(storage, 'foobar', 'consumer-projection-map', {});
+            Projection.restoreFromFile(`${consumer.fileName}.projection`, {
+                hmac: createHmac('test-secret')
+            }).subscribe(consumer);
             consumer.on('progress', () => {
                 if (consumer.state.count === 10) {
                     done();
@@ -559,8 +571,15 @@ describe('Consumer', function() {
 
     it('throws if function projection is restored without trusted hmac', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer-projection-hmac');
-        consumer.createProjection((state, event) => ({ ...state, lastId: event.id }), { hmac: createHmac('test-secret') });
-        expect(() => new Consumer(storage, 'foobar', 'consumer-projection-hmac', {}, 0, { hmac: createHmac('wrong-secret') })).to.throwError(/Invalid HMAC/);
+        new Projection('consumer-projection-hmac', {
+            initialState: {},
+            handlers: (state, event) => ({ ...state, lastId: event.id })
+        }, {
+            hmac: createHmac('test-secret')
+        }).subscribe(consumer);
+        expect(() => Projection.restoreFromFile(`${consumer.fileName}.projection`, {
+            hmac: createHmac('wrong-secret')
+        })).to.throwError(/Invalid HMAC/);
     });
 
     it('can attach a projection instance and restore it on reopen', function(done) {
@@ -573,11 +592,14 @@ describe('Consumer', function() {
         }, {
             hmac: createHmac('test-secret')
         });
-        consumer.project(projection);
+        projection.subscribe(consumer);
         consumer.on('caught-up', () => {
             expect(consumer.state.count).to.be(6);
             consumer.stop();
-            consumer = new Consumer(storage, 'foobar', 'consumer-projection-instance', {}, 0, { hmac: createHmac('test-secret') });
+            consumer = new Consumer(storage, 'foobar', 'consumer-projection-instance', {});
+            Projection.restoreFromFile(`${consumer.fileName}.projection`, {
+                hmac: createHmac('test-secret')
+            }).subscribe(consumer);
             consumer.on('progress', () => {
                 if (consumer.state.count === 10) {
                     done();
