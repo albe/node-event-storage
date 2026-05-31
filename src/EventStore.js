@@ -122,6 +122,9 @@ class EventStore extends events.EventEmitter {
         }
 
         this.initialize(storeName, storageConfig);
+        this.projectionHmac = typeof storageConfig.hmac === 'function'
+            ? storageConfig.hmac
+            : this.storage.hmac;
     }
 
     /**
@@ -819,10 +822,14 @@ class EventStore extends events.EventEmitter {
         const projectionTypeAccessor = this.typeAccessor
             ? (event) => this.typeAccessor(event?.payload || event)
             : undefined;
-        const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since, {
-            hmac: this.storage.hmac,
-            typeAccessor: projectionTypeAccessor
-        });
+        const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
+        const consumerProjectionFileName = `${consumer.fileName}.projection`;
+        if (fs.existsSync(consumerProjectionFileName)) {
+            Projection.restoreFromFile(consumerProjectionFileName, {
+                hmac: this.projectionHmac,
+                typeAccessor: projectionTypeAccessor
+            }).subscribe(consumer);
+        }
         consumer.streamName = streamName;
         this.consumers.set(identifier, consumer);
         return consumer;
@@ -833,19 +840,17 @@ class EventStore extends events.EventEmitter {
      *
      * @param {string} name Projection name.
      * @param {object} [definition] Projection definition.
-     * @param {object} [options] Projection options.
      * @returns {Projection}
      */
-    getProjection(name, definition, options = {}) {
+    getProjection(name, definition) {
         assert(typeof name === 'string' && name !== '', 'Must provide a projection name.');
         const projectionTypeAccessor = this.typeAccessor
             ? (event) => this.typeAccessor(event?.payload || event)
-            : options.typeAccessor;
+            : undefined;
         const projectionFileName = path.join(this.storage.indexDirectory, 'projections', this.storage.storageFile + '.' + name + '.projection');
         const projectionOptions = {
-            ...options,
-            fileName: options.fileName || projectionFileName,
-            hmac: options.hmac || this.storage.hmac,
+            fileName: projectionFileName,
+            hmac: this.projectionHmac,
             typeAccessor: projectionTypeAccessor
         };
         if (definition) {

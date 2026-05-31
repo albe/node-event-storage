@@ -1416,12 +1416,14 @@ describe('EventStore', function() {
             eventstore.createEventStream('user-stream', (event) => event.stream === 'user-stream');
 
             const consumer = eventstore.getConsumer('user-stream', 'user-counter', { count: 0 });
-            consumer.project(new Projection('user-counter', {
+            new Projection('user-counter', {
                 initialState: { count: 0 },
                 handlers: {
                     UserCreated: (state) => ({ ...state, count: state.count + 1 })
                 }
-            }));
+            }, {
+                hmac: createHmac('test-secret')
+            }).subscribe(consumer);
             eventstore.commit('user-stream', [{ type: 'UserCreated', id: 1 }]);
             eventstore.commit('user-stream', [{ type: 'UserCreated', id: 2 }]);
 
