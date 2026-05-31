@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="98" height="98" viewBox="0 0 98 98" role="img" aria-label="node-event-store hero animation variant 3">
+  <defs>
+    <style>
+      @keyframes sceneTurn {
+        0%, 100% { transform: rotate(0deg); }
+        50% { transform: rotate(-8deg); }
+      }
+
+      @keyframes pushOut {
+        0%, 100% { transform: translate(0px, 0px); opacity: 0.92; }
+        45% { transform: translate(var(--dx), var(--dy)); opacity: 1; }
+        70% { transform: translate(var(--dx), var(--dy)); opacity: 1; }
+      }
+
+      @keyframes barFadePause {
+        0%, 30%, 100% { opacity: 1; }
+        50%, 80% { opacity: 0.45; }
+      }
+
+      .scene {
+        animation: sceneTurn 14s ease-in-out infinite;
+        transform-origin: 49px 49px;
+      }
+
+      .event-storage {
+        fill: #029eb1;
+        transform: rotate(45deg);
+        transform-origin: 49px 49px;
+      }
+
+      circle {
+        animation: pushOut 4.8s ease-in-out infinite;
+      }
+
+      circle:nth-child(1) { --dx: -2.2px; --dy: -2.2px; }
+      circle:nth-child(2) { --dx: 2.2px; --dy: -2.2px; }
+      circle:nth-child(3) { --dx: -2.2px; --dy: 2.2px; }
+      circle:nth-child(4) { --dx: 2.2px; --dy: 2.2px; }
+
+      rect {
+        animation: barFadePause 4.8s ease-in-out infinite;
+      }
+
+      rect:nth-child(2) { animation-delay: 0.6s; }
+      rect:nth-child(3) { animation-delay: 1.2s; }
+      rect:nth-child(4) { animation-delay: 1.8s; }
+    </style>
+  </defs>
+
+  <g class="scene">
+    <g class="event-storage">
+      <g class="circles">
+        <circle class=" c1" cx="26" cy="26" r="7.7"/>
+        <circle class=" c2" cx="72" cy="26" r="7.7"/>
+        <circle class=" c3" cx="26" cy="72" r="7.7"/>
+        <circle class=" c4" cx="72" cy="72" r="7.7"/>
+      </g>
+      <g class="bars">
+        <rect x="45" y="9" width="8" height="24"/>
+        <rect x="45" y="66" width="8" height="24"/>
+        <rect x="9" y="45" width="24" height="8"/>
+        <rect x="66" y="45" width="24" height="8"/>
+      </g>
+    </g>
+  </g>
+</svg>
+

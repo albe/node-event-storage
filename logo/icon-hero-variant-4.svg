@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="98" height="98" viewBox="0 0 98 98" role="img" aria-label="node-event-store hero animation variant 4">
+  <defs>
+    <style>
+      @keyframes gentleSpin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+
+      @keyframes pop {
+        0%, 20%, 100% { transform: scale(1); opacity: 0.8; }
+        10% { transform: scale(1.22); opacity: 1; }
+      }
+
+      @keyframes barWave {
+        0%, 20%, 100% { opacity: 0.45; }
+        10% { opacity: 1; }
+      }
+
+      .scene {
+        animation: gentleSpin 36s linear infinite;
+        transform-origin: 49px 49px;
+      }
+
+      .event-storage {
+        fill: #029eb1;
+        transform: rotate(45deg);
+        transform-origin: 49px 49px;
+      }
+
+      circle {
+        transform-box: fill-box;
+        transform-origin: center;
+        animation: pop 6s ease-in-out infinite;
+      }
+
+      rect {
+        animation: barWave 6s ease-in-out infinite;
+      }
+
+      .d2, .b2 { animation-delay: 1.5s; }
+      .d3, .b3 { animation-delay: 3s; }
+      .d4, .b4 { animation-delay: 4.5s; }
+    </style>
+  </defs>
+
+  <g class="scene">
+    <g class="event-storage">
+      <circle class="d1" cx="26" cy="26" r="7.7"/>
+      <circle class="d2" cx="72" cy="26" r="7.7"/>
+      <circle class="d3" cx="26" cy="72" r="7.7"/>
+      <circle class="d4" cx="72" cy="72" r="7.7"/>
+
+      <rect class="d1" x="45" y="9" width="8" height="24"/>
+      <rect class="d2" x="45" y="66" width="8" height="24"/>
+      <rect class="d3" x="9" y="45" width="24" height="8"/>
+      <rect class="d4" x="66" y="45" width="24" height="8"/>
+    </g>
+  </g>
+</svg>
+

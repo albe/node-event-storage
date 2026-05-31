@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="98" height="98" viewBox="0 0 98 98" role="img" aria-label="node-event-store hero animation variant 1">
+  <defs>
+    <style>
+      @keyframes driftSpin {
+        0% { transform: rotate(0deg); }
+        50% { transform: rotate(10deg); }
+        100% { transform: rotate(0deg); }
+      }
+
+      @keyframes circlePulse {
+        0%, 100% { transform: scale(1); opacity: 0.9; }
+        50% { transform: scale(1.14); opacity: 1; }
+      }
+
+      @keyframes barGlow {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.55; }
+      }
+
+      .scene {
+        animation: driftSpin 12s ease-in-out infinite;
+        transform-origin: 49px 49px;
+      }
+
+      .event-storage {
+        fill: #029eb1;
+        transform: rotate(45deg);
+        transform-origin: 49px 49px;
+      }
+
+      circle {
+        animation: circlePulse 3.2s ease-in-out infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+
+      circle:nth-child(2),
+      circle:nth-child(4) {
+        animation-delay: 1.6s;
+      }
+
+      rect {
+        animation: barGlow 3.2s ease-in-out infinite;
+      }
+
+      rect:nth-child(2),
+      rect:nth-child(4) {
+        animation-delay: 1.6s;
+      }
+    </style>
+  </defs>
+
+  <g class="scene">
+    <g class="event-storage">
+      <g class="circles">
+        <circle cx="26" cy="26" r="7.7"/>
+        <circle cx="72" cy="26" r="7.7"/>
+        <circle cx="26" cy="72" r="7.7"/>
+        <circle cx="72" cy="72" r="7.7"/>
+      </g>
+
+      <g class="bars">
+        <rect x="45" y="9" width="8" height="24"/>
+        <rect x="45" y="66" width="8" height="24"/>
+        <rect x="9" y="45" width="24" height="8"/>
+        <rect x="66" y="45" width="24" height="8"/>
+      </g>
+    </g>
+  </g>
+</svg>
+
