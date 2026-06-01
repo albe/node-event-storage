@@ -2,14 +2,13 @@
   <defs>
     <style>
       @keyframes sceneTurn {
-        0%, 100% { transform: rotate(0deg); }
-        50% { transform: rotate(-8deg); }
+        0% { transform: rotate(-15deg); }
+        100% { transform: rotate(15deg); }
       }
 
       @keyframes pushOut {
-        0%, 100% { transform: translate(0px, 0px); opacity: 0.92; }
-        45% { transform: translate(var(--dx), var(--dy)); opacity: 1; }
-        70% { transform: translate(var(--dx), var(--dy)); opacity: 1; }
+        0%, 100% { transform: translate(0px, 0px); opacity: 1; }
+        45%, 70% { transform: translate(var(--dx), var(--dy)); opacity: 0.75; }
       }
 
       @keyframes barFadePause {
@@ -18,7 +17,7 @@
       }
 
       .scene {
-        animation: sceneTurn 14s ease-in-out infinite;
+        animation: sceneTurn 5s ease-in-out infinite alternate;
         transform-origin: 49px 49px;
       }
 
