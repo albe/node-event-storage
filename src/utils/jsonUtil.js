@@ -7,14 +7,46 @@ const BYTE_CLOSE_ARRAY = 0x5d;
 const BYTE_COMMA = 0x2c;
 
 /**
- * Find the position of `pattern` within `buffer` at depth 0 (the top-level object), starting
- * from `startOffset`.  It scans character-by-character tracking JSON nesting depth and string
- * quoting.  If `matchPosition` arrives at depth > 0 it means the pattern is inside a nested
- * object/array, so the scan continues searching for the next candidate at depth 0.  Returns -1
- * when no such position exists before the end of the buffer or when a closing brace reduces depth
- * below zero (the top-level object has ended).
+ * Advance past a JSON string whose opening `"` is at `i`.
+ * Returns the position after the closing `"`, or -1 if the string is unterminated.
  */
-function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
+function skipString(buffer, i) {
+    let j = i + 1;
+    while (j < buffer.length) {
+        if (buffer[j] === BYTE_ESCAPE) {
+            j += 2;
+            continue;
+        }
+        if (buffer[j] === BYTE_QUOTE) {
+            return j + 1;
+        }
+        j++;
+    }
+    /* c8 ignore next */
+    return -1;
+}
+
+/**
+ * Check if a character byte is a valid JSON value delimiter (comma, closing brace, or closing bracket).
+ * @param {number} char
+ * @returns {boolean}
+ */
+function isDelimiter(char) {
+    return (char === BYTE_COMMA || char === BYTE_CLOSE_OBJECT || char === BYTE_CLOSE_ARRAY);
+}
+
+/**
+ * Find the position of `pattern` within `buffer` at depth 0 (the top-level object), starting
+ * from `startOffset`. Tracks JSON nesting depth and skips over string contents entirely.
+ * If `matchPosition` arrives at depth > 0 it means the pattern is inside a nested
+ * object/array, so the scan continues searching for the next candidate at depth 0.
+ *
+ * For value patterns (`"key":value`) it validates the trailing delimiter to avoid prefix matches.
+ * For key patterns (`"key":`) pass `isKeyPattern=true` to skip that trailing delimiter check.
+ * Returns -1 when no such position exists before the end of the buffer or when a closing brace
+ * reduces depth below zero (the top-level object has ended).
+ */
+function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition, isKeyPattern = false) {
     /* c8 ignore start */
     // Defensive fallback: public call path precomputes an initial candidate in preCheck.
     if (matchPosition === undefined) {
@@ -26,55 +58,49 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
     /* c8 ignore stop */
 
     let depth = 0;
-    let inString = false;
     let i = startOffset;
 
     while (i < buffer.length) {
-        if (inString) {
-            if (buffer[i] === BYTE_ESCAPE) { // '\\'
-                i += 2;
-                continue;
-            }
-            if (buffer[i] === BYTE_QUOTE) { // '"'
-                inString = false;
-            }
-            i++;
-            continue;
-        }
-
         const ch = buffer[i];
-        if (ch === BYTE_OPEN_OBJECT || ch === BYTE_OPEN_ARRAY) { // '{' or '['
+
+        if (ch === BYTE_OPEN_OBJECT || ch === BYTE_OPEN_ARRAY) {
             depth++;
             i++;
             continue;
-        } else if (ch === BYTE_CLOSE_OBJECT || ch === BYTE_CLOSE_ARRAY) { // '}' or ']'
+        }
+        if (ch === BYTE_CLOSE_OBJECT || ch === BYTE_CLOSE_ARRAY) {
             depth--;
-
             if (depth < 0) {
                 return -1;
             }
-
             i++;
             continue;
-        } else if (ch === BYTE_QUOTE) { // '"'
-            inString = true;
         }
-
-        if (i >= matchPosition) {
-            if (i === matchPosition && ch === BYTE_QUOTE && depth === 0) { // '"'
-                const end = i + pattern.length;
-                if (pattern[pattern.length - 1] === BYTE_OPEN_OBJECT) { // '{'
+        if (ch === BYTE_QUOTE) {
+            if (i === matchPosition && depth === 0) {
+                if (isKeyPattern) {
                     return i;
                 }
-                if (buffer[end] === BYTE_COMMA || buffer[end] === BYTE_CLOSE_OBJECT || buffer[end] === BYTE_CLOSE_ARRAY) { // ',' or '}' or ']'
+                const end = i + pattern.length;
+                if (pattern[pattern.length - 1] === BYTE_OPEN_OBJECT) {
+                    return i;
+                }
+                if (isDelimiter(buffer[end])) {
                     return i;
                 }
             }
-
-            matchPosition = buffer.indexOf(pattern, matchPosition + 1);
-            if (matchPosition < 0) {
+            i = skipString(buffer, i);
+            /* c8 ignore next */
+            if (i === -1) {
                 return -1;
             }
+            if (matchPosition < i) {
+                matchPosition = buffer.indexOf(pattern, i);
+                if (matchPosition === -1) {
+                    return -1;
+                }
+            }
+            continue;
         }
 
         i++;
@@ -84,4 +110,42 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition) {
     return -1;
 }
 
-export { BYTE_OPEN_OBJECT, indexOfSameLevel };
+/**
+ * Extract the end position (exclusive) of a JSON scalar value starting at `offset`.
+ * `offset` should point to the first character of the value ('"' for strings, digit/-/true/false/null for others).
+ * Returns the position after the value ends (past the closing quote for strings, past the last digit/char for others).
+ * Returns -1 if the buffer is malformed.
+ */
+function findJsonValueEnd(buffer, offset) {
+    /* c8 ignore next */
+    if (offset >= buffer.length) {
+        return -1;
+    }
+
+    if (buffer[offset] === BYTE_QUOTE) {
+        return skipString(buffer, offset);
+    }
+
+    // Number, boolean, or null: scan until delimiter (,}])
+    let i = offset;
+    while (i < buffer.length && !isDelimiter(buffer[i])) i++;
+    return i;
+}
+
+/**
+ * Convert a JSON scalar value buffer to a comparable JavaScript value for range operators.
+ * Supports strings, numbers, booleans, and null.
+ */
+function parseJsonValue(buffer, startOffset, endOffset) {
+    const valueStr = buffer.toString('utf8', startOffset, endOffset).trim();
+    if (!valueStr) {
+        return undefined;
+    }
+    try {
+        return JSON.parse(valueStr);
+    } catch {
+        return undefined;
+    }
+}
+
+export { BYTE_OPEN_OBJECT, BYTE_CLOSE_OBJECT, indexOfSameLevel, findJsonValueEnd, parseJsonValue };

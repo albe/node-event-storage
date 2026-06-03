@@ -36,6 +36,8 @@ const { stream, condition } = store.query(
 
 The optional `matcher` narrows the boundary to exactly the events that would affect the decision — unrelated events of the same type (e.g. a different order) never cause spurious conflicts.
 
+That `matcher` can be either a predicate function or the same object-matcher syntax used by streams: nested equality, array values with OR semantics, and scalar operators like `$gte` / `$lt`. See [Event Streams -> Object Matcher Syntax](streams.md#object-matcher-syntax).
+
 `query()` also supports raw mode (`query(types, matcher, minRevision, true)`), but raw streaming itself is a general stream-reading feature, not DCB-specific. See [Event Streams -> Reading Streams](streams.md#reading-streams) for the full raw-mode semantics and matcher behavior.
 
 ### Step 2 — Build the decision model

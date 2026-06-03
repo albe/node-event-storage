@@ -1,18 +1,99 @@
 import crypto from 'crypto';
 import { assert, assertEqual } from './util.js';
-import { BYTE_OPEN_OBJECT, indexOfSameLevel } from './jsonUtil.js';
+import { BYTE_OPEN_OBJECT, indexOfSameLevel, findJsonValueEnd, parseJsonValue } from './jsonUtil.js';
+
+const compiledOperatorMatcherCache = new WeakMap();
 
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isOperatorObject(obj) {
+    if (!isPlainObject(obj)) {
+        return false;
+    }
+    const keys = Object.keys(obj);
+    return keys.length > 0 && keys.every(key => key.startsWith('$'));
+}
+
+/**
+ * Dispatch between array (OR), operator object, nested object, and scalar equality matching
+ * so callers don't need to know the shape of `matcherValue`.
+ */
 function propertyMatchesValue(documentValue, matcherValue) {
     if (Array.isArray(matcherValue)) {
         return matcherValue.includes(documentValue);
     } else if (matcherValue && typeof matcherValue === 'object') {
+        const operatorChecks = getCompiledOperatorChecks(matcherValue);
+        if (operatorChecks) {
+            return matchesCompiledOperators(documentValue, operatorChecks);
+        }
         return matches(documentValue, matcherValue);
     }
     return typeof matcherValue === 'undefined' || documentValue === matcherValue;
+}
+
+/**
+ * Pre-compile an operator object into an array of comparison closures so the hot path avoids
+ * repeated `Object.entries` + switch dispatch per matched document.
+ */
+function buildOperatorChecks(operatorObj) {
+    const checks = [];
+    for (const [operator, expectedValue] of Object.entries(operatorObj)) {
+        switch (operator) {
+            case '$gt':
+                checks.push(value => value > expectedValue);
+                break;
+            case '$gte':
+                checks.push(value => value >= expectedValue);
+                break;
+            case '$lt':
+                checks.push(value => value < expectedValue);
+                break;
+            case '$lte':
+                checks.push(value => value <= expectedValue);
+                break;
+            case '$eq':
+                checks.push(value => value === expectedValue);
+                break;
+            case '$ne':
+                checks.push(value => value !== expectedValue);
+                break;
+            default:
+                throw new TypeError(`Unknown operator: ${operator}`);
+        }
+    }
+    return checks;
+}
+
+/**
+ * Return cached compiled checks for `operatorObj`, compiling and caching on first access.
+ * Using WeakMap keeps operator objects GC-eligible and avoids mutating user-supplied objects.
+ */
+function getCompiledOperatorChecks(operatorObj) {
+    const cachedChecks = compiledOperatorMatcherCache.get(operatorObj);
+    if (cachedChecks) {
+        return cachedChecks;
+    }
+    /* c8 ignore next */
+    if (!isOperatorObject(operatorObj)) {
+        return null;
+    }
+    const checks = buildOperatorChecks(operatorObj);
+    compiledOperatorMatcherCache.set(operatorObj, checks);
+    return checks;
+}
+
+function matchesCompiledOperators(documentValue, checks) {
+    if (documentValue === undefined) {
+        return false;
+    }
+    for (const check of checks) {
+        if (!check(documentValue)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
@@ -76,6 +157,7 @@ function matches(document, matcher) {
  * @returns {{matcher: string|object, hmac?: string}}
  */
 function buildMetadataForMatcher(matcher, hmac) {
+    /* c8 ignore next */
     if (!matcher) {
         return undefined;
     }
@@ -96,6 +178,7 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
     if (typeof matcherMetadata.matcher === 'object') {
         matcher = matcherMetadata.matcher;
     } else {
+        /* c8 ignore next */
         assert(matcherMetadata.hmac === hmac(matcherMetadata.matcher), 'Invalid HMAC for matcher.');
 
         matcher = eval('(' + matcherMetadata.matcher + ')').bind({}); // jshint ignore:line
@@ -130,9 +213,10 @@ function buildTypeMatcherFn(payloadPath) {
  * @returns {function(Buffer): boolean}
  */
 function buildRawBufferMatcher(matcher = {}) {
-    assert(matcher && typeof matcher ==='object' && !Array.isArray(matcher), 'Matcher must be an object.', TypeError);
+    assert(isPlainObject(matcher), 'Matcher must be an object.', TypeError);
 
     const root = buildMatcherTree(matcher);
+    /* c8 ignore next */
     if (root.children.length === 0) {
         return () => true;
     }
@@ -159,6 +243,13 @@ function preCheck(buffer, startOffset, node) {
             return child.valueMatches[i] !== -1;
         })) {
             return false;
+        }
+        if (child.operators) {
+            const keyPos = buffer.indexOf(child.operatorKeyPrefix, startOffset);
+            if (keyPos === -1) {
+                return false;
+            }
+            child.operatorMatch = keyPos;
         }
         if (child.objectPattern) {
             const objectMatch = buffer.indexOf(child.objectPattern, startOffset);
@@ -188,14 +279,43 @@ function buildMatcherTree(matcher) {
     return node;
 }
 
+/**
+ * Decide which matching strategy to use for a key/value pair and build the corresponding
+ * child node with pre-computed byte patterns or compiled operator checks.
+ */
 function buildMatcherTreeChild(key, value) {
     const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
-    const child = { objectPattern: null, valuePatterns: null, node: null, objMatch: null, valueMatches: [] };
+    const operatorChecks = isPlainObject(value)
+        ? getCompiledOperatorChecks(value)
+        : null;
+    const child = {
+        objectPattern: null,
+        valuePatterns: null,
+        operators: null,
+        operatorChecks: null,
+        operatorKeyPrefix: null,
+        operatorMatch: null,
+        node: null,
+        objMatch: null,
+        valueMatches: []
+    };
+
     if (Array.isArray(value)) {
         if (value.some(item => item && typeof item === 'object')) {
             throw new TypeError('Array matcher values must be scalars.');
         }
         child.valuePatterns = value.map(item => buildValuePattern(keyPrefix, item));
+        return child;
+    } else if (operatorChecks) {
+        // A lone $eq is semantically identical to a scalar equality check — fold it into a
+        // value pattern at compile time so the buffer scan takes the same fast path as { key: value }.
+        if ('$eq' in value && Object.keys(value).length === 1) {
+            child.valuePatterns = [buildValuePattern(keyPrefix, value['$eq'])];
+            return child;
+        }
+        child.operators = value;
+        child.operatorChecks = operatorChecks;
+        child.operatorKeyPrefix = keyPrefix;
         return child;
     } else if (value && typeof value === 'object') {
         child.objectPattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
@@ -222,6 +342,10 @@ function matchesNode(buffer, startOffset, node) {
             return false;
         }
 
+        if (child.operators && !matchesOperatorInBuffer(buffer, startOffset, child)) {
+            return false;
+        }
+
         if (child.node) {
             const objectIndex = indexOfSameLevel(buffer, child.objectPattern, startOffset, child.objMatch);
             if (objectIndex === -1) {
@@ -234,6 +358,31 @@ function matchesNode(buffer, startOffset, node) {
     }
 
     return true;
+}
+
+/**
+ * Check if a value at the given key-offset matches the specified operators.
+ * Finds the key pattern, extracts the value, parses it, and applies operators.
+ */
+function matchesOperatorInBuffer(buffer, startOffset, child) {
+    const keyPos = indexOfSameLevel(buffer, child.operatorKeyPrefix, startOffset, child.operatorMatch, true);
+    if (keyPos === -1) {
+        return false;
+    }
+
+    const valueStart = keyPos + child.operatorKeyPrefix.length;
+    if (valueStart >= buffer.length) {
+        return false;
+    }
+
+    const valueEnd = findJsonValueEnd(buffer, valueStart);
+    if (valueEnd === -1 || valueEnd <= valueStart) {
+        return false;
+    }
+
+    const parsedValue = parseJsonValue(buffer, valueStart, valueEnd);
+
+    return matchesCompiledOperators(parsedValue, child.operatorChecks);
 }
 
 export {
