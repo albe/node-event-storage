@@ -130,7 +130,7 @@ class ReadablePartition extends events.EventEmitter {
         const metadata = metadataBuffer.toString('utf8').trim();
         try {
             this.metadata = JSON.parse(metadata);
-            this.metadata.epoch = this.metadata.epoch /* istanbul ignore next */|| NES_EPOCH.getTime();
+            this.metadata.epoch = this.metadata.epoch /* c8 ignore next */|| NES_EPOCH.getTime();
         } catch (e) {
             throw new Error('Invalid metadata.');
         }
@@ -373,13 +373,13 @@ class ReadablePartition extends events.EventEmitter {
      */
     readDocumentBefore(position) {
         const docPos = this.findDocumentPositionBefore(position);
-        /* istanbul ignore if */
+        /* c8 ignore next */
         if (docPos === false || docPos < 0) return null;
         const reader = this.prepareReadBufferBackwards(Math.min(docPos + (this.readBuffer.byteLength >> 1), this.size));
-        /* istanbul ignore if */
+        /* c8 ignore next */
         if (!reader.buffer) return null;
         const cursor = docPos - this.readBufferPos;
-        /* istanbul ignore if */
+        /* c8 ignore next */
         if (cursor < 0 || cursor + DOCUMENT_HEADER_SIZE > reader.length) return null;
         const header = this.readDocumentHeader(reader.buffer, cursor, docPos);
         return { header, position: docPos };
@@ -436,7 +436,7 @@ class ReadablePartition extends events.EventEmitter {
 
         const header = {};
         const data = this.readFrom(position, 0, header);
-        /* istanbul ignore if */
+        /* c8 ignore next 3 */
         if (data === false) {
             return null;
         }

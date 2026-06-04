@@ -12,7 +12,7 @@ const MAX_CATCHUP_BATCH = 10;
  * @param {string} filename
  */
 const safeUnlink = (filename) => {
-    /* istanbul ignore next */
+    /* c8 ignore next */
     try {
         fs.unlinkSync(filename);
     } catch (e) {
@@ -85,7 +85,7 @@ class Consumer extends stream.Readable {
      * @param {number} startFrom The revision to start from within the index to consume.
      */
     restoreState(initialState, startFrom) {
-        /* istanbul ignore if */
+        /* c8 ignore next 3 */
         if (!this.fileName) {
             return;
         }
@@ -135,7 +135,7 @@ class Consumer extends stream.Readable {
             return;
         }
 
-        /* istanbul ignore if */
+        /* c8 ignore next 3 */
         if (this.position !== position - 1) {
             return;
         }
@@ -169,7 +169,7 @@ class Consumer extends stream.Readable {
             consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
             const tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
-            /* istanbul ignore if */
+            /* c8 ignore next 3 */
             if (fs.existsSync(tmpFile)) {
                 throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
             }
@@ -179,7 +179,7 @@ class Consumer extends stream.Readable {
                 fs.renameSync(tmpFile, this.fileName);
                 this.emit('persisted', consumerState);
             } catch (e) {
-                /* istanbul ignore next */
+                /* c8 ignore next */
                 safeUnlink(tmpFile);
             }
         });

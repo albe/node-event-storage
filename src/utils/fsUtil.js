@@ -89,7 +89,7 @@ function scanSubdirs(subdirs, dir, relativePrefix, regexPattern, onEach, done) {
 function scanDir(dir, relativePrefix, isRoot, regexPattern, onEach, done) {
     fs.readdir(dir, { withFileTypes: true }, (err, entries) => {
         if (err) {
-            /* istanbul ignore next */
+            /* c8 ignore next */
             if (!isRoot && err.code === 'ENOENT') return done(null);
             return done(err);
         }

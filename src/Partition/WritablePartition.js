@@ -178,7 +178,7 @@ class WritablePartition extends ReadablePartition {
      */
     writeDocumentHeader(buffer, offset, dataSize, sequenceNumber = null, time64 = null) {
         ({ sequenceNumber, time64 } = this.normalizeWriteMetadata(sequenceNumber, time64));
-        /* istanbul ignore if */
+        /* c8 ignore next */
         assert(time64 >= 0, 'Time may not be negative!');
 
         buffer.writeUInt32BE(dataSize, offset);

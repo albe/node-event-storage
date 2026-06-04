@@ -18,7 +18,7 @@ class ReadOnlyPartition extends WatchesFile(ReadablePartition) {
      * @param {string} filename
      */
     onChange(filename) {
-        /* istanbul ignore if */
+        /* c8 ignore next 3 */
         if (!this.fd) {
             return;
         }

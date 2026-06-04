@@ -216,7 +216,7 @@ function buildRawBufferMatcher(matcher = {}) {
     assert(isPlainObject(matcher), 'Matcher must be an object.', TypeError);
 
     const root = buildMatcherTree(matcher);
-    /* c8 ignore next */
+    /* c8 ignore next 3 */
     if (root.children.length === 0) {
         return () => true;
     }

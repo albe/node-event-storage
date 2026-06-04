@@ -91,7 +91,7 @@ class ReadOnlyStorage extends ReadableStorage {
                 return;
             }
             const entries = index.range(prevLength + 1, newLength);
-            /* istanbul ignore if */
+            /* c8 ignore next 3 */
             if (entries === false) {
                 return;
             }

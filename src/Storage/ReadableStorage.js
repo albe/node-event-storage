@@ -155,7 +155,7 @@ class ReadableStorage extends events.EventEmitter {
             const partition = this.createPartition(file, this.partitionConfig);
             this.partitions.add(partition.id, partition);
         }, (partErr) => {
-            /* istanbul ignore if */
+            /* c8 ignore next */
             if (partErr) throw partErr;
 
             // Scan was cancelled by close() between the two scan phases.
@@ -170,7 +170,7 @@ class ReadableStorage extends events.EventEmitter {
                 this.emit('index-created', name);
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
-                /* istanbul ignore if */
+                /* c8 ignore next */
                 if (indexErr && indexErr.code !== 'ENOENT') throw indexErr;
                 done();
             });
@@ -478,7 +478,7 @@ class ReadableStorage extends events.EventEmitter {
      * @param {boolean} [noIndex=false] When true, bypasses the index and iterates partitions directly.
      */
     forEachDocument(iterationHandler, noIndex = false) {
-        /* istanbul ignore if  */
+        /* c8 ignore next 3  */
         if (typeof iterationHandler !== 'function') {
             return;
         }
@@ -509,7 +509,7 @@ class ReadableStorage extends events.EventEmitter {
      * @param {object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
      */
     forEachSecondaryIndex(iterationHandler, matchDocument) {
-        /* istanbul ignore if  */
+        /* c8 ignore next 3  */
         if (typeof iterationHandler !== 'function') {
             return;
         }
@@ -534,7 +534,7 @@ class ReadableStorage extends events.EventEmitter {
      * @param {function(ReadablePartition)} iterationHandler
      */
     forEachPartition(iterationHandler) {
-        /* istanbul ignore if  */
+        /* c8 ignore next 3  */
         if (typeof iterationHandler !== 'function') {
             return;
         }
