@@ -508,6 +508,7 @@ function buildOperatorBufferMatcher(operatorObj) {
 
 export {
     createHmac,
+    isPlainObject,
     matches,
     buildMetadataHeader,
     buildMetadataForMatcher,

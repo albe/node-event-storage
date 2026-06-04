@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
 import { iterate } from '../src/utils/util.js';
-import { scanForFiles } from '../src/utils/fsUtil.js';
+import { isSafeRelativeName, resolvePathWithinRoot, scanForFiles } from '../src/utils/fsUtil.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -88,6 +88,26 @@ describe('util', function() {
                 expect(err).to.be.an(Error);
                 done();
             });
+        });
+
+        describe('file path helpers', function() {
+
+            it('detects safe relative names', function() {
+                expect(isSafeRelativeName('stream-orders')).to.be(true);
+                expect(isSafeRelativeName('../orders')).to.be(false);
+            });
+
+            it('resolves paths within a root directory', function() {
+                const root = path.join(testDir, 'root');
+                const resolved = resolvePathWithinRoot(root, 'a/b.file');
+                expect(resolved.startsWith(path.resolve(root))).to.be(true);
+            });
+
+            it('rejects traversal paths outside of root directory', function() {
+                const root = path.join(testDir, 'root');
+                expect(() => resolvePathWithinRoot(root, '../outside.file')).to.throwError(/Invalid relative path/);
+            });
+
         });
 
     });

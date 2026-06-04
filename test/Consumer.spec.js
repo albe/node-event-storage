@@ -41,6 +41,14 @@ describe('Consumer', function() {
         expect(() => new Consumer(storage, 'foobar')).to.throwError(/identifier/);
     });
 
+    it('throws for invalid consumer index names', function() {
+        expect(() => new Consumer(storage, '../foobar', 'consumer1')).to.throwError(/Invalid index name/);
+    });
+
+    it('throws for invalid consumer identifiers', function() {
+        expect(() => new Consumer(storage, 'foobar', '../consumer1')).to.throwError(/Invalid identifier/);
+    });
+
     it('creates consumer directory if not existing', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         expect(fs.existsSync(dataDirectory + '/consumers')).to.be(true);
@@ -534,6 +542,26 @@ describe('Consumer', function() {
             done();
         });
 
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('consumer.project persists a projection when attaching', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-project-method', { count: 0 });
+        const projection = new Projection('consumer-project-method', {
+            initialState: { count: 0 },
+            handlers: {
+                Foobar: (state, event) => ({ ...state, count: state.count + event.id })
+            }
+        }, { hmac: createHmac('test-secret') });
+
+        consumer.project(projection);
+        expect(fs.existsSync(`${consumer.fileName}.projection`)).to.be(true);
+        consumer.on('caught-up', () => {
+            expect(consumer.state.count).to.be(6);
+            done();
+        });
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 });

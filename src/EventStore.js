@@ -8,8 +8,8 @@ import Index from './Index.js';
 import Consumer from './Consumer.js';
 import Projection from './Projection.js';
 import { assert, getPropertyAtPath } from './utils/util.js';
-import { ensureDirectory, scanForFiles } from './utils/fsUtil.js';
-import { buildTypeMatcherFn } from './utils/metadataUtil.js';
+import { ensureDirectory, isSafeRelativeName, scanForFiles } from './utils/fsUtil.js';
+import { buildTypeMatcherFn, isPlainObject } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 
 const ExpectedVersion = {
@@ -21,7 +21,6 @@ const ExpectedVersion = {
  * Default matcher property paths mirroring the Storage default, used for index optimization.
  */
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
-const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
 const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 class OptimisticConcurrencyError extends Error {}
@@ -448,7 +447,7 @@ class EventStore extends events.EventEmitter {
             return null;
         }
         assert(typeof type === 'string', 'typeAccessor must return a string.');
-        assert(STREAM_NAME_PATTERN.test(type), `typeAccessor must return a valid stream name. Got: "${type}"`);
+        assert(isSafeRelativeName(type), `typeAccessor must return a valid stream name. Got: "${type}"`);
         return type;
     }
 
@@ -899,10 +898,7 @@ class EventStore extends events.EventEmitter {
 
 
 function isProjectionDefinitionObject(value) {
-    return value
-        && typeof value === 'object'
-        && !Array.isArray(value)
-        && Object.hasOwn(value, 'handlers');
+    return isPlainObject(value) && Object.hasOwn(value, 'handlers');
 }
 
 EventStore.Storage = Storage;
