@@ -2,24 +2,10 @@ import stream from 'stream';
 import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
-import { ensureDirectory } from './utils/fsUtil.js';
+import { ensureDirectory, safeUnlink, writeFileAtomic } from './utils/fsUtil.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
 
-/**
- * Safely unlink a file and ignore if it doesn't exist.
- * @param {string} filename
- */
-const safeUnlink = (filename) => {
-    /* istanbul ignore next */
-    try {
-        fs.unlinkSync(filename);
-    } catch (e) {
-        if (e.code !== "ENOENT") {
-            throw e;
-        }
-    }
-};
 
 /**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
@@ -197,9 +183,8 @@ class Consumer extends stream.Readable {
                 throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
             }
             try {
-                fs.writeFileSync(tmpFile, consumerData);
                 // If the write fails (half-way), the consumer state file will not be corrupted
-                fs.renameSync(tmpFile, this.fileName);
+                writeFileAtomic(this.fileName, consumerData, { tmpFileName: tmpFile });
                 this.emit('persisted', consumerState);
             } catch (e) {
                 /* istanbul ignore next */

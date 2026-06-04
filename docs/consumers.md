@@ -75,11 +75,8 @@ Use a `Projection` to define *how* events are projected into state, then connect
 
 ```javascript
 const projection = eventstore.getProjection('orders-total', {
-    initialState: { total: 0 },
-    handlers: {
-        OrderCreated: (state, event) => ({ ...state, total: state.total + (event.payload.amount || 0) })
-    }
-});
+    OrderCreated: (state, event) => ({ ...state, total: state.total + (event.payload.amount || 0) })
+}, { total: 0 });
 
 const consumer = eventstore.getConsumer('orders', 'orders-projection', projection.initialState);
 projection.subscribe(consumer);
@@ -88,10 +85,15 @@ projection.subscribe(consumer);
 Projections are composable via `CompositeProjection`:
 
 ```javascript
-import { CompositeProjection } from 'event-storage';
+import { CompositeProjection, Projection } from 'event-storage';
+
+const count = new Projection('count', {
+    initialState: 0,
+    handlers: { OrderCreated: (state) => state + 1 }
+});
 
 const overview = new CompositeProjection('overview', {
-    count: { initialState: 0, handlers: { OrderCreated: (state) => state + 1 } },
+    count,
     last: { initialState: null, handlers: { OrderCreated: (state, event) => event.payload } }
 });
 ```

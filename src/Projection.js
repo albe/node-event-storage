@@ -1,20 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
-import { ensureDirectory } from './utils/fsUtil.js';
+import { ensureDirectory, writeFileAtomic } from './utils/fsUtil.js';
 import { buildMatcherFromMetadata, buildMetadataForMatcher, matches } from './utils/metadataUtil.js';
 
 const DEFAULT_TYPE_ACCESSOR = (event) => event?.type || event?.payload?.type;
 
-const safeUnlink = (filename) => {
-    try {
-        fs.unlinkSync(filename);
-    } catch (e) {
-        if (e.code !== "ENOENT") {
-            throw e;
-        }
-    }
-};
 
 class Projection {
 
@@ -105,13 +96,10 @@ class Projection {
         const metadata = this.toMetadata(hmac);
         const tmpFile = fileName + '.tmp';
         ensureDirectory(path.dirname(fileName));
-        try {
-            fs.writeFileSync(tmpFile, JSON.stringify(metadata), 'utf8');
-            fs.renameSync(tmpFile, fileName);
-        } catch (e) {
-            safeUnlink(tmpFile);
-            throw e;
-        }
+        writeFileAtomic(fileName, JSON.stringify(metadata), {
+            tmpFileName: tmpFile,
+            encoding: 'utf8'
+        });
         this.fileName = fileName;
         this.hmac = hmac;
         return fileName;

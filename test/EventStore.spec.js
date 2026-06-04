@@ -1385,7 +1385,7 @@ describe('EventStore', function() {
                 storageDirectory,
                 typeAccessor: 'type',
                 storageConfig: {
-                    hmac: createHmac('test-secret')
+                    hmacSecret: 'test-secret'
                 }
             });
             eventstore.createEventStream('user-stream', (event) => event.stream === 'user-stream');
@@ -1397,7 +1397,7 @@ describe('EventStore', function() {
                     UserCreated: (state) => ({ ...state, count: state.count + 1 })
                 }
             }, {
-                hmac: createHmac('test-secret')
+                hmac: eventstore.storage.hmac
             }).subscribe(consumer);
             eventstore.commit('user-stream', [{ type: 'UserCreated', id: 1 }]);
             eventstore.commit('user-stream', [{ type: 'UserCreated', id: 2 }]);
@@ -1411,7 +1411,7 @@ describe('EventStore', function() {
                     storageDirectory,
                     typeAccessor: 'type',
                     storageConfig: {
-                        hmac: createHmac('test-secret')
+                        hmacSecret: 'test-secret'
                     }
                 });
                 const reopened = eventstore.getConsumer('user-stream', 'user-counter', { count: 0 });
@@ -1432,15 +1432,12 @@ describe('EventStore', function() {
                 storageDirectory,
                 typeAccessor: 'type',
                 storageConfig: {
-                    hmac: createHmac('test-secret')
+                    hmacSecret: 'test-secret'
                 }
             });
             const projection = eventstore.getProjection('user-count', {
-                initialState: 0,
-                handlers: {
-                    UserCreated: (state) => state + 1
-                }
-            });
+                UserCreated: (state) => state + 1
+            }, 0);
             projection.persist();
 
             const restored = eventstore.getProjection('user-count');

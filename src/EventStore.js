@@ -120,10 +120,10 @@ class EventStore extends events.EventEmitter {
             }
         }
 
+        this.projectionTypeAccessor = this.typeAccessor
+            ? (event) => this.typeAccessor(event?.payload || event)
+            : undefined;
         this.initialize(storeName, storageConfig);
-        this.projectionHmac = typeof storageConfig.hmac === 'function'
-            ? storageConfig.hmac
-            : this.storage.hmac;
     }
 
     /**
@@ -788,15 +788,12 @@ class EventStore extends events.EventEmitter {
         if (this.consumers.has(identifier)) {
             return this.consumers.get(identifier);
         }
-        const projectionTypeAccessor = this.typeAccessor
-            ? (event) => this.typeAccessor(event?.payload || event)
-            : undefined;
         const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
         const consumerProjectionFileName = `${consumer.fileName}.projection`;
         if (fs.existsSync(consumerProjectionFileName)) {
             Projection.restoreFromFile(consumerProjectionFileName, {
-                hmac: this.projectionHmac,
-                typeAccessor: projectionTypeAccessor
+                hmac: this.storage.hmac,
+                typeAccessor: this.projectionTypeAccessor
             }).subscribe(consumer);
         }
         consumer.streamName = streamName;
@@ -808,21 +805,23 @@ class EventStore extends events.EventEmitter {
      * Get or create a projection with EventStore defaults.
      *
      * @param {string} name Projection name.
-     * @param {object} [definition] Projection definition.
+     * @param {function(object, object): object|object} [handlers] Projection handlers (reducer fn or reducer map).
+     * @param {object} [initialState={}] Projection initial state.
+     * @param {object|function(object): boolean} [matcher] Optional projection matcher.
      * @returns {Projection}
      */
-    getProjection(name, definition) {
+    getProjection(name, handlers, initialState = {}, matcher) {
         assert(typeof name === 'string' && name !== '', 'Must provide a projection name.');
-        const projectionTypeAccessor = this.typeAccessor
-            ? (event) => this.typeAccessor(event?.payload || event)
-            : undefined;
         const projectionFileName = path.join(this.storage.indexDirectory, 'projections', this.storage.storageFile + '.' + name + '.projection');
         const projectionOptions = {
             fileName: projectionFileName,
-            hmac: this.projectionHmac,
-            typeAccessor: projectionTypeAccessor
+            hmac: this.storage.hmac,
+            typeAccessor: this.projectionTypeAccessor
         };
-        if (definition) {
+        if (handlers !== undefined) {
+            const definition = (handlers && typeof handlers === 'object' && !Array.isArray(handlers) && Object.prototype.hasOwnProperty.call(handlers, 'handlers'))
+                ? handlers
+                : { handlers, initialState, matcher };
             return new Projection(name, definition, projectionOptions);
         }
         return Projection.restore(name, projectionOptions);
