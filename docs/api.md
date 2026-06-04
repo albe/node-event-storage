@@ -280,23 +280,18 @@ Asynchronously scan all consumer state files and return their identifiers.
 
 ---
 
-#### `eventstore.getProjection(name, [definition])`
+#### `eventstore.getProjection(name, [handlers], [initialState], [matcher])`
 
 ```javascript
-eventstore.getProjection(name [, definition]) → Projection
+eventstore.getProjection(name [, handlers] [, initialState] [, matcher]) → Projection
 ```
 
-Create a `Projection` with EventStore defaults (`typeAccessor`, storage HMAC), or restore a previously persisted one when `definition` is omitted.
+Create a `Projection` with EventStore defaults (`typeAccessor`, storage HMAC), or restore a previously persisted one when `handlers` is omitted.
 
-`definition` shape:
+- `handlers`: reducer function `(state, event) => state` or map `{ [eventType]: reducer }`
+- `initialState`: initial projection state (default `{}`)
+- `matcher`: optional object/function matcher (same shape as stream/query matchers)
 
-```javascript
-{
-  initialState: any,
-  handlers: (state, event) => state | { [eventType]: (state, event) => state },
-  matcher: object|function // optional
-}
-```
 
 ---
 
@@ -316,7 +311,7 @@ Attach a projection-like object (`apply(state, event)`) as the consumer `'data'`
 projection.subscribe(consumer)
 ```
 
-Attach this projection to the consumer and persist its definition next to the consumer state file so `eventstore.getConsumer(...)` can restore and reconnect it automatically.
+Attach this projection to the consumer (same wiring behavior as `consumer.project(projection)`) and persist its definition next to the consumer state file so `eventstore.getConsumer(...)` can restore and reconnect it automatically.
 
 ---
 

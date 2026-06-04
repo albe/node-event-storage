@@ -3,6 +3,43 @@ import path from 'path';
 import { mkdirpSync } from 'mkdirp';
 
 /**
+ * Safely unlink a file and ignore ENOENT.
+ * @param {string} fileName
+ */
+function safeUnlink(fileName) {
+    try {
+        fs.unlinkSync(fileName);
+    } catch (e) {
+        if (e.code !== 'ENOENT') {
+            throw e;
+        }
+    }
+}
+
+/**
+ * Atomically write a file by writing to a temporary file first and then renaming it.
+ * @param {string} fileName
+ * @param {string|Buffer} data
+ * @param {{ tmpFileName?: string, encoding?: BufferEncoding }} [options]
+ * @returns {string}
+ */
+function writeFileAtomic(fileName, data, options = {}) {
+    const tmpFileName = options.tmpFileName || `${fileName}.tmp`;
+    try {
+        if (options.encoding) {
+            fs.writeFileSync(tmpFileName, data, options.encoding);
+        } else {
+            fs.writeFileSync(tmpFileName, data);
+        }
+        fs.renameSync(tmpFileName, fileName);
+    } catch (e) {
+        safeUnlink(tmpFileName);
+        throw e;
+    }
+    return fileName;
+}
+
+/**
  * Ensure that the given directory exists.
  * @param {string} dirName Target directory.
  * @returns {boolean} True when the directory already existed.
@@ -123,5 +160,7 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
 
 export {
     ensureDirectory,
+    safeUnlink,
+    writeFileAtomic,
     scanForFiles,
 };
