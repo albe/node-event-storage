@@ -2,10 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { mkdirpSync } from 'mkdirp';
 
-/**
- * Safely unlink a file and ignore ENOENT.
- * @param {string} fileName
- */
+// Best-effort cleanup for temporary files after interrupted/failed writes.
 function safeUnlink(fileName) {
     try {
         fs.unlinkSync(fileName);
@@ -16,21 +13,12 @@ function safeUnlink(fileName) {
     }
 }
 
-/**
- * Atomically write a file by writing to a temporary file first and then renaming it.
- * @param {string} fileName
- * @param {string|Buffer} data
- * @param {{ tmpFileName?: string, encoding?: BufferEncoding }} [options]
- * @returns {string}
- */
+// Prevent partially written persistence files from replacing the last valid state.
 function writeFileAtomic(fileName, data, options = {}) {
     const tmpFileName = options.tmpFileName || `${fileName}.tmp`;
+    const writeOptions = options.encoding ? { encoding: options.encoding } : undefined;
     try {
-        if (options.encoding) {
-            fs.writeFileSync(tmpFileName, data, options.encoding);
-        } else {
-            fs.writeFileSync(tmpFileName, data);
-        }
+        fs.writeFileSync(tmpFileName, data, writeOptions);
         fs.renameSync(tmpFileName, fileName);
     } catch (e) {
         safeUnlink(tmpFileName);

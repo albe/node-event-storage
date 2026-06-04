@@ -850,7 +850,7 @@ class EventStore extends events.EventEmitter {
             typeAccessor: this.projectionTypeAccessor
         };
         if (handlers !== undefined) {
-            const definition = (handlers && typeof handlers === 'object' && !Array.isArray(handlers) && Object.prototype.hasOwnProperty.call(handlers, 'handlers'))
+            const definition = isProjectionDefinitionObject(handlers)
                 ? handlers
                 : { handlers, initialState, matcher };
             return new Projection(name, definition, projectionOptions);
@@ -897,6 +897,13 @@ class EventStore extends events.EventEmitter {
     }
 }
 
+
+function isProjectionDefinitionObject(value) {
+    return value
+        && typeof value === 'object'
+        && !Array.isArray(value)
+        && Object.hasOwn(value, 'handlers');
+}
 
 EventStore.Storage = Storage;
 EventStore.Index = Index;
