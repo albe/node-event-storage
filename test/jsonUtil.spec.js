@@ -26,6 +26,20 @@ describe('jsonUtil', function() {
             expect(indexOfSameLevel(buffer, pattern, 1)).to.be(buffer.indexOf(pattern));
         });
 
+        it('matches numeric value patterns like "amount":5 at top level', function() {
+            const buffer = Buffer.from('{"amount":5,"other":1}', 'utf8');
+            const pattern = Buffer.from('"amount":5', 'utf8');
+
+            expect(indexOfSameLevel(buffer, pattern, 1)).to.be(buffer.indexOf(pattern));
+        });
+
+        it('does not match numeric prefixes like "amount":5 for actual value 50', function() {
+            const buffer = Buffer.from('{"amount":50}', 'utf8');
+            const pattern = Buffer.from('"amount":5', 'utf8');
+
+            expect(indexOfSameLevel(buffer, pattern, 1)).to.be(-1);
+        });
+
         it('returns -1 when the pattern never appears at the requested level', function() {
             const buffer = Buffer.from('{"type":"Foo","payload":{"kind":"A"}}', 'utf8');
             const pattern = Buffer.from('"missing":"value"', 'utf8');
