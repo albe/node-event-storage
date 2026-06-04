@@ -36,6 +36,33 @@ function isDelimiter(char) {
 }
 
 /**
+ * @param {number} char
+ * @returns {boolean}
+ */
+function isOpeningBracket(char) {
+    return char === BYTE_OPEN_OBJECT || char === BYTE_OPEN_ARRAY;
+}
+
+/**
+ * @param {number} char
+ * @returns {boolean}
+ */
+function isClosingBracket(char) {
+    return char === BYTE_CLOSE_OBJECT || char === BYTE_CLOSE_ARRAY;
+}
+
+function isOpeningObject(char) {
+    return char === BYTE_OPEN_OBJECT;
+}
+
+function nextIndexOf(buffer, pattern, startOffset, lastMatchPosition) {
+    if (lastMatchPosition === undefined || lastMatchPosition < startOffset) {
+        return buffer.indexOf(pattern, startOffset);
+    }
+    return lastMatchPosition;
+}
+
+/**
  * Find the position of `pattern` within `buffer` at depth 0 (the top-level object), starting
  * from `startOffset`. Tracks JSON nesting depth and skips over string contents entirely.
  * If `matchPosition` arrives at depth > 0 it means the pattern is inside a nested
@@ -46,29 +73,23 @@ function isDelimiter(char) {
  * Returns -1 when no such position exists before the end of the buffer or when a closing brace
  * reduces depth below zero (the top-level object has ended).
  */
-function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition, isKeyPattern = false) {
-    /* c8 ignore start */
-    // Defensive fallback: public call path precomputes an initial candidate in preCheck.
-    if (matchPosition === undefined) {
-        matchPosition = buffer.indexOf(pattern, startOffset);
-    }
-    if (matchPosition === -1) {
-        return -1;
-    }
-    /* c8 ignore stop */
-
+function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition = undefined, isKeyPattern = false) {
     let depth = 0;
     let i = startOffset;
 
     while (i < buffer.length) {
+        matchPosition = nextIndexOf(buffer, pattern, i, matchPosition);
+        if (matchPosition === -1) {
+            return -1;
+        }
         const ch = buffer[i];
 
-        if (ch === BYTE_OPEN_OBJECT || ch === BYTE_OPEN_ARRAY) {
+        if (isOpeningBracket(ch)) {
             depth++;
             i++;
             continue;
         }
-        if (ch === BYTE_CLOSE_OBJECT || ch === BYTE_CLOSE_ARRAY) {
+        if (isClosingBracket(ch)) {
             depth--;
             if (depth < 0) {
                 return -1;
@@ -78,27 +99,18 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition, isKey
         }
         if (ch === BYTE_QUOTE) {
             if (i === matchPosition && depth === 0) {
-                if (isKeyPattern) {
+                if (isKeyPattern || isOpeningObject(pattern[pattern.length - 1])) {
                     return i;
                 }
                 const end = i + pattern.length;
-                if (pattern[pattern.length - 1] === BYTE_OPEN_OBJECT) {
-                    return i;
-                }
                 if (isDelimiter(buffer[end])) {
                     return i;
                 }
             }
             i = skipString(buffer, i);
-            /* c8 ignore next */
+            /* c8 ignore next 3 */
             if (i === -1) {
                 return -1;
-            }
-            if (matchPosition < i) {
-                matchPosition = buffer.indexOf(pattern, i);
-                if (matchPosition === -1) {
-                    return -1;
-                }
             }
             continue;
         }
@@ -117,7 +129,7 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition, isKey
  * Returns -1 if the buffer is malformed.
  */
 function findJsonValueEnd(buffer, offset) {
-    /* c8 ignore next */
+    /* c8 ignore next 3 */
     if (offset >= buffer.length) {
         return -1;
     }
@@ -148,4 +160,4 @@ function parseJsonValue(buffer, startOffset, endOffset) {
     }
 }
 
-export { BYTE_OPEN_OBJECT, BYTE_CLOSE_OBJECT, indexOfSameLevel, findJsonValueEnd, parseJsonValue };
+export { BYTE_OPEN_OBJECT, BYTE_CLOSE_OBJECT, isOpeningObject, indexOfSameLevel, findJsonValueEnd, parseJsonValue };
