@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0
+
+New in 1.3:
+
+- Object matcher syntax now supports scalar operators: `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`.
+- Operator matchers work consistently across object mode, raw-buffer mode, and DCB/query filters.
+- `$eq`-only operator matchers are folded into the scalar fast path for raw matching (same hot path as plain equality).
+- Public low-level matcher utilities are now exported from the package root (`matches`, `buildRawBufferMatcher`) for reuse by dependent layers.
+
 ## 1.2.0
 
 Breaking changes:
