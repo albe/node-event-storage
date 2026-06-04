@@ -135,7 +135,6 @@ class Consumer extends stream.Readable {
             return;
         }
 
-        /* c8 ignore next 3 */
         if (this.position !== position - 1) {
             return;
         }

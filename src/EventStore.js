@@ -186,7 +186,6 @@ class EventStore extends events.EventEmitter {
      * @param {string} name The full stream name, including the `stream-` prefix (and optional `.closed` suffix).
      */
     registerStream(name) {
-        /* c8 ignore next 3 */
         if (!name.startsWith('stream-')) {
             return;
         }
