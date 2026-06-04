@@ -84,8 +84,8 @@ Traditional databases do a great deal of work that event stores simply do not ne
 | Page | Contents |
 |------|----------|
 | [Getting Started](getting-started.md) | Installation, constructor options, first commit & read |
-| [Event Streams](streams.md) | Writing, reading, revision ranges, fluent API, joining, categories, metadata |
-| [Dynamic Consistency Boundaries](dcb.md) | `typeAccessor`, multi-value matchers, consistency tokens, and DCB workflow |
+| [Event Streams](streams.md) | Writing, reading, raw mode, object matcher syntax, revision ranges, fluent API, joining, categories, metadata |
+| [Dynamic Consistency Boundaries](dcb.md) | `typeAccessor`, query matchers, consistency tokens, and DCB workflow |
 | [Consumers](consumers.md) | At-least-once & exactly-once delivery, state, consistency guards, read-only mode |
 | [Advanced Topics](advanced.md) | ACID details, reliability & crash-safety guarantees, storage config, partitioning, serialization, compression, security, access control |
 | [Performance](performance.md) | Write/read/startup benchmarks at scale, `matcherProperties` and `maxOpenPartitions` tuning guide |

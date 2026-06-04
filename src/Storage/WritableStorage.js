@@ -6,6 +6,7 @@ import ReadableStorage from './ReadableStorage.js';
 import { assert } from '../utils/util.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
+import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
@@ -44,10 +45,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} [config.lock] One of LOCK_* constants that defines how an existing lock should be handled.
      */
     constructor(storageName = 'storage', config = {}) {
-        if (typeof storageName !== 'string') {
-            config = storageName;
-            storageName = undefined;
-        }
+        ({ name: storageName, options: config } = normalizeNamedCtorArgs(storageName, config));
         const defaults = {
             partitioner: (document, number) => '',
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
@@ -100,7 +98,7 @@ class WritableStorage extends ReadableStorage {
      */
     forEachWritableSecondaryIndex(iterationHandler, matchDocument) {
         this.forEachSecondaryIndex((index, name) => {
-            /* istanbul ignore if */
+            /* c8 ignore next */
             if (!(index instanceof WritableIndex)) return;
             const wasOpen = index.isOpen();
             if (!wasOpen) index.open();
@@ -123,7 +121,7 @@ class WritableStorage extends ReadableStorage {
         this.forEachPartition(partition => {
             partition.open();
             const last = partition.readLast();
-            /* istanbul ignore if */
+            /* c8 ignore next */
             if (!last) return;
             const { header: { sequenceNumber, dataSize }, position } = last;
             if (position + partition.documentWriteSize(dataSize) > partition.size) {
@@ -165,7 +163,7 @@ class WritableStorage extends ReadableStorage {
             // Truncate all indexes to the torn-write boundary.
             this.index.open();
             this.index.truncate(lastValidSequenceNumber);
-            /* istanbul ignore next */
+            /* c8 ignore next */
             this.forEachWritableSecondaryIndex(index => {
                 index.truncate(index.find(lastValidSequenceNumber));
             });
@@ -231,7 +229,7 @@ class WritableStorage extends ReadableStorage {
             fs.mkdirSync(this.lockFile);
             this.locked = true;
         } catch (e) {
-            /* istanbul ignore if */
+            /* c8 ignore next */
             assert(e.code === 'EEXIST', `Error creating lock for storage ${this.storageFile}: ` + e.message)
 
             throw new StorageLockedError(`Storage ${this.storageFile} is locked by another process`);
@@ -290,7 +288,7 @@ class WritableStorage extends ReadableStorage {
         const entry = new WritableIndexEntry(this.index.length + 1, position, size, partitionId);
         this.index.add(entry, (indexPosition) => {
             this.emit('wrote', document, entry, indexPosition);
-            /* istanbul ignore if  */
+            /* c8 ignore next 3  */
             if (typeof callback === 'function') {
                 return callback(indexPosition);
             }
@@ -509,9 +507,8 @@ class WritableStorage extends ReadableStorage {
          2) truncate all partitions accordingly
          3) truncate/rewrite all indexes
          */
-        if (!this.index.isOpen()) {
-            this.index.open();
-        }
+        this.index.open();
+
         if (after < 0) {
             after += this.index.length;
         }

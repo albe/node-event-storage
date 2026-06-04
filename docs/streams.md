@@ -99,6 +99,51 @@ Matcher semantics differ by mode:
 | `raw=false` (default) | `(payload, metadata) => boolean` | Matched against `{ stream, payload, metadata }` |
 | `raw=true` | `(buffer) => boolean` | Byte-level matcher against compact JSON bytes |
 
+### Object Matcher Syntax
+
+Object matchers use the same shape in both modes. In object mode they are evaluated against
+`{ stream, payload, metadata }`. In raw mode the same matcher is compiled into byte-level checks.
+
+Supported forms:
+
+- **Scalar equality**
+
+  ```javascript
+  { payload: { type: 'OrderPlaced' } }
+  ```
+
+- **Nested object matching**
+
+  ```javascript
+  { metadata: { tenantId: 'acme' } }
+  ```
+
+- **Array values with OR semantics**
+
+  ```javascript
+  { payload: { type: ['OrderPlaced', 'OrderCancelled'] } }
+  ```
+
+- **Scalar comparison operators**
+
+  ```javascript
+  { payload: { amount: { $gte: 100, $lt: 1000 } } }
+  ```
+
+Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, and `$ne`.
+Multiple operators on the same field are combined with AND semantics.
+
+`$eq` is equivalent to plain equality, so prefer the simpler form when possible:
+
+```javascript
+{ payload: { type: 'OrderPlaced' } }
+// equivalent to:
+{ payload: { type: { $eq: 'OrderPlaced' } } }
+```
+
+Operator matching is intended for scalar values (`string`, `number`, `boolean`, `null`).
+For arrays, objects, or custom raw encodings, use plain equality or a function matcher.
+
 Important: raw object matchers require the default compact JSON serializer format. If you use a custom serializer, use a raw function matcher instead.
 
 ### Revision Ranges

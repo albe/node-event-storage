@@ -1,29 +1,9 @@
 import stream from 'stream';
 import { assert } from './utils/util.js';
 import { buildRawBufferMatcher, matches } from './utils/metadataUtil.js';
+import { normalizeRevision, normalizeMaxRevision } from './utils/apiHelpers.js';
 
 const NDJSON_NEWLINE = Buffer.from('\n');
-
-/**
- * Calculate the actual version number from a possibly relative (negative) version number.
- *
- * @param {number} version The version to normalize.
- * @param {number} length The maximum version number
- * @returns {number} The absolute version number.
- */
-function normalizeVersion(version, length) {
-    return version < 0 ? version + length + 1 : version;
-}
-
-/**
- * Return the lower absolute version given a version and a maxVersion constraint.
- * @param {number} version
- * @param {number} maxVersion
- * @returns {number}
- */
-function minVersion(version, maxVersion) {
-    return Math.min(version, maxVersion < 0 ? version + maxVersion + 1 : maxVersion);
-}
 
 /**
  * An event stream is a simple wrapper around an iterator over storage documents.
@@ -56,9 +36,9 @@ class EventStream extends stream.Readable {
         this.rawMatcher = null;
         if (eventStore.streams[name]) {
             this.streamIndex = eventStore.streams[name].index;
-            this.minRevision = normalizeVersion(minRevision, this.streamIndex.length);
-            this.maxRevision = normalizeVersion(maxRevision, this.streamIndex.length);
-            this.version = minVersion(this.streamIndex.length, maxRevision);
+            this.minRevision = normalizeRevision(minRevision, this.streamIndex.length);
+            this.maxRevision = normalizeRevision(maxRevision, this.streamIndex.length);
+            this.version = normalizeMaxRevision(this.streamIndex.length, maxRevision);
             this._iterator = null;
             this.fetch = () => eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex, raw);
         } else {
@@ -74,7 +54,7 @@ class EventStream extends stream.Readable {
      * @returns {EventStream}
      */
     from(revision) {
-        this.minRevision = normalizeVersion(revision, this.streamIndex.length);
+        this.minRevision = normalizeRevision(revision, this.streamIndex.length);
         return this;
     }
 
@@ -84,8 +64,8 @@ class EventStream extends stream.Readable {
      * @returns {EventStream}
      */
     until(revision) {
-        this.maxRevision = normalizeVersion(revision, this.streamIndex.length);
-        this.version = minVersion(this.streamIndex.length, this.maxRevision);
+        this.maxRevision = normalizeRevision(revision, this.streamIndex.length);
+        this.version = normalizeMaxRevision(this.streamIndex.length, this.maxRevision);
         return this;
     }
 
@@ -169,7 +149,7 @@ class EventStream extends stream.Readable {
         let tmp = this.maxRevision;
         this.maxRevision = this.minRevision;
         this.minRevision = tmp;
-        this.version = minVersion(this.streamIndex.length, this.maxRevision);
+        this.version = normalizeMaxRevision(this.streamIndex.length, this.maxRevision);
         return this;
     }
 

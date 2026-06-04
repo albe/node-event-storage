@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="98" height="98" viewBox="0 0 98 98" role="img" aria-label="node-event-store hero animation variant 2">
+  <defs>
+    <style>
+      @keyframes rotateCw {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes rotateCcw {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(-360deg); }
+      }
+
+      @keyframes floatY {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-2px); }
+      }
+
+      .event-storage {
+        fill: #029eb1;
+        transform: rotate(45deg);
+        transform-origin: 49px 49px;
+      }
+
+      .float-layer {
+        animation: floatY 6s ease-in-out infinite;
+      }
+
+      .circles {
+        animation: rotateCw 20s linear infinite;
+        transform-origin: 49px 49px;
+      }
+
+      .bars {
+        animation: rotateCcw 26s linear infinite;
+        transform-origin: 49px 49px;
+        opacity: 0.92;
+      }
+    </style>
+  </defs>
+
+  <g class="event-storage">
+    <g class="float-layer">
+      <g class="circles">
+        <circle cx="26" cy="26" r="7.7"/>
+        <circle cx="72" cy="26" r="7.7"/>
+        <circle cx="26" cy="72" r="7.7"/>
+        <circle cx="72" cy="72" r="7.7"/>
+      </g>
+
+      <g class="bars">
+        <rect x="45" y="9" width="8" height="24"/>
+        <rect x="45" y="66" width="8" height="24"/>
+        <rect x="9" y="45" width="24" height="8"/>
+        <rect x="66" y="45" width="24" height="8"/>
+      </g>
+    </g>
+  </g>
+</svg>
+

@@ -42,7 +42,7 @@ function alignTo(value, alignment) {
  * @returns {number}
  */
 function hash(str) {
-    /* istanbul ignore if */
+    /* c8 ignore next 3 */
     if (str.length === 0) {
         return 0;
     }

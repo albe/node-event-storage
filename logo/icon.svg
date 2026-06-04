@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="98" height="98" viewBox="0 0 98 98" role="img" aria-label="node-event-store icon - vector logo">
+  <defs>
+    <style>
+      g.event-storage { fill: #029eb1; transform: rotate(45deg); transform-origin: 49px 49px; }
+    </style>
+  </defs>
+
+  <g class="event-storage">
+    <circle cx="26" cy="26" r="7.7"/>
+    <circle cx="72" cy="26" r="7.7"/>
+    <circle cx="26" cy="72" r="7.7"/>
+    <circle cx="72" cy="72" r="7.7"/>
+
+    <rect x="45" y="9" width="8" height="24"/>
+    <rect x="45" y="66" width="8" height="24"/>
+    <rect x="9" y="45" width="24" height="8"/>
+    <rect x="66" y="45" width="24" height="8"/>
+  </g>
+</svg>

@@ -3,6 +3,7 @@ import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC } from './Reada
 import { assert, assertEqual } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
+import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 /**
  * An index is a simple append-only file that stores an ordered list of entry elements pointing to the actual file position
@@ -27,10 +28,7 @@ class WritableIndex extends ReadableIndex {
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
     constructor(name = '.index', options = {}) {
-        if (typeof name !== 'string') {
-            options = name;
-            name = '.index';
-        }
+        ({ name, options } = normalizeNamedCtorArgs(name, options, '.index'));
         let defaults = {
             writeBufferSize: 4096,
             flushDelay: 100,

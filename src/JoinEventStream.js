@@ -1,19 +1,9 @@
 import EventStream from './EventStream.js';
 import { assert, kWayMerge } from './utils/util.js';
+import { normalizeRevision } from './utils/apiHelpers.js';
 
 /** Reusable sentinel used for missing or empty per-stream iterators. */
 const emptyIterator = Object.freeze({ next() { return { done: true }; } });
-
-/**
- * Calculate the actual version number from a possibly relative (negative) version number.
- *
- * @param {number} version The version to normalize.
- * @param {number} length The maximum version number
- * @returns {number} The absolute version number.
- */
-function normalizeVersion(version, length) {
-    return version < 0 ? version + length + 1 : version;
-}
 
 /**
  * An event stream is a simple wrapper around an iterator over storage documents.
@@ -36,8 +26,8 @@ class JoinEventStream extends EventStream {
 
         this.streamIndex = eventStore.storage.index;
         // Translate revisions to index numbers (1-based) and wrap around negatives
-        this.minRevision = normalizeVersion(minRevision, eventStore.length);
-        this.maxRevision = normalizeVersion(maxRevision, eventStore.length);
+        this.minRevision = normalizeRevision(minRevision, eventStore.length);
+        this.maxRevision = normalizeRevision(maxRevision, eventStore.length);
         this.fetch = function() {
             return streams.map(streamName => {
                 const streamIndex = eventStore.streams[streamName]?.index;

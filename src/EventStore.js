@@ -10,6 +10,7 @@ import Projection from './Projection.js';
 import { assert, getPropertyAtPath } from './utils/util.js';
 import { ensureDirectory, isSafeRelativeName, scanForFiles } from './utils/fsUtil.js';
 import { buildTypeMatcherFn, isPlainObject } from './utils/metadataUtil.js';
+import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 
 const ExpectedVersion = {
     Any: -1,
@@ -188,7 +189,6 @@ class EventStore extends events.EventEmitter {
      * @param {string} name The full stream name, including the `stream-` prefix (and optional `.closed` suffix).
      */
     registerStream(name) {
-        /* istanbul ignore if */
         if (!name.startsWith('stream-')) {
             return;
         }
@@ -347,45 +347,13 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * This method makes it so the last three arguments can be given either as:
-     *  - expectedVersion, metadata, callback
-     *  - expectedVersion, callback
-     *  - metadata, callback
-     *  - callback
-     *
-     * @private
-     * @param {Array<object>|object} events
-     * @param {number|CommitCondition} [expectedVersion]
-     * @param {object|function} [metadata]
-     * @param {function} [callback]
-     * @returns {{events: Array<object>, metadata: object, callback: function, expectedVersion: number|CommitCondition}}
-     */
-    static fixArgumentTypes(events, expectedVersion, metadata, callback) {
-        if (!(events instanceof Array)) {
-            events = [events];
-        }
-        if (typeof expectedVersion !== 'number' && !(expectedVersion instanceof CommitCondition)) {
-            callback = metadata;
-            metadata = expectedVersion;
-            expectedVersion = ExpectedVersion.Any;
-        }
-        if (typeof metadata !== 'object') {
-            callback = metadata;
-            metadata = {};
-        }
-        if (typeof callback !== 'function') {
-            callback = () => {};
-        }
-        return { events, expectedVersion, metadata, callback };
-    }
-
-    /**
      * Check a {@link CommitCondition} against the current state of the store.
      * Iterates a join stream over all condition type streams starting from
      * `condition.noneMatchAfter` (the global position captured at query time), and throws an
      * {@link OptimisticConcurrencyError} when a new event of a listed type satisfies
      * `condition.matcher(payload, metadata)` (or any such event when no matcher is provided).
      *
+     * @private
      * @param {CommitCondition} condition
      * @throws {OptimisticConcurrencyError}
      */
@@ -413,6 +381,7 @@ class EventStore extends events.EventEmitter {
      * Ensure a dedicated type stream exists for each event's type, creating it if needed.
      * Must be called before the entity stream is created to guarantee correct index routing.
      *
+     * @private
      * @param {Array<object>} events The events to process.
      */
     ensureTypeStreams(events) {
@@ -428,6 +397,11 @@ class EventStore extends events.EventEmitter {
         }
     }
 
+    /**
+     * @private
+     * @param {object} event
+     * @returns {string|null}
+     */
     resolveValidatedTypeStreamName(event) {
         const type = this.typeAccessor(event);
         if (type === undefined || type === null || type === '') {
@@ -438,6 +412,11 @@ class EventStore extends events.EventEmitter {
         return type;
     }
 
+    /**
+     * @private
+     * @param {string[]} types
+     * @returns {string[]}
+     */
     getExistingQueryTypes(types) {
         const queryTypes = [];
         for (const type of types) {
@@ -472,7 +451,14 @@ class EventStore extends events.EventEmitter {
         assert(typeof streamName === 'string' && streamName !== '', 'Must specify a stream name for commit.');
         assert(typeof events !== 'undefined' && events !== null, 'No events specified for commit.');
 
-        ({ events, expectedVersion, metadata, callback } = EventStore.fixArgumentTypes(events, expectedVersion, metadata, callback));
+        ({ events, expectedVersion, metadata, callback } = fixCommitArgumentTypes(
+            events,
+            expectedVersion,
+            metadata,
+            callback,
+            ExpectedVersion.Any,
+            CommitCondition
+        ));
 
         // Perform DCB-style concurrency check when a CommitCondition is provided.
         if (expectedVersion instanceof CommitCondition) {
@@ -785,7 +771,13 @@ class EventStore extends events.EventEmitter {
         }
         const streamName = streamNameOrIdentifier;
         if (this.consumers.has(identifier)) {
-            return this.consumers.get(identifier);
+            const existingConsumer = this.consumers.get(identifier);
+            if (existingConsumer.streamName === streamName) {
+                return existingConsumer;
+            }
+            // Rebind identifier to the requested stream when a consumer with the same
+            // identifier already exists for another stream.
+            existingConsumer.stop();
         }
         const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
         const consumerProjectionFileName = `${consumer.fileName}.projection`;
@@ -865,22 +857,6 @@ class EventStore extends events.EventEmitter {
     }
 }
 
-function parseStreamFromIndexName(indexName) {
-    if (indexName === '_all') {
-        return '_all';
-    }
-    if (indexName.startsWith('stream-')) {
-        return indexName.slice(7);
-    }
-    return indexName;
-}
-
-function normalizePredicateRaw(predicate, raw) {
-    if (typeof predicate === 'boolean' && raw === false) {
-        return { predicate: null, raw: predicate };
-    }
-    return { predicate, raw };
-}
 
 function isProjectionDefinitionObject(value) {
     return isPlainObject(value) && Object.hasOwn(value, 'handlers');

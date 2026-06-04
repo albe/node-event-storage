@@ -120,7 +120,14 @@ Throws if no streams for the category exist.
 eventstore.createEventStream(streamName, matcher) → EventStream
 ```
 
-Create a new named stream backed by an index that includes every event matching `matcher`.  `matcher` can be a plain object (property equality) or a predicate `(event) => boolean`.
+Create a new named stream backed by an index that includes every event matching `matcher`. `matcher` can be:
+
+- a plain object using nested equality,
+- array values for OR semantics,
+- scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), or
+- a predicate `(event) => boolean`.
+
+For the full object-matcher syntax and raw-mode caveats, see [Event Streams -> Object Matcher Syntax](streams.md#object-matcher-syntax).
 
 Returns an `EventStream` over the pre-existing matching events.
 
@@ -549,6 +556,12 @@ Matcher behavior differs by mode:
 - **Raw mode (`raw=true`)**
   - Function matcher: `(buffer) => boolean` where `buffer` is one compact JSON document
   - Object matcher: byte-level raw matcher over compact JSON bytes (lazy-built at first stream consumption)
+
+Object matchers support nested equality, array values with OR semantics, and scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`). Multiple operators on the same field are combined with AND semantics.
+
+Prefer plain equality over `$eq` when possible (`{ type: 'Foo' }` instead of `{ type: { $eq: 'Foo' } }`).
+
+Operator matching is intended for scalar values. For arrays, objects, or custom raw encodings, use plain equality or a function matcher.
 
 The raw object matcher requires the default compact JSON serializer format. If you use a custom serializer (including pretty-printed or transformed JSON), object matchers in raw mode are not guaranteed to work; use a function matcher in that case.
 

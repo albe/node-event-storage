@@ -1,16 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
-import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
+import { ReadOnly as ReadOnlyPartition } from '../Partition.js';
+import { ReadOnly as ReadOnlyIndex } from '../Index.js';
 import { assert, wrapAndCheck, iterate, kWayMerge } from '../utils/util.js';
 import { scanForFiles } from '../utils/fsUtil.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../utils/metadataUtil.js';
+import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import IndexMatcher from '../IndexMatcher.js';
 import PartitionPool from '../PartitionPool.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
-const NDJSON_NEWLINE = Buffer.from('\n');
 
 /**
  * Default ordered list of document property paths used as discriminant keys when
@@ -60,10 +60,7 @@ class ReadableStorage extends events.EventEmitter {
      */
     constructor(storageName = 'storage', config = {}) {
         super();
-        if (typeof storageName !== 'string') {
-            config = storageName;
-            storageName = undefined;
-        }
+        ({ name: storageName, options: config } = normalizeNamedCtorArgs(storageName, config));
 
         this.storageFile = storageName || 'storage';
         const defaults = {
@@ -158,7 +155,7 @@ class ReadableStorage extends events.EventEmitter {
             const partition = this.createPartition(file, this.partitionConfig);
             this.partitions.add(partition.id, partition);
         }, (partErr) => {
-            /* istanbul ignore if */
+            /* c8 ignore next */
             if (partErr) throw partErr;
 
             // Scan was cancelled by close() between the two scan phases.
@@ -173,7 +170,7 @@ class ReadableStorage extends events.EventEmitter {
                 this.emit('index-created', name);
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
-                /* istanbul ignore if */
+                /* c8 ignore next */
                 if (indexErr && indexErr.code !== 'ENOENT') throw indexErr;
                 done();
             });
@@ -481,7 +478,7 @@ class ReadableStorage extends events.EventEmitter {
      * @param {boolean} [noIndex=false] When true, bypasses the index and iterates partitions directly.
      */
     forEachDocument(iterationHandler, noIndex = false) {
-        /* istanbul ignore if  */
+        /* c8 ignore next 3  */
         if (typeof iterationHandler !== 'function') {
             return;
         }
@@ -512,7 +509,7 @@ class ReadableStorage extends events.EventEmitter {
      * @param {object} [matchDocument] If supplied, only indexes the document matches on will be iterated.
      */
     forEachSecondaryIndex(iterationHandler, matchDocument) {
-        /* istanbul ignore if  */
+        /* c8 ignore next 3  */
         if (typeof iterationHandler !== 'function') {
             return;
         }
@@ -537,7 +534,7 @@ class ReadableStorage extends events.EventEmitter {
      * @param {function(ReadablePartition)} iterationHandler
      */
     forEachPartition(iterationHandler) {
-        /* istanbul ignore if  */
+        /* c8 ignore next 3  */
         if (typeof iterationHandler !== 'function') {
             return;
         }

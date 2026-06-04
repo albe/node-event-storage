@@ -20,7 +20,7 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
      * @param {string} filename
      */
     onChange(filename) {
-        /* istanbul ignore if */
+        /* c8 ignore next 3 */
         if (!this.fd) {
             return;
         }

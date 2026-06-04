@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="98" height="95" viewBox="0 0 98 98" role="img" aria-label="node-event-store loading spinner">
+  <defs>
+    <style>
+      @keyframes spinSine {
+        0% { transform: rotate(0deg); }
+        12.5% { transform: rotate(24deg); }
+        25% { transform: rotate(72deg); }
+        37.5% { transform: rotate(144deg); }
+        50% { transform: rotate(180deg); }
+        62.5% { transform: rotate(216deg); }
+        75% { transform: rotate(288deg); }
+        87.5% { transform: rotate(336deg); }
+        100% { transform: rotate(360deg); }
+      }
+
+      .spinner {
+        animation: spinSine 2s linear infinite;
+        transform-origin: 49px 49px;
+      }
+
+      .event-storage {
+        fill: #029eb1;
+        transform: rotate(45deg);
+        transform-origin: 49px 49px;
+      }
+    </style>
+  </defs>
+
+  <g class="spinner">
+    <g class="event-storage">
+        <circle cx="26" cy="26" r="7.7"/>
+        <circle cx="72" cy="26" r="7.7"/>
+        <circle cx="26" cy="72" r="7.7"/>
+        <circle cx="72" cy="72" r="7.7"/>
+
+        <rect x="45" y="9" width="8" height="24"/>
+        <rect x="45" y="66" width="8" height="24"/>
+        <rect x="9" y="45" width="24" height="8"/>
+        <rect x="66" y="45" width="24" height="8"/>
+    </g>
+  </g>
+</svg>
+

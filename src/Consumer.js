@@ -3,9 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
 import { ensureDirectory, isSafeRelativeName, resolvePathWithinRoot, safeUnlink, writeFileAtomic } from './utils/fsUtil.js';
+import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
-
 
 /**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
@@ -78,14 +78,11 @@ class Consumer extends stream.Readable {
      * @param {number} startFrom The revision to start from within the index to consume.
      */
     restoreState(initialState, startFrom) {
-        /* istanbul ignore if */
+        /* c8 ignore next 3 */
         if (!this.fileName) {
             return;
         }
-        if (typeof initialState === 'number') {
-            startFrom = initialState;
-            initialState = {};
-        }
+        ({ initialState, startFrom } = normalizeConsumerStateArgs(initialState, startFrom));
         try {
             const consumerData = fs.readFileSync(this.fileName);
             this.position = consumerData.readInt32LE(0);
@@ -160,7 +157,6 @@ class Consumer extends stream.Readable {
             return;
         }
 
-        /* istanbul ignore if */
         if (this.position !== position - 1) {
             return;
         }
@@ -194,14 +190,14 @@ class Consumer extends stream.Readable {
             consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
             const tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
-            /* istanbul ignore if */
+            /* c8 ignore next 3 */
             if (fs.existsSync(tmpFile)) {
                 throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
             }
             try {
                 writeFileAtomic(this.fileName, consumerData, { tmpFileName: tmpFile }, () => this.emit('persisted', consumerState));
             } catch (e) {
-                /* istanbul ignore next */
+                /* c8 ignore next */
                 safeUnlink(tmpFile);
             }
         });
@@ -294,10 +290,7 @@ class Consumer extends stream.Readable {
      * @api
      */
     reset(initialState = {}, startFrom = 0) {
-        if (typeof initialState === 'number') {
-            startFrom = initialState;
-            initialState = {};
-        }
+        ({ initialState, startFrom } = normalizeConsumerStateArgs(initialState, startFrom));
         const restart = this.consuming;
         this.stop();
         this.state = Object.freeze(initialState);
