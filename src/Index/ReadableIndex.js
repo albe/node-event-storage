@@ -3,6 +3,7 @@ import path from 'path';
 import events from 'events';
 import Entry, { assertValidEntryClass } from '../IndexEntry.js';
 import { assert, wrapAndCheck, binarySearch } from '../utils/util.js';
+import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";
@@ -44,10 +45,7 @@ class ReadableIndex extends events.EventEmitter {
      */
     constructor(name = '.index', options = {}) {
         super();
-        if (typeof name !== 'string') {
-            options = name;
-            name = '.index';
-        }
+        ({ name, options } = normalizeNamedCtorArgs(name, options, '.index'));
         let defaults = {
             dataDirectory: '.',
             EntryClass: Entry

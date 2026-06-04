@@ -85,6 +85,7 @@ No build step; source is plain ESM consumed directly. No linter configured.
 | `src/PartitionPool.js`                  | LRU-evicting pool for open partition handles |
 | `src/Watcher.js` / `src/WatchesFile.js` | Ref-counting directory watcher and mixin |
 | `src/utils/fsUtil.js`                   | `ensureDirectory`, `scanForFiles` |
+| `src/utils/apiHelpers.js`               | API-shaping helpers for top-level and internal class APIs (argument normalization, stream-name mapping, predicate/raw/revision coercion) |
 | `src/utils/util.js`                     | Shared primitives: `assert`, `assertEqual`, `binarySearch`, `kWayMerge`, `hash`, `alignTo`, `iterate`, `getPropertyAtPath` |
 | `src/utils/metadataUtil.js`             | Object and raw-buffer matching; operator syntax (`$gt`/`$gte`/`$lt`/`$lte`/`$eq`/`$ne`); HMAC-protected function matchers |
 | `src/utils/jsonUtil.js`                 | Low-level byte scanning for raw NDJSON buffers: `indexOfSameLevel` (depth-aware pattern search), `findJsonValueEnd`, `parseJsonValue` |

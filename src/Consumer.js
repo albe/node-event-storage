@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
 import { ensureDirectory } from './utils/fsUtil.js';
+import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
 
@@ -88,10 +89,7 @@ class Consumer extends stream.Readable {
         if (!this.fileName) {
             return;
         }
-        if (typeof initialState === 'number') {
-            startFrom = initialState;
-            initialState = {};
-        }
+        ({ initialState, startFrom } = normalizeConsumerStateArgs(initialState, startFrom));
         try {
             const consumerData = fs.readFileSync(this.fileName);
             this.position = consumerData.readInt32LE(0);
@@ -274,10 +272,7 @@ class Consumer extends stream.Readable {
      * @api
      */
     reset(initialState = {}, startFrom = 0) {
-        if (typeof initialState === 'number') {
-            startFrom = initialState;
-            initialState = {};
-        }
+        ({ initialState, startFrom } = normalizeConsumerStateArgs(initialState, startFrom));
         const restart = this.consuming;
         this.stop();
         this.state = Object.freeze(initialState);

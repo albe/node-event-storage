@@ -1,16 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import Partition, { ReadOnly as ReadOnlyPartition } from '../Partition.js';
-import Index, { ReadOnly as ReadOnlyIndex } from '../Index.js';
+import { ReadOnly as ReadOnlyPartition } from '../Partition.js';
+import { ReadOnly as ReadOnlyIndex } from '../Index.js';
 import { assert, wrapAndCheck, iterate, kWayMerge } from '../utils/util.js';
 import { scanForFiles } from '../utils/fsUtil.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../utils/metadataUtil.js';
+import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import IndexMatcher from '../IndexMatcher.js';
 import PartitionPool from '../PartitionPool.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
-const NDJSON_NEWLINE = Buffer.from('\n');
 
 /**
  * Default ordered list of document property paths used as discriminant keys when
@@ -60,10 +60,7 @@ class ReadableStorage extends events.EventEmitter {
      */
     constructor(storageName = 'storage', config = {}) {
         super();
-        if (typeof storageName !== 'string') {
-            config = storageName;
-            storageName = undefined;
-        }
+        ({ name: storageName, options: config } = normalizeNamedCtorArgs(storageName, config));
 
         this.storageFile = storageName || 'storage';
         const defaults = {

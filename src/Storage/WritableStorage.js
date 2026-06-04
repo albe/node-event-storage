@@ -6,6 +6,7 @@ import ReadableStorage from './ReadableStorage.js';
 import { assert } from '../utils/util.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
+import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
@@ -44,10 +45,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} [config.lock] One of LOCK_* constants that defines how an existing lock should be handled.
      */
     constructor(storageName = 'storage', config = {}) {
-        if (typeof storageName !== 'string') {
-            config = storageName;
-            storageName = undefined;
-        }
+        ({ name: storageName, options: config } = normalizeNamedCtorArgs(storageName, config));
         const defaults = {
             partitioner: (document, number) => '',
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
@@ -509,9 +507,8 @@ class WritableStorage extends ReadableStorage {
          2) truncate all partitions accordingly
          3) truncate/rewrite all indexes
          */
-        if (!this.index.isOpen()) {
-            this.index.open();
-        }
+        this.index.open();
+
         if (after < 0) {
             after += this.index.length;
         }
