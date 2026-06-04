@@ -238,6 +238,7 @@ function matchesNode(buffer, startOffset, node) {
 
 export {
     createHmac,
+    isPlainObject,
     matches,
     buildMetadataHeader,
     buildMetadataForMatcher,

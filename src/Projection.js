@@ -9,6 +9,11 @@ const DEFAULT_TYPE_ACCESSOR = (event) => event?.type || event?.payload?.type;
 
 class Projection {
 
+    /**
+     * @param {string} name Projection name.
+     * @param {{ initialState?: object, handlers: function(object, object): object|object, matcher?: object|function(object): boolean }} [definition]
+     * @param {{ hmac?: function(string): string, typeAccessor?: function(object): string, fileName?: string }} [options]
+     */
     constructor(name, definition = {}, options = {}) {
         assert(typeof name === 'string' && name !== '', 'Projection must have a name.');
         const { initialState = {}, handlers, matcher } = definition;
@@ -35,6 +40,12 @@ class Projection {
         return Object.keys(this.handlers);
     }
 
+    /**
+     * Apply one event to the provided state and return the next state.
+     * @param {*} state
+     * @param {object} event
+     * @returns {*}
+     */
     apply(state, event) {
         if (!this.matches(event)) {
             this.state = state;
@@ -53,6 +64,11 @@ class Projection {
         return nextState;
     }
 
+    /**
+     * Reset to initialState and project all events from the given iterable stream.
+     * @param {Iterable<object>} stream
+     * @returns {*}
+     */
     handle(stream) {
         this.reset();
         for (const event of stream) {
@@ -61,11 +77,20 @@ class Projection {
         return this.state;
     }
 
+    /**
+     * Reset current projection state to its initial state.
+     * @returns {*}
+     */
     reset() {
         this.state = this.initialState;
         return this.state;
     }
 
+    /**
+     * Check whether an event matches this projection's matcher definition.
+     * @param {object} event
+     * @returns {boolean}
+     */
     matches(event) {
         if (!this.matcher) {
             return true;
@@ -76,20 +101,22 @@ class Projection {
         return matches(event, this.matcher);
     }
 
+    /**
+     * Subscribe this projection to a consumer and persist when needed.
+     * @param {{ project: function(Projection): object }} consumer
+     * @returns {Projection}
+     */
     subscribe(consumer) {
         assert(consumer && typeof consumer.project === 'function', 'Projection.subscribe expects a Consumer instance.');
-        const projectionFileName = consumer.fileName ? `${consumer.fileName}.projection` : null;
-        const isAlreadySubscribed = consumer.projection === this;
-        const isAlreadyPersisted = projectionFileName && this.fileName === projectionFileName && fs.existsSync(projectionFileName);
         consumer.project(this);
-        if (!isAlreadySubscribed && !isAlreadyPersisted) {
-            this.persist({
-                fileName: projectionFileName || this.fileName
-            });
-        }
         return this;
     }
 
+    /**
+     * Persist projection definition metadata to disk.
+     * @param {{ hmac?: function(string): string, fileName?: string }} [options]
+     * @returns {string} Persisted file name.
+     */
     persist(options = {}) {
         const hmac = options.hmac || this.hmac;
         const fileName = options.fileName || this.fileName || `${this.name}.projection`;
@@ -105,6 +132,11 @@ class Projection {
         return fileName;
     }
 
+    /**
+     * Serialize this projection definition into trusted metadata.
+     * @param {function(string): string} [hmac]
+     * @returns {object}
+     */
     toMetadata(hmac = this.hmac) {
         const serializeFn = (fn) => {
             assert(typeof hmac === 'function', 'Must provide options.hmac for function projections.');
@@ -128,18 +160,36 @@ class Projection {
         };
     }
 
+    /**
+     * Restore a projection by name from default or configured file location.
+     * @param {string} name
+     * @param {{ fileName?: string, hmac?: function(string): string, typeAccessor?: function(object): string }} [options]
+     * @returns {Projection}
+     */
     static restore(name, options = {}) {
         assert(typeof name === 'string' && name !== '', 'Projection.restore requires a projection name.');
         const fileName = options.fileName || `${name}.projection`;
         return Projection.restoreFromFile(fileName, options);
     }
 
+    /**
+     * Restore a projection from an explicit metadata file path.
+     * @param {string} fileName
+     * @param {{ hmac?: function(string): string, typeAccessor?: function(object): string }} [options]
+     * @returns {Projection}
+     */
     static restoreFromFile(fileName, options = {}) {
         assert(fs.existsSync(fileName), `Projection file does not exist: ${fileName}`);
         const metadata = JSON.parse(fs.readFileSync(fileName, 'utf8'));
         return Projection.fromMetadata(metadata, { ...options, fileName });
     }
 
+    /**
+     * Recreate a projection instance from serialized metadata.
+     * @param {object} metadata
+     * @param {{ fileName?: string, hmac?: function(string): string, typeAccessor?: function(object): string }} [options]
+     * @returns {Projection}
+     */
     static fromMetadata(metadata, options = {}) {
         assert(metadata && typeof metadata === 'object', 'Invalid projection metadata.');
         if (metadata.kind === 'composite-projection') {
@@ -173,6 +223,13 @@ class Projection {
         return projection;
     }
 
+    /**
+     * Compose multiple projections into one composite projection.
+     * @param {string} name
+     * @param {object<string, Projection|object>} projections
+     * @param {{ matcher?: object|function(object): boolean, hmac?: function(string): string, typeAccessor?: function(object): string }} [options]
+     * @returns {CompositeProjection}
+     */
     static compose(name, projections, options = {}) {
         return new CompositeProjection(name, projections, options);
     }
@@ -180,6 +237,11 @@ class Projection {
 
 class CompositeProjection extends Projection {
 
+    /**
+     * @param {string} name
+     * @param {object<string, Projection|object>} projections
+     * @param {{ matcher?: object|function(object): boolean, hmac?: function(string): string, typeAccessor?: function(object): string }} [options]
+     */
     constructor(name, projections, options = {}) {
         assert(projections && typeof projections === 'object' && !Array.isArray(projections), 'CompositeProjection requires an object map of projections.');
         const normalized = {};
@@ -209,6 +271,12 @@ class CompositeProjection extends Projection {
         return [...types];
     }
 
+    /**
+     * Apply one event across all child projections and return composed state.
+     * @param {object} state
+     * @param {object} event
+     * @returns {object}
+     */
     apply(state, event) {
         if (!this.matches(event)) {
             this.state = state;
@@ -223,6 +291,10 @@ class CompositeProjection extends Projection {
         return nextState;
     }
 
+    /**
+     * Reset all child projections and rebuild composed state.
+     * @returns {object}
+     */
     reset() {
         for (const projection of Object.values(this.projections)) {
             projection.reset();
@@ -233,6 +305,11 @@ class CompositeProjection extends Projection {
         return this.state;
     }
 
+    /**
+     * Serialize composed projection metadata recursively.
+     * @param {function(string): string} [hmac]
+     * @returns {object}
+     */
     toMetadata(hmac = this.hmac) {
         return {
             kind: 'composite-projection',
@@ -244,6 +321,12 @@ class CompositeProjection extends Projection {
         };
     }
 
+    /**
+     * Restore a composed projection from serialized metadata.
+     * @param {object} metadata
+     * @param {{ matcher?: object|function(object): boolean, hmac?: function(string): string, typeAccessor?: function(object): string }} [options]
+     * @returns {CompositeProjection}
+     */
     static fromMetadata(metadata, options = {}) {
         const hmac = options.hmac;
         const deserializeMatcher = (matcherMetadata) => {

@@ -96,6 +96,7 @@ const overview = new CompositeProjection('overview', {
     count,
     last: { initialState: null, handlers: { OrderCreated: (state, event) => event.payload } }
 });
+// overview.state -> { count: number, last: object|null }
 ```
 
 ## Resetting a Consumer
