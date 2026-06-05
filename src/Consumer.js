@@ -194,12 +194,7 @@ class Consumer extends stream.Readable {
             if (fs.existsSync(tmpFile)) {
                 throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
             }
-            try {
-                writeFileAtomic(this.fileName, consumerData, { tmpFileName: tmpFile }, () => this.emit('persisted', consumerState));
-            } catch (e) {
-                /* c8 ignore next */
-                safeUnlink(tmpFile);
-            }
+            writeFileAtomic(this.fileName, consumerData, { tmpFileName: tmpFile }, () => this.emit('persisted', consumerState));
         });
     }
 

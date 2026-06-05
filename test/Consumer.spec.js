@@ -355,26 +355,28 @@ describe('Consumer', function() {
         }, 15);
     });
 
-    it('swallows persistence write errors and removes temp files', function(done) {
+    it('rethrows persistence write errors and removes temp files', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer-1');
         consumer.position = 1;
         consumer.state = Object.freeze({ foo: 1 });
 
         const tmpFile = consumer.fileName + '.1';
         const originalWriteFileSync = fsNative.writeFileSync;
+        const originalSetImmediate = global.setImmediate;
+        global.setImmediate = (fn) => {
+            fn();
+            return null;
+        };
         fsNative.writeFileSync = () => {
             const error = new Error('disk full');
             error.code = 'ENOSPC';
             throw error;
         };
 
-        consumer.persist();
-
-        setTimeout(() => {
-            fsNative.writeFileSync = originalWriteFileSync;
-            expect(fs.existsSync(tmpFile)).to.be(false);
-            done();
-        }, 15);
+        expect(() => consumer.persist()).to.throwError(/disk full/);
+        fsNative.writeFileSync = originalWriteFileSync;
+        global.setImmediate = originalSetImmediate;
+        expect(fs.existsSync(tmpFile)).to.be(false);
     });
 
     it('restores state after reopening', function(done) {
