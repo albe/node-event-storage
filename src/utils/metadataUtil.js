@@ -5,7 +5,8 @@ import {
     findJsonValueEnd,
     parseJsonValue,
     matchesAnyValuePattern,
-    isOpeningObject
+    isOpeningObject,
+    compareNumeric
 } from './jsonUtil.js';
 
 const compiledOperatorMatcherCache = new WeakMap();
@@ -187,10 +188,10 @@ function matches(document, matcher) {
  * @returns {{matcher: string|object, hmac?: string}}
  */
 function buildMetadataForMatcher(matcher, hmac) {
-    /* c8 ignore next */
-    if (!matcher) {
-        return undefined;
-    }
+     /* c8 ignore next 2 */
+     if (!matcher) {
+         return undefined;
+     }
     if (typeof matcher === 'object') {
         return {matcher};
     }
@@ -204,12 +205,12 @@ function buildMetadataForMatcher(matcher, hmac) {
  * @returns {Matcher} The matcher object or function.
  */
 function buildMatcherFromMetadata(matcherMetadata, hmac) {
-    let matcher;
-    if (typeof matcherMetadata.matcher === 'object') {
-        matcher = matcherMetadata.matcher;
-    } else {
-        /* c8 ignore next */
-        assert(matcherMetadata.hmac === hmac(matcherMetadata.matcher), 'Invalid HMAC for matcher.');
+     let matcher;
+     if (typeof matcherMetadata.matcher === 'object') {
+         matcher = matcherMetadata.matcher;
+     } else {
+         /* c8 ignore next 1 */
+         assert(matcherMetadata.hmac === hmac(matcherMetadata.matcher), 'Invalid HMAC for matcher.');
 
         matcher = eval('(' + matcherMetadata.matcher + ')').bind({}); // jshint ignore:line
     }
@@ -239,12 +240,14 @@ function buildTypeMatcherFn(payloadPath) {
  * JSON without parsing every document first.
  *
  * @param {object} matcher Object matcher to compile.
+ * @param {{enableOperatorBufferMatcher?: boolean}} [options] Raw matcher build options.
  * @returns {function(Buffer): boolean} Predicate over compact JSON buffers.
  */
-function buildRawBufferMatcher(matcher = {}) {
+function buildRawBufferMatcher(matcher = {}, options = {}) {
     assert(isPlainObject(matcher), 'Matcher must be an object.', TypeError);
+    const enableOperatorBufferMatcher = options.enableOperatorBufferMatcher !== false;
 
-    const root = buildMatcherTree(matcher);
+    const root = buildMatcherTree(matcher, enableOperatorBufferMatcher);
     /* c8 ignore next 3 */
     if (root.children.length === 0) {
         return () => true;
@@ -266,13 +269,14 @@ function buildRawBufferMatcher(matcher = {}) {
  * optional follow-up checks for nested objects, operators, or multi-value scalars.
  *
  * @param {object} matcher Matcher object for this tree level.
+ * @param {boolean} enableOperatorBufferMatcher Enables specialized byte-level operator shortcuts.
  * @returns {{children: Array<object>}} Compiled child descriptors for this level.
  */
-function buildMatcherTree(matcher) {
+function buildMatcherTree(matcher, enableOperatorBufferMatcher) {
     const node = {children: []};
 
     for (const [key, value] of Object.entries(matcher)) {
-        node.children.push(buildMatcherTreeChild(key, value));
+        node.children.push(buildMatcherTreeChild(key, value, enableOperatorBufferMatcher));
     }
 
     return node;
@@ -283,15 +287,15 @@ function buildMatcherTree(matcher) {
  *
  * @param {string} key Property name at this matcher level.
  * @param {any} value Matcher value for `key`.
- * @returns {{pattern: Buffer, isKeyPattern: boolean, operatorChecks: (Array<function(any): boolean>|null), valuePatterns: (Buffer[]|null), node: ({children: Array<object>}|null), lastMatch: number}} Compiled descriptor consumed by preCheck/matchesNode.
+ * @param {boolean} enableOperatorBufferMatcher Enables specialized byte-level operator shortcuts.
+ * @returns {{pattern: Buffer, isKeyPattern: boolean, matches: ((function(Buffer, number): boolean)|null), node: ({children: Array<object>}|null), lastMatch: number}} Compiled descriptor consumed by preCheck/matchesNode.
  */
-function buildMatcherTreeChild(key, value) {
+function buildMatcherTreeChild(key, value, enableOperatorBufferMatcher) {
     const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
     const child = {
         pattern: null,
         isKeyPattern: false,
-        operatorChecks: null,
-        valuePatterns: null,
+        matches: null,
         node: null,
         lastMatch: -1
     };
@@ -304,19 +308,26 @@ function buildMatcherTreeChild(key, value) {
             } else {
                 child.isKeyPattern = true;
                 child.pattern = keyPrefix;
-                child.valuePatterns = value.map(item => Buffer.from(JSON.stringify(item), 'utf8'));
+                const valuePatterns = value.map(item => Buffer.from(JSON.stringify(item), 'utf8'));
+                child.matches = (buffer, startOffset) => matchesAnyValuePattern(buffer, startOffset, valuePatterns);
             }
         } else if ('$eq' in value && Object.keys(value).length === 1) {
             // A lone $eq is semantically identical to a scalar equality check — fold it into a
             // value pattern at compile time so the buffer scan takes the same fast path as { key: value }.
             child.pattern = buildKeyValuePattern(keyPrefix, value['$eq']);
         } else if (isOperatorObject(value)) {
-            child.operatorChecks = getCompiledOperatorChecks(value);
             child.isKeyPattern = true;
             child.pattern = keyPrefix;
+            if (enableOperatorBufferMatcher) {
+                child.matches = buildOperatorBufferMatcher(value);
+            } else {
+                const operatorChecks = getCompiledOperatorChecks(value);
+                child.matches = (buffer, startOffset) => matchesOperatorInBuffer(buffer, startOffset, operatorChecks);
+            }
         } else {
             child.pattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
-            child.node = buildMatcherTree(value);
+            child.node = buildMatcherTree(value, enableOperatorBufferMatcher);
+            child.matches = (buffer, startOffset) => matchesNode(buffer, startOffset, child.node);
         }
     } else {
         child.pattern = buildKeyValuePattern(keyPrefix, value);
@@ -372,13 +383,7 @@ function matchesNode(buffer, startOffset, node) {
         }
 
         const valueStart = matchPosition + child.pattern.length;
-        if (child.valuePatterns && !matchesAnyValuePattern(buffer, valueStart, child.valuePatterns)) {
-            return false;
-        }
-        if (child.operatorChecks && !matchesOperatorInBuffer(buffer, valueStart, child.operatorChecks)) {
-            return false;
-        }
-        if (child.node && !matchesNode(buffer, valueStart, child.node)) {
+        if (child.matches && !child.matches(buffer, valueStart)) {
             return false;
         }
     }
@@ -396,15 +401,91 @@ function matchesNode(buffer, startOffset, node) {
  * @returns {boolean} True when the parsed scalar satisfies all operators.
  */
 function matchesOperatorInBuffer(buffer, startOffset, operatorChecks) {
-    const valueStart = startOffset;
-    const valueEnd = findJsonValueEnd(buffer, valueStart);
-    if (valueEnd === -1 || valueEnd <= valueStart) {
-        return false;
-    }
+     const valueStart = startOffset;
+     const valueEnd = findJsonValueEnd(buffer, valueStart);
+     /* c8 ignore next 2 */
+     if (valueEnd === -1 || valueEnd <= valueStart) {
+         return false;
+     }
 
     const parsedValue = parseJsonValue(buffer, valueStart, valueEnd);
 
     return matchesCompiledOperators(parsedValue, operatorChecks);
+}
+
+/**
+ * Map pre-computed ordering information to operator semantics.
+ * ordering: -1 (actual < expected), 0 (equal), 1 (actual > expected)
+ *
+ * @param {string} operator
+ * @param {-1|0|1} ordering
+ * @returns {boolean}
+ */
+function matchesOrdering(operator, ordering) {
+     switch (operator) {
+         case '$gt':
+             return ordering === 1;
+         case '$gte':
+             return ordering >= 0;
+         case '$lt':
+             return ordering === -1;
+         case '$lte':
+             return ordering <= 0;
+         case '$eq':
+             return ordering === 0;
+         case '$ne':
+             return ordering !== 0;
+         /* c8 ignore next 1 */
+         default:
+             return false;
+     }
+ }
+
+/**
+ * Build a specialized buffer-based operator comparator by pre-compiling operator-specific
+ * byte shortcuts at matcher build time. This avoids runtime dispatch and enables aggressive
+ * short-circuit evaluation for sign mismatches and digit-count differences.
+ *
+ * Assumes no scientific notation in the JSON buffer.
+ *
+ * @param {object} operatorObj Operator object (e.g., { $gt: 100 }).
+ * @returns {function(Buffer, number): boolean} Predicate that reads the buffer at given offset.
+ */
+function buildOperatorBufferMatcher(operatorObj) {
+    const entries = Object.entries(operatorObj);
+    const operatorChecks = getCompiledOperatorChecks(operatorObj);
+
+    if (entries.length !== 1) {
+        // Multi-operator case: fall back to generic path.
+        return (buffer, startOffset) => matchesOperatorInBuffer(buffer, startOffset, operatorChecks);
+    }
+
+    const [operator, expectedValue] = entries[0];
+
+    // Single comparison operator on a number: generate a single-pass comparator without parsing.
+    if (typeof expectedValue === 'number' && (operator === '$gt' || operator === '$gte' || operator === '$lt' || operator === '$lte')) {
+        const expectedStr = JSON.stringify(expectedValue);
+        const expectedIsNegative = expectedStr[0] === '-';
+        const intStart = expectedIsNegative ? 1 : 0;
+        const [expectedIntegerPart, expectedFractionPart = ''] = expectedStr.substring(intStart).split('.');
+        const expectedNumeric = {
+            isNegative: expectedIsNegative,
+            integerPart: expectedIntegerPart,
+            fractionPart: expectedFractionPart
+        };
+
+        return (buffer, startOffset) => {
+             const ordering = compareNumeric(buffer, startOffset, expectedNumeric);
+             /* c8 ignore next 2 */
+             if (ordering === null) {
+                 return false;
+             }
+             return matchesOrdering(operator, ordering);
+         };
+    }
+
+    // Non-numeric expected value: use generic operator checks.
+    return (buffer, startOffset) => matchesOperatorInBuffer(buffer, startOffset, operatorChecks);
 }
 
 export {

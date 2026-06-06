@@ -5,6 +5,8 @@ const BYTE_CLOSE_OBJECT = 0x7d;
 const BYTE_OPEN_ARRAY = 0x5b;
 const BYTE_CLOSE_ARRAY = 0x5d;
 const BYTE_COMMA = 0x2c;
+const BYTE_SIGN_MINUS = 0x2d;
+const BYTE_DECIMAL_SEP = 0x2e;
 
 /**
  * Advance past a JSON string whose opening `"` is at `i`.
@@ -185,6 +187,88 @@ function parseJsonValue(buffer, startOffset, endOffset) {
 }
 
 /**
+ * @param {number} byte
+ * @returns {boolean} True when `byte` is an ASCII digit.
+ */
+function isAsciiDigit(byte) {
+    return byte >= 0x30 && byte <= 0x39;
+}
+
+/**
+ * Compare a contiguous ASCII digit sequence in `buffer` against expected digits.
+ * For JSON.stringify()-normalized numbers this is enough for both integer and fraction parts.
+ * Returns only the ordering; when ordering === 0, callers can compute the consumed length as startOffset + expectedDigits.length.
+ *
+ * @param {Buffer} buffer
+ * @param {number} startOffset
+ * @param {string} expectedDigits
+ * @returns {-1|0|1}
+ */
+function compareDigits(buffer, startOffset, expectedDigits) {
+    let index = startOffset;
+    let position = 0;
+    let ordering = 0;
+    const expectedLength = expectedDigits.length;
+
+    while (index < buffer.length && isAsciiDigit(buffer[index])) {
+        if (ordering === 0 && position < expectedLength) {
+            const expectedByte = expectedDigits.charCodeAt(position);
+            if (buffer[index] !== expectedByte) {
+                ordering = buffer[index] < expectedByte ? -1 : 1;
+            }
+        }
+        position++;
+        index++;
+    }
+
+    if (position !== expectedLength) {
+        ordering = position > expectedLength ? 1 : -1;
+    }
+
+    return ordering;
+}
+
+/**
+ * Compare a compact JSON numeric token in `buffer` against a precompiled expected number,
+ * using one linear pass over the buffer slice and no `parseJsonValue` call.
+ *
+ * @param {Buffer} buffer
+ * @param {number} startOffset
+ * @param {{isNegative: boolean, integerPart: string, fractionPart: string}} expected
+ * @returns {-1|0|1|null} Ordering (`actual` vs `expected`) or null for invalid/non-numeric token.
+ */
+function compareNumeric(buffer, startOffset, expected) {
+    let index = startOffset;
+    const firstByte = buffer[index];
+    if (firstByte !== BYTE_SIGN_MINUS && !isAsciiDigit(firstByte)) {
+        return null;
+    }
+
+    const isNegative = firstByte === BYTE_SIGN_MINUS;
+    if (isNegative !== expected.isNegative) {
+        return isNegative ? -1 : 1;
+    }
+
+    if (isNegative) {
+        index++;
+    }
+
+    let result = compareDigits(buffer, index, expected.integerPart);
+    if (result === 0) {
+        index += expected.integerPart.length;
+
+        const hasFraction = index < buffer.length && buffer[index] === BYTE_DECIMAL_SEP;
+        const expectedHasFraction = expected.fractionPart.length > 0;
+        if (hasFraction !== expectedHasFraction) {
+            result = hasFraction ? 1 : -1;
+        } else if (hasFraction) {
+            result = compareDigits(buffer, index + 1, expected.fractionPart);
+        }
+    }
+    return isNegative ? -result : result;
+}
+
+/**
  * Compare a matched key's scalar value against pre-serialized candidates without reparsing JSON.
  *
  * @param {Buffer} buffer Source JSON buffer.
@@ -215,4 +299,4 @@ function matchesAnyValuePattern(buffer, valueStart, patterns) {
     return false;
 }
 
-export { isOpeningObject, indexOfSameLevel, findJsonValueEnd, parseJsonValue, matchesAnyValuePattern };
+export { isOpeningObject, indexOfSameLevel, findJsonValueEnd, parseJsonValue, compareNumeric, matchesAnyValuePattern };
