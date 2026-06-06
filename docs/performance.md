@@ -128,3 +128,34 @@ These benchmarks measure pure **read operations** (no writes). The range scan re
 | range scan | stable | 453,288 | ±0.28% | 86 |
 | range scan | latest | 423,291 | ±0.45% | 81 |
 | range scan | latest(raw) | 886,578 | ±0.59% | 90 |
+
+### Raw Buffer Operator Matcher Benchmark
+
+This benchmark compares the same matcher definitions in two execution modes:
+
+- **`obj` (baseline):** run `matches(document, matcher)` on already deserialized events
+- **`raw`:** run `buildRawBufferMatcher(matcher)` directly on NDJSON buffers
+
+Matcher objects used in `bench/bench-matcher.js`:
+
+```js
+{ type: 'Foo' }
+{ payload: { type: 'Foo' } }
+{ payload: { type: ['BazingaHappened', 'Foo'] } }
+{ payload: { type: ['BazingaHappened', 'BarxingaHappened', 'QuuxingaHappened', 'Foo'] } }
+{ payload: { value: { $gt: 100 } } }
+{ payload: { type: { $eq: 'Foo' } } }
+{ payload: { value: { $gte: 100, $lt: 2000 } } }
+{ payload: { value: { $gte: 100, $lt: 2000 }, type: 'Foo' } }
+```
+
+Observed median delta (`raw` vs `obj`) from the benchmark run:
+
+At **ANY match ratio**, raw is roughly **40–55% slower** than object mode.
+At **ANY match ratio**, raw is roughly **50–60% faster** than object mode when deserializing the event first.
+
+Interpretation:
+
+- When events are **already deserialized**, object matchers are the correct baseline and typically faster.
+- In workloads where data is still in **raw buffer form** (streaming), raw matchers avoid `JSON.parse` and can outperform a deserialize+object-match pipeline by roughly **~50%** in practice.
+
