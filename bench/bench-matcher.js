@@ -9,12 +9,16 @@ const WARMUP_RUNS = 1;
 const MEASURED_RUNS = 5;
 
 const matcherObjects = [
-    { name: 'flat',     matcher: { type: 'Foo' } },
-    { name: 'scoped',   matcher: { payload: { type: 'Foo' } } },
-    { name: 'multi',    matcher: { payload: { type: ['BazingaHappened', 'Foo'] } } },
-    { name: 'multi4',   matcher: { payload: { type: ['BazingaHappened', 'BarxingaHappened', 'QuuxingaHappened', 'Foo'] } } },
-    { name: '$gt', 		matcher: { payload: { value: { $gt: 100 } } } },
-    { name: '$eq',      matcher: { payload: { type: { $eq: 'Foo' } } } }
+    { name: 'flat',        matcher: { type: 'Foo' } },
+    { name: 'scoped',      matcher: { payload: { type: 'Foo' } } },
+    { name: 'anyOf2',       matcher: { payload: { type: ['BazingaHappened', 'Foo'] } } },
+    { name: 'anyOf4',      matcher: { payload: { type: ['BazingaHappened', 'BarxingaHappened', 'QuuxingaHappened', 'Foo'] } } },
+    { name: '$gt',         matcher: { payload: { value: { $gt: 100 } } } },
+    { name: '$eq',         matcher: { payload: { type: { $eq: 'Foo' } } } },
+    // ── multi-operator numeric: two numeric ops → fast path (no JSON.parse) ──
+    { name: '$gte+$lt',    matcher: { payload: { value: { $gte: 100, $lt: 2000 } } } },
+    // ── two numeric + string: numeric ops on value field + string op on type field ──
+    { name: '$gte+$lt+str', matcher: { payload: { value: { $gte: 100, $lt: 2000 }, type: 'Foo' } } }
 ];
 
 const implementations = item => [
