@@ -9,6 +9,10 @@ const BYTE_COMMA = 0x2c;
 /**
  * Advance past a JSON string whose opening `"` is at `i`.
  * Returns the position after the closing `"`, or -1 if the string is unterminated.
+ *
+ * @param {Buffer} buffer
+ * @param {number} i
+ * @returns {number}
  */
 function skipString(buffer, i) {
     let j = i + 1;
@@ -51,10 +55,21 @@ function isClosingBracket(char) {
     return char === BYTE_CLOSE_OBJECT || char === BYTE_CLOSE_ARRAY;
 }
 
+/**
+ * @param {number} char
+ * @returns {boolean}
+ */
 function isOpeningObject(char) {
     return char === BYTE_OPEN_OBJECT;
 }
 
+/**
+ * @param {Buffer} buffer
+ * @param {Buffer} pattern
+ * @param {number} startOffset
+ * @param {number|undefined} lastMatchPosition
+ * @returns {number}
+ */
 function nextIndexOf(buffer, pattern, startOffset, lastMatchPosition) {
     if (lastMatchPosition === undefined || lastMatchPosition < startOffset) {
         return buffer.indexOf(pattern, startOffset);
@@ -72,6 +87,13 @@ function nextIndexOf(buffer, pattern, startOffset, lastMatchPosition) {
  * For key patterns (`"key":`) pass `isKeyPattern=true` to skip that trailing delimiter check.
  * Returns -1 when no such position exists before the end of the buffer or when a closing brace
  * reduces depth below zero (the top-level object has ended).
+ *
+ * @param {Buffer} buffer
+ * @param {Buffer} pattern
+ * @param {number} [startOffset=0]
+ * @param {number|undefined} [matchPosition=undefined]
+ * @param {boolean} [isKeyPattern=false]
+ * @returns {number}
  */
 function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition = undefined, isKeyPattern = false) {
     let depth = 0;
@@ -123,10 +145,11 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition = unde
 }
 
 /**
- * Extract the end position (exclusive) of a JSON scalar value starting at `offset`.
- * `offset` should point to the first character of the value ('"' for strings, digit/-/true/false/null for others).
- * Returns the position after the value ends (past the closing quote for strings, past the last digit/char for others).
- * Returns -1 if the buffer is malformed.
+ * Find the end of a scalar JSON value so operator matching can parse only the relevant slice.
+ *
+ * @param {Buffer} buffer
+ * @param {number} offset
+ * @returns {number}
  */
 function findJsonValueEnd(buffer, offset) {
     /* c8 ignore next 3 */
@@ -145,8 +168,12 @@ function findJsonValueEnd(buffer, offset) {
 }
 
 /**
- * Convert a JSON scalar value buffer to a comparable JavaScript value for range operators.
- * Supports strings, numbers, booleans, and null.
+ * Parse one scalar JSON slice only after a byte-level match has already narrowed the candidate.
+ *
+ * @param {Buffer} buffer
+ * @param {number} startOffset
+ * @param {number} endOffset
+ * @returns {string|number|boolean|null|undefined}
  */
 function parseJsonValue(buffer, startOffset, endOffset) {
     try {
@@ -157,4 +184,35 @@ function parseJsonValue(buffer, startOffset, endOffset) {
     }
 }
 
-export { BYTE_OPEN_OBJECT, BYTE_CLOSE_OBJECT, isOpeningObject, indexOfSameLevel, findJsonValueEnd, parseJsonValue };
+/**
+ * Compare a matched key's scalar value against pre-serialized candidates without reparsing JSON.
+ *
+ * @param {Buffer} buffer
+ * @param {number} valueStart
+ * @param {Buffer[]} patterns
+ * @returns {boolean}
+ */
+function matchesAnyValuePattern(buffer, valueStart, patterns) {
+    for (const pattern of patterns) {
+        const valueEnd = valueStart + pattern.length;
+        if (valueEnd > buffer.length) {
+            continue;
+        }
+        let matches = true;
+        for (let i = 0; i < pattern.length; i++) {
+            if (buffer[valueStart + i] !== pattern[i]) {
+                matches = false;
+                break;
+            }
+        }
+        if (!matches) {
+            continue;
+        }
+        if (isDelimiter(buffer[valueEnd])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+export { isOpeningObject, indexOfSameLevel, findJsonValueEnd, parseJsonValue, matchesAnyValuePattern };

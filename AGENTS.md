@@ -18,6 +18,7 @@ Do not repeat yourself. Be concise and precise in your answers. No paraphrasing 
 - **Pass cheap prefilter results as hints to expensive scans**: when a cheap pass (e.g. `Buffer.indexOf`) already locates a candidate position, carry that result forward as a hint to the costlier depth- or context-aware pass rather than letting it re-scan from the start. Eliminates a full O(n) scan on every call.
 - **Custom implementations only when benchmarks justify the complexity**: a hand-rolled solution may edge out a standard library call by 10–15 %, but the maintenance cost is rarely worth it unless the gain is substantial and measurable at realistic data sizes (e.g. a custom numeric parser vs. `JSON.parse` with try/catch).
 - **Prefer a flag on a shared helper over near-duplicate functions**: when two functions differ only in a single behavioral detail, add a boolean parameter to the shared function rather than maintaining two near-identical copies. Keep the flag's semantics explicit and limited to one axis of variation.
+- **Inline single-use hot-path helpers once the surrounding flow becomes simpler**: if a helper is only called from one place and its logic can be embedded while keeping the caller below the local complexity/return-count budget, prefer the inline version. Removes call indirection and often makes the hot path easier to read as straight-line pseudo-code.
 
 
 ## Architecture

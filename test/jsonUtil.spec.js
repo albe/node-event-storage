@@ -1,5 +1,5 @@
 import expect from 'expect.js';
-import { indexOfSameLevel, findJsonValueEnd, parseJsonValue } from '../src/utils/jsonUtil.js';
+import { indexOfSameLevel, findJsonValueEnd, parseJsonValue, matchesAnyValuePattern } from '../src/utils/jsonUtil.js';
 
 describe('jsonUtil', function() {
 
@@ -80,6 +80,34 @@ describe('jsonUtil', function() {
         it('returns undefined for empty or malformed scalar slices', function() {
             expect(parseJsonValue(Buffer.from('   ', 'utf8'), 0, 3)).to.be(undefined);
             expect(parseJsonValue(Buffer.from('10abc', 'utf8'), 0, 5)).to.be(undefined);
+        });
+
+    });
+
+    describe('matchesAnyValuePattern', function() {
+
+        it('matches any exact scalar candidate at the given offset', function() {
+            const buffer = Buffer.from('{"type":"Foo","id":1}', 'utf8');
+            const valueStart = buffer.indexOf(Buffer.from('"Foo"', 'utf8'));
+            const patterns = [Buffer.from('"Bar"', 'utf8'), Buffer.from('"Foo"', 'utf8')];
+
+            expect(matchesAnyValuePattern(buffer, valueStart, patterns)).to.be(true);
+        });
+
+        it('rejects prefix matches like 5 for an actual value 50', function() {
+            const buffer = Buffer.from('{"amount":50}', 'utf8');
+            const valueStart = buffer.indexOf(Buffer.from('50', 'utf8'));
+            const patterns = [Buffer.from('5', 'utf8')];
+
+            expect(matchesAnyValuePattern(buffer, valueStart, patterns)).to.be(false);
+        });
+
+        it('returns false when none of the candidates match at the exact offset', function() {
+            const buffer = Buffer.from('{"type":"Foo"}', 'utf8');
+            const valueStart = buffer.indexOf(Buffer.from('"Foo"', 'utf8'));
+            const patterns = [Buffer.from('"Bar"', 'utf8'), Buffer.from('"Baz"', 'utf8')];
+
+            expect(matchesAnyValuePattern(buffer, valueStart, patterns)).to.be(false);
         });
 
     });

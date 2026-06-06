@@ -1,17 +1,35 @@
 import crypto from 'crypto';
-import { assert, assertEqual } from './util.js';
-import { BYTE_OPEN_OBJECT, indexOfSameLevel, findJsonValueEnd, parseJsonValue } from './jsonUtil.js';
+import {assert, assertEqual} from './util.js';
+import {
+    indexOfSameLevel,
+    findJsonValueEnd,
+    parseJsonValue,
+    matchesAnyValuePattern,
+    isOpeningObject
+} from './jsonUtil.js';
 
 const compiledOperatorMatcherCache = new WeakMap();
 
+/**
+ * @param {any} value
+ * @returns {boolean}
+ */
 function isObject(value) {
     return value !== null && typeof value === 'object';
 }
 
+/**
+ * @param {any} value
+ * @returns {boolean}
+ */
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/**
+ * @param {object} obj
+ * @returns {boolean}
+ */
 function isOperatorObject(obj) {
     const keys = Object.keys(obj);
     return keys.length > 0 && keys.every(key => key.startsWith('$'));
@@ -20,6 +38,10 @@ function isOperatorObject(obj) {
 /**
  * Dispatch between array (OR), operator object, nested object, and scalar equality matching
  * so callers don't need to know the shape of `matcherValue`.
+ *
+ * @param {any} documentValue
+ * @param {any} matcherValue
+ * @returns {boolean}
  */
 function propertyMatchesValue(documentValue, matcherValue) {
     if (isObject(matcherValue)) {
@@ -37,6 +59,9 @@ function propertyMatchesValue(documentValue, matcherValue) {
 /**
  * Pre-compile an operator object into an array of comparison closures so the hot path avoids
  * repeated `Object.entries` + switch dispatch per matched document.
+ *
+ * @param {object} operatorObj
+ * @returns {Array<function(any): boolean>}
  */
 function buildOperatorChecks(operatorObj) {
     const checks = [];
@@ -70,6 +95,9 @@ function buildOperatorChecks(operatorObj) {
 /**
  * Return cached compiled checks for `operatorObj`, compiling and caching on first access.
  * Using WeakMap keeps operator objects GC-eligible and avoids mutating user-supplied objects.
+ *
+ * @param {object} operatorObj
+ * @returns {Array<function(any): boolean>}
  */
 function getCompiledOperatorChecks(operatorObj) {
     const cachedChecks = compiledOperatorMatcherCache.get(operatorObj);
@@ -81,6 +109,11 @@ function getCompiledOperatorChecks(operatorObj) {
     return checks;
 }
 
+/**
+ * @param {any} documentValue
+ * @param {Array<function(any): boolean>} checks
+ * @returns {boolean}
+ */
 function matchesCompiledOperators(documentValue, checks) {
     if (documentValue === undefined) {
         return false;
@@ -120,10 +153,10 @@ function buildMetadataHeader(magic, metadata) {
  * @returns {function(string)} A function that calculates the HMAC for a given string
  */
 const createHmac = secret => string => {
-        const hmac = crypto.createHmac('sha256', secret);
-        hmac.update(string);
-        return hmac.digest('hex');
-    };
+    const hmac = crypto.createHmac('sha256', secret);
+    hmac.update(string);
+    return hmac.digest('hex');
+};
 
 /**
  * @typedef {object|function(object):boolean} Matcher
@@ -159,10 +192,10 @@ function buildMetadataForMatcher(matcher, hmac) {
         return undefined;
     }
     if (typeof matcher === 'object') {
-        return { matcher };
+        return {matcher};
     }
     const matcherString = matcher.toString();
-    return { matcher: matcherString, hmac: hmac(matcherString) };
+    return {matcher: matcherString, hmac: hmac(matcherString)};
 }
 
 /**
@@ -192,19 +225,18 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
  */
 function buildTypeMatcherFn(payloadPath) {
     const parts = payloadPath.split('.');
-    return function(typeValue) {
+    return function (typeValue) {
         let obj = typeValue;
         for (let i = parts.length - 1; i >= 0; i--) {
-            obj = { [parts[i]]: obj };
+            obj = {[parts[i]]: obj};
         }
-        return { payload: obj };
+        return {payload: obj};
     };
 }
 
 /**
- * Builds a raw-buffer matcher.
- * It expects the Buffer to contain compact stringified JSON
- * and supports matcher objects with sub properties and multi-value matches (OR/any of).
+ * Compile an object matcher into a raw-buffer predicate so raw-mode reads can filter compact
+ * JSON without parsing every document first.
  *
  * @param {object} matcher Object matcher.
  * @returns {function(Buffer): boolean}
@@ -219,7 +251,7 @@ function buildRawBufferMatcher(matcher = {}) {
     }
 
     return function matchesRawBuffer(buffer) {
-        if (buffer[0] !== BYTE_OPEN_OBJECT) {
+        if (!isOpeningObject(buffer[0])) {
             return false;
         }
         if (!preCheck(buffer, 1, root)) {
@@ -230,11 +262,14 @@ function buildRawBufferMatcher(matcher = {}) {
 }
 
 /**
- * Pre-compile a plain object matcher into a tree of byte patterns so `matchesNode` can scan
- * raw JSON buffers without deserializing them.
+ * Compile a matcher object into a tree whose children each carry one primary byte pattern plus
+ * optional follow-up checks for nested objects, operators, or multi-value scalars.
+ *
+ * @param {object} matcher
+ * @returns {{children: Array<object>}}
  */
 function buildMatcherTree(matcher) {
-    const node = { children: [] };
+    const node = {children: []};
 
     for (const [key, value] of Object.entries(matcher)) {
         node.children.push(buildMatcherTreeChild(key, value));
@@ -244,96 +279,106 @@ function buildMatcherTree(matcher) {
 }
 
 /**
- * Build a matcher over a predicate for an array of patterns that checks if any one pattern matches
- */
-function matchAny(patterns) {
-    return (predicate) => patterns.some(predicate);
-}
-function matchOne(pattern) {
-    return (predicate) => predicate(pattern, 0);
-}
-
-/**
- * Decide which matching strategy to use for a key/value pair and build the corresponding
- * child node with pre-computed byte patterns or compiled operator checks.
+ * Normalize one matcher property into the cheapest raw-buffer strategy for that value shape.
+ *
+ * @param {string} key
+ * @param {any} value
+ * @returns {{pattern: Buffer, isKeyPattern: boolean, operatorChecks: (Array<function(any): boolean>|null), valuePatterns: (Buffer[]|null), node: ({children: Array<object>}|null), lastMatch: number}}
  */
 function buildMatcherTreeChild(key, value) {
     const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
     const child = {
-        match: () => false,
+        pattern: null,
         isKeyPattern: false,
         operatorChecks: null,
+        valuePatterns: null,
         node: null,
-        lastMatches: [] // Cached positions of indexOf patterns
+        lastMatch: -1
     };
 
     if (isObject(value)) {
         if (Array.isArray(value)) {
             assert(!value.some(isObject), 'Array matcher values must be scalars.', TypeError);
-
-            child.match = matchAny(value.map(item => buildValuePattern(keyPrefix, item)));
+            if (value.length === 1) {
+                child.pattern = buildKeyValuePattern(keyPrefix, value[0]);
+            } else {
+                child.isKeyPattern = true;
+                child.pattern = keyPrefix;
+                child.valuePatterns = value.map(item => Buffer.from(JSON.stringify(item), 'utf8'));
+            }
         } else if ('$eq' in value && Object.keys(value).length === 1) {
             // A lone $eq is semantically identical to a scalar equality check — fold it into a
             // value pattern at compile time so the buffer scan takes the same fast path as { key: value }.
-            child.match = matchOne(buildValuePattern(keyPrefix, value['$eq']));
+            child.pattern = buildKeyValuePattern(keyPrefix, value['$eq']);
         } else if (isOperatorObject(value)) {
             child.operatorChecks = getCompiledOperatorChecks(value);
             child.isKeyPattern = true;
-            child.match = matchOne(keyPrefix);
+            child.pattern = keyPrefix;
         } else {
-            child.match = matchOne(Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]));
+            child.pattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
             child.node = buildMatcherTree(value);
         }
     } else {
-        child.match = matchOne(buildValuePattern(keyPrefix, value));
+        child.pattern = buildKeyValuePattern(keyPrefix, value);
     }
     return child;
 }
 
-function buildValuePattern(keyPrefix, value) {
+/**
+ * @param {Buffer} keyPrefix
+ * @param {any} value
+ * @returns {Buffer}
+ */
+function buildKeyValuePattern(keyPrefix, value) {
     return Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(value), 'utf8')]);
 }
 
-function childPatternsExist(buffer, pattern, i, startOffset, child) {
-    child.lastMatches[i] = buffer.indexOf(pattern, startOffset);
-    if (child.lastMatches[i] === -1) {
-        return false;
-    }
-    return !(child.node && !preCheck(buffer, child.lastMatches[0], child.node));
-}
-
 /**
- * Optimization pass: check that every required byte pattern is present anywhere in the buffer
- * before spending the more expensive per-depth scan in `matchesNode`.
+ * Cheap pass: confirm each child's primary pattern exists somewhere and cache that position as a
+ * hint for the depth-aware pass that follows.
+ *
+ * @param {Buffer} buffer
+ * @param {number} startOffset
+ * @param {{children: Array<object>}} node
+ * @returns {boolean}
  */
 function preCheck(buffer, startOffset, node) {
     for (const child of node.children) {
-        //child.lastMatches.fill(-1);   // this would be the correct thing to do, but would do an array fill on every level for every check
-        if (!child.match((pattern, i) => childPatternsExist(buffer, pattern, i, startOffset, child))) {
+        child.lastMatch = buffer.indexOf(child.pattern, startOffset);
+        if (child.lastMatch === -1) {
+            return false;
+        }
+        if (child.node && !preCheck(buffer, child.lastMatch, child.node)) {
             return false;
         }
     }
     return true;
 }
 
-function matchesChild(buffer, pattern, startOffset, lastMatchPosition, child) {
-    const matchPosition = indexOfSameLevel(buffer, pattern, startOffset, lastMatchPosition, child.isKeyPattern);
-    if (matchPosition === -1) {
-        return false;
-    }
-    if (child.operatorChecks && !matchesOperatorInBuffer(buffer, matchPosition + pattern.length, child.operatorChecks)) {
-        return false;
-    }
-    return !child.node || matchesNode(buffer, matchPosition + pattern.length, child.node);
-}
-
 /**
- * Verify that each required byte pattern in the tree is present at the correct JSON nesting
- * depth so values inside nested objects don't satisfy a top-level match requirement.
+ * Confirm that each prechecked child really matches at the requested JSON level and then run the
+ * optional value-specific follow-up checks from the compiled tree.
+ *
+ * @param {Buffer} buffer
+ * @param {number} startOffset
+ * @param {{children: Array<object>}} node
+ * @returns {boolean}
  */
 function matchesNode(buffer, startOffset, node) {
     for (const child of node.children) {
-        if (!child.match((pattern, i) => matchesChild(buffer, pattern, startOffset, child.lastMatches[i], child))) {
+        const matchPosition = indexOfSameLevel(buffer, child.pattern, startOffset, child.lastMatch, child.isKeyPattern);
+        if (matchPosition === -1) {
+            return false;
+        }
+
+        const valueStart = matchPosition + child.pattern.length;
+        if (child.valuePatterns && !matchesAnyValuePattern(buffer, valueStart, child.valuePatterns)) {
+            return false;
+        }
+        if (child.operatorChecks && !matchesOperatorInBuffer(buffer, valueStart, child.operatorChecks)) {
+            return false;
+        }
+        if (child.node && !matchesNode(buffer, valueStart, child.node)) {
             return false;
         }
     }
@@ -342,8 +387,13 @@ function matchesNode(buffer, startOffset, node) {
 }
 
 /**
- * Check if a value at the given key-offset matches the specified operators.
- * Finds the key pattern, extracts the value, parses it, and applies operators.
+ * Parse the scalar at a matched key position only when operator objects require a real JavaScript
+ * comparison instead of a pure byte-pattern check.
+ *
+ * @param {Buffer} buffer
+ * @param {number} startOffset
+ * @param {Array<function(any): boolean>} operatorChecks
+ * @returns {boolean}
  */
 function matchesOperatorInBuffer(buffer, startOffset, operatorChecks) {
     const valueStart = startOffset;

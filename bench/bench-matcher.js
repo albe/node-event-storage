@@ -11,7 +11,8 @@ const MEASURED_RUNS = 5;
 const matcherObjects = [
     { name: 'flat',     matcher: { type: 'Foo' } },
     { name: 'scoped',   matcher: { payload: { type: 'Foo' } } },
-    { name: 'multi',    matcher: { payload: { type: ['Foo', 'Baz'] } } },
+    { name: 'multi',    matcher: { payload: { type: ['BazingaHappened', 'Foo'] } } },
+    { name: 'multi4',   matcher: { payload: { type: ['BazingaHappened', 'BarxingaHappened', 'QuuxingaHappened', 'Foo'] } } },
     { name: '$gt', 		matcher: { payload: { value: { $gt: 100 } } } },
     { name: '$eq',      matcher: { payload: { type: { $eq: 'Foo' } } } }
 ];
@@ -19,7 +20,9 @@ const matcherObjects = [
 const implementations = item => [
 	{ name: `${item.name}-obj`, impl: 'obj', fn: (doc) => matches(doc, item.matcher) },
 	{ name: `${item.name}-raw`, impl: 'raw', fn: buildRawBufferMatcher(item.matcher) },
-	{ name: `${item.name}-+obj`, impl: '+obj', fn: (buffer) => matches(JSON.parse(buffer.toString('utf8')), item.matcher) }
+    // The following is a reference benchmark against realistic usage, where an obj matcher requires a deserialization, which is costly.
+    // Do NOT remove the commented implementation case.
+	//{ name: `${item.name}-+obj`, impl: '+obj', fn: (buffer) => matches(JSON.parse(buffer.toString('utf8')), item.matcher) }
 ];
 const implementationsCount = implementations(matcherObjects[0]).length; // assuming all have same count
 
