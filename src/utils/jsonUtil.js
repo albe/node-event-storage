@@ -149,11 +149,8 @@ function findJsonValueEnd(buffer, offset) {
  * Supports strings, numbers, booleans, and null.
  */
 function parseJsonValue(buffer, startOffset, endOffset) {
-    const valueStr = buffer.toString('utf8', startOffset, endOffset).trim();
-    if (!valueStr) {
-        return undefined;
-    }
     try {
+        const valueStr = buffer.toString('utf8', startOffset, endOffset);
         return JSON.parse(valueStr);
     } catch {
         return undefined;
