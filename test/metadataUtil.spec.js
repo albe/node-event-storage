@@ -207,6 +207,32 @@ describe('metadataUtil', function () {
             expect(matcher(Buffer.from('{"status":"a"}', 'utf8'))).to.be(false);
         });
 
+        it('matches ISO datetime strings in a nested range', function () {
+            const matcher = buildRawBufferMatcher({
+                payload: {
+                    at: {
+                        $gte: '2021-06-09T21:03:28.297Z',
+                        $lt: '2021-06-09T21:41:53.775Z'
+                    }
+                }
+            });
+
+            const events = [
+                {payload: {at: '2021-06-09T21:03:28.297Z'}},
+                {payload: {at: '2021-06-09T21:20:00.000Z'}},
+                {payload: {at: '2021-06-09T21:41:53.774Z'}},
+                {payload: {at: '2021-06-09T21:03:28.296Z'}},
+                {payload: {at: '2021-06-09T21:41:53.775Z'}}
+            ];
+
+            const matching = events.filter(event => matcher(Buffer.from(JSON.stringify(event), 'utf8')));
+            expect(matching).to.eql([
+                {payload: {at: '2021-06-09T21:03:28.297Z'}},
+                {payload: {at: '2021-06-09T21:20:00.000Z'}},
+                {payload: {at: '2021-06-09T21:41:53.774Z'}}
+            ]);
+        });
+
         it('works with nested objects', function () {
             const matcher = buildRawBufferMatcher({payload: {amount: {$gte: 50}}});
             expect(matcher(Buffer.from('{"payload":{"amount":50}}', 'utf8'))).to.be(true);
