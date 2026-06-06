@@ -267,30 +267,33 @@ function buildRawBufferMatcher(matcher = {}, options = {}) {
 /**
  * Compile a matcher object into a tree whose children each carry one primary byte pattern plus
  * optional follow-up checks for nested objects, operators, or multi-value scalars.
+ * Fast scalar-equality children are placed first so preCheck and matchesNode short-circuit early.
  *
  * @param {object} matcher Matcher object for this tree level.
- * @param {boolean} enableOperatorBufferMatcher Enables specialized byte-level operator shortcuts.
  * @returns {{children: Array<object>}} Compiled child descriptors for this level.
  */
-function buildMatcherTree(matcher, enableOperatorBufferMatcher) {
-    const node = {children: []};
+function buildMatcherTree(matcher) {
+    const fast = [];
+    const slow = [];
 
     for (const [key, value] of Object.entries(matcher)) {
-        node.children.push(buildMatcherTreeChild(key, value, enableOperatorBufferMatcher));
+        const child = buildMatcherTreeChild(key, value);
+        // A child with only one byte pattern and no follow-up matcher cannot be outperformed by any extra matcher logic.
+        (!child.matches ? fast : slow).push(child);
     }
 
-    return node;
+    return {children: [...fast, ...slow]};
 }
 
 /**
  * Normalize one matcher property into the cheapest raw-buffer strategy for that value shape.
+ * Children that compile to a plain byte-equality pattern leave `matches` as null.
  *
  * @param {string} key Property name at this matcher level.
  * @param {any} value Matcher value for `key`.
- * @param {boolean} enableOperatorBufferMatcher Enables specialized byte-level operator shortcuts.
  * @returns {{pattern: Buffer, isKeyPattern: boolean, matches: ((function(Buffer, number): boolean)|null), node: ({children: Array<object>}|null), lastMatch: number}} Compiled descriptor consumed by preCheck/matchesNode.
  */
-function buildMatcherTreeChild(key, value, enableOperatorBufferMatcher) {
+function buildMatcherTreeChild(key, value) {
     const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
     const child = {
         pattern: null,
@@ -318,15 +321,10 @@ function buildMatcherTreeChild(key, value, enableOperatorBufferMatcher) {
         } else if (isOperatorObject(value)) {
             child.isKeyPattern = true;
             child.pattern = keyPrefix;
-            if (enableOperatorBufferMatcher) {
-                child.matches = buildOperatorBufferMatcher(value);
-            } else {
-                const operatorChecks = getCompiledOperatorChecks(value);
-                child.matches = (buffer, startOffset) => matchesOperatorInBuffer(buffer, startOffset, operatorChecks);
-            }
+            child.matches = buildOperatorBufferMatcher(value);
         } else {
             child.pattern = Buffer.concat([keyPrefix, Buffer.from('{', 'utf8')]);
-            child.node = buildMatcherTree(value, enableOperatorBufferMatcher);
+            child.node = buildMatcherTree(value);
             child.matches = (buffer, startOffset) => matchesNode(buffer, startOffset, child.node);
         }
     } else {
