@@ -318,6 +318,13 @@ function buildMatcherTreeChild(key, value) {
             // A lone $eq is semantically identical to a scalar equality check — fold it into a
             // value pattern at compile time so the buffer scan takes the same fast path as { key: value }.
             child.pattern = buildKeyValuePattern(keyPrefix, value['$eq']);
+        } else if ('$ne' in value && Object.keys(value).length === 1) {
+            // A lone $ne is the logical negation of $eq: confirm the key exists at this level,
+            // then reject only when the value byte-matches the excluded pattern.
+            child.isKeyPattern = true;
+            child.pattern = keyPrefix;
+            const nePattern = [Buffer.from(JSON.stringify(value['$ne']), 'utf8')];
+            child.matches = (buffer, valueStart) => !matchesAnyValuePattern(buffer, valueStart, nePattern);
         } else if (isOperatorObject(value)) {
             child.isKeyPattern = true;
             child.pattern = keyPrefix;
