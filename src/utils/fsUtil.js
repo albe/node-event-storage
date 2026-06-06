@@ -4,8 +4,8 @@ import { mkdirpSync } from 'mkdirp';
 
 /**
  * Ensure that the given directory exists.
- * @param {string} dirName
- * @return {boolean} true if the directory existed already
+ * @param {string} dirName Target directory.
+ * @returns {boolean} True when the directory already existed.
  */
 function ensureDirectory(dirName) {
     if (!fs.existsSync(dirName)) {
@@ -21,9 +21,10 @@ function ensureDirectory(dirName) {
 /**
  * Invoke `onEach` if `relativePath` matches `regexPattern`, passing the first capture group or the full match.
  *
- * @param {string} relativePath
- * @param {RegExp} regexPattern
- * @param {function(string)} onEach
+ * @param {string} relativePath Relative file path.
+ * @param {RegExp} regexPattern Regex used for path matching.
+ * @param {function(string): void} onEach Callback invoked per match.
+ * @returns {void}
  */
 function visitMatchingPath(relativePath, regexPattern, onEach) {
     const match = relativePath.match(regexPattern);
@@ -35,11 +36,11 @@ function visitMatchingPath(relativePath, regexPattern, onEach) {
 /**
  * Classify `entries` into matching files (visited via `onEach`) and subdirectory names (returned).
  *
- * @param {fs.Dirent[]} entries
- * @param {string} relativePrefix
- * @param {RegExp} regexPattern
- * @param {function(string)} onEach
- * @returns {string[]} names of subdirectory entries
+ * @param {fs.Dirent[]} entries Directory entries from one level.
+ * @param {string} relativePrefix Relative prefix for child entries.
+ * @param {RegExp} regexPattern Regex for file paths.
+ * @param {function(string): void} onEach Callback for matching files.
+ * @returns {string[]} Names of subdirectory entries.
  */
 function classifyEntries(entries, relativePrefix, regexPattern, onEach) {
     const subdirs = [];
@@ -56,12 +57,13 @@ function classifyEntries(entries, relativePrefix, regexPattern, onEach) {
 /**
  * Sequentially scan each name in `subdirs`, calling `done` when all are complete or on first error.
  *
- * @param {string[]} subdirs
- * @param {string} dir
- * @param {string} relativePrefix
- * @param {RegExp} regexPattern
- * @param {function(string)} onEach
- * @param {function(Error?)} done
+ * @param {string[]} subdirs Subdirectory names.
+ * @param {string} dir Absolute parent path.
+ * @param {string} relativePrefix Relative prefix used during recursion.
+ * @param {RegExp} regexPattern Regex for file paths.
+ * @param {function(string): void} onEach Callback for matching files.
+ * @param {function(Error=): void} done Completion callback.
+ * @returns {void}
  */
 function scanSubdirs(subdirs, dir, relativePrefix, regexPattern, onEach, done) {
     let i = 0;
@@ -79,12 +81,13 @@ function scanSubdirs(subdirs, dir, relativePrefix, regexPattern, onEach, done) {
 /**
  * Asynchronously scan one directory level, then recurse into subdirectories sequentially.
  *
- * @param {string} dir
- * @param {string} relativePrefix
- * @param {boolean} isRoot
- * @param {RegExp} regexPattern
- * @param {function(string)} onEach
- * @param {function(Error?)} done
+ * @param {string} dir Absolute directory path.
+ * @param {string} relativePrefix Relative prefix for match paths.
+ * @param {boolean} isRoot True for the initial call.
+ * @param {RegExp} regexPattern Regex for file paths.
+ * @param {function(string): void} onEach Callback for matching files.
+ * @param {function(Error=): void} done Completion callback.
+ * @returns {void}
  */
 function scanDir(dir, relativePrefix, isRoot, regexPattern, onEach, done) {
     fs.readdir(dir, { withFileTypes: true }, (err, entries) => {
@@ -112,6 +115,7 @@ function scanDir(dir, relativePrefix, isRoot, regexPattern, onEach, done) {
  * @param {RegExp} regexPattern The pattern to match relative file paths against.
  * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching path.
  * @param {function(Error?)} onDone Called when the scan is complete, or with an error if one occurred.
+ * @returns {void}
  */
 function scanForFiles(directory, regexPattern, onEach, onDone) {
     scanDir(directory, '', true, regexPattern, onEach, onDone);

@@ -11,24 +11,24 @@ import {
 const compiledOperatorMatcherCache = new WeakMap();
 
 /**
- * @param {any} value
- * @returns {boolean}
+ * @param {any} value Value to classify.
+ * @returns {boolean} True when `value` is a non-null object.
  */
 function isObject(value) {
     return value !== null && typeof value === 'object';
 }
 
 /**
- * @param {any} value
- * @returns {boolean}
+ * @param {any} value Value to classify.
+ * @returns {boolean} True when `value` is a non-array object.
  */
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
- * @param {object} obj
- * @returns {boolean}
+ * @param {object} obj Candidate matcher object.
+ * @returns {boolean} True when all keys are operator keys (`$...`).
  */
 function isOperatorObject(obj) {
     const keys = Object.keys(obj);
@@ -39,9 +39,9 @@ function isOperatorObject(obj) {
  * Dispatch between array (OR), operator object, nested object, and scalar equality matching
  * so callers don't need to know the shape of `matcherValue`.
  *
- * @param {any} documentValue
- * @param {any} matcherValue
- * @returns {boolean}
+ * @param {any} documentValue Value from the document.
+ * @param {any} matcherValue Value from the matcher definition.
+ * @returns {boolean} True when both values match under matcher semantics.
  */
 function propertyMatchesValue(documentValue, matcherValue) {
     if (isObject(matcherValue)) {
@@ -60,8 +60,8 @@ function propertyMatchesValue(documentValue, matcherValue) {
  * Pre-compile an operator object into an array of comparison closures so the hot path avoids
  * repeated `Object.entries` + switch dispatch per matched document.
  *
- * @param {object} operatorObj
- * @returns {Array<function(any): boolean>}
+ * @param {object} operatorObj Object containing operator/value pairs.
+ * @returns {Array<function(any): boolean>} Compiled predicate checks in evaluation order.
  */
 function buildOperatorChecks(operatorObj) {
     const checks = [];
@@ -96,8 +96,8 @@ function buildOperatorChecks(operatorObj) {
  * Return cached compiled checks for `operatorObj`, compiling and caching on first access.
  * Using WeakMap keeps operator objects GC-eligible and avoids mutating user-supplied objects.
  *
- * @param {object} operatorObj
- * @returns {Array<function(any): boolean>}
+ * @param {object} operatorObj Object containing operator/value pairs.
+ * @returns {Array<function(any): boolean>} Cached or newly compiled operator checks.
  */
 function getCompiledOperatorChecks(operatorObj) {
     const cachedChecks = compiledOperatorMatcherCache.get(operatorObj);
@@ -110,9 +110,9 @@ function getCompiledOperatorChecks(operatorObj) {
 }
 
 /**
- * @param {any} documentValue
- * @param {Array<function(any): boolean>} checks
- * @returns {boolean}
+ * @param {any} documentValue Parsed scalar value from the document.
+ * @param {Array<function(any): boolean>} checks Compiled operator checks.
+ * @returns {boolean} True when all checks pass.
  */
 function matchesCompiledOperators(documentValue, checks) {
     if (documentValue === undefined) {
@@ -238,8 +238,8 @@ function buildTypeMatcherFn(payloadPath) {
  * Compile an object matcher into a raw-buffer predicate so raw-mode reads can filter compact
  * JSON without parsing every document first.
  *
- * @param {object} matcher Object matcher.
- * @returns {function(Buffer): boolean}
+ * @param {object} matcher Object matcher to compile.
+ * @returns {function(Buffer): boolean} Predicate over compact JSON buffers.
  */
 function buildRawBufferMatcher(matcher = {}) {
     assert(isPlainObject(matcher), 'Matcher must be an object.', TypeError);
@@ -265,8 +265,8 @@ function buildRawBufferMatcher(matcher = {}) {
  * Compile a matcher object into a tree whose children each carry one primary byte pattern plus
  * optional follow-up checks for nested objects, operators, or multi-value scalars.
  *
- * @param {object} matcher
- * @returns {{children: Array<object>}}
+ * @param {object} matcher Matcher object for this tree level.
+ * @returns {{children: Array<object>}} Compiled child descriptors for this level.
  */
 function buildMatcherTree(matcher) {
     const node = {children: []};
@@ -281,9 +281,9 @@ function buildMatcherTree(matcher) {
 /**
  * Normalize one matcher property into the cheapest raw-buffer strategy for that value shape.
  *
- * @param {string} key
- * @param {any} value
- * @returns {{pattern: Buffer, isKeyPattern: boolean, operatorChecks: (Array<function(any): boolean>|null), valuePatterns: (Buffer[]|null), node: ({children: Array<object>}|null), lastMatch: number}}
+ * @param {string} key Property name at this matcher level.
+ * @param {any} value Matcher value for `key`.
+ * @returns {{pattern: Buffer, isKeyPattern: boolean, operatorChecks: (Array<function(any): boolean>|null), valuePatterns: (Buffer[]|null), node: ({children: Array<object>}|null), lastMatch: number}} Compiled descriptor consumed by preCheck/matchesNode.
  */
 function buildMatcherTreeChild(key, value) {
     const keyPrefix = Buffer.from(`${JSON.stringify(key)}:`, 'utf8');
@@ -325,9 +325,9 @@ function buildMatcherTreeChild(key, value) {
 }
 
 /**
- * @param {Buffer} keyPrefix
- * @param {any} value
- * @returns {Buffer}
+ * @param {Buffer} keyPrefix Serialized key prefix (`"key":`).
+ * @param {any} value Scalar value to append.
+ * @returns {Buffer} Full serialized `"key":value` pattern.
  */
 function buildKeyValuePattern(keyPrefix, value) {
     return Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(value), 'utf8')]);
@@ -337,10 +337,10 @@ function buildKeyValuePattern(keyPrefix, value) {
  * Cheap pass: confirm each child's primary pattern exists somewhere and cache that position as a
  * hint for the depth-aware pass that follows.
  *
- * @param {Buffer} buffer
- * @param {number} startOffset
- * @param {{children: Array<object>}} node
- * @returns {boolean}
+ * @param {Buffer} buffer Compact JSON document buffer.
+ * @param {number} startOffset Start offset within `buffer`.
+ * @param {{children: Array<object>}} node Compiled matcher node for this level.
+ * @returns {boolean} True when every child pattern exists somewhere from `startOffset`.
  */
 function preCheck(buffer, startOffset, node) {
     for (const child of node.children) {
@@ -359,10 +359,10 @@ function preCheck(buffer, startOffset, node) {
  * Confirm that each prechecked child really matches at the requested JSON level and then run the
  * optional value-specific follow-up checks from the compiled tree.
  *
- * @param {Buffer} buffer
- * @param {number} startOffset
- * @param {{children: Array<object>}} node
- * @returns {boolean}
+ * @param {Buffer} buffer Compact JSON document buffer.
+ * @param {number} startOffset Start offset within `buffer`.
+ * @param {{children: Array<object>}} node Compiled matcher node for this level.
+ * @returns {boolean} True when all children match at the requested JSON level.
  */
 function matchesNode(buffer, startOffset, node) {
     for (const child of node.children) {
@@ -390,10 +390,10 @@ function matchesNode(buffer, startOffset, node) {
  * Parse the scalar at a matched key position only when operator objects require a real JavaScript
  * comparison instead of a pure byte-pattern check.
  *
- * @param {Buffer} buffer
- * @param {number} startOffset
- * @param {Array<function(any): boolean>} operatorChecks
- * @returns {boolean}
+ * @param {Buffer} buffer Compact JSON document buffer.
+ * @param {number} startOffset Offset of the scalar value to parse.
+ * @param {Array<function(any): boolean>} operatorChecks Compiled operator checks.
+ * @returns {boolean} True when the parsed scalar satisfies all operators.
  */
 function matchesOperatorInBuffer(buffer, startOffset, operatorChecks) {
     const valueStart = startOffset;

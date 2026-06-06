@@ -3,6 +3,7 @@
 ## General guidelines for interaction
 
 Do not repeat yourself. Be concise and precise in your answers. No paraphrasing of previous information unless specifically asked for.
+The code and documentation language is English, even if the user is communicating in another language.
 **Keep this file up-to-date**: after any code review that surfaces new architectural insights or a new principle, compact this file and integrate what was learned.
 
 ## Principles (in priority order)

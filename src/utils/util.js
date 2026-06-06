@@ -1,9 +1,10 @@
 /**
  * Assert that actual and expected match or throw an Error with the given message appended by information about expected and actual value.
  *
- * @param {*} actual
- * @param {*} expected
- * @param {string} message
+ * @param {*} actual Actual value.
+ * @param {*} expected Expected value.
+ * @param {string} message Error message prefix.
+ * @returns {void}
  */
 function assertEqual(actual, expected, message) {
     if (actual !== expected) {
@@ -14,9 +15,10 @@ function assertEqual(actual, expected, message) {
 /**
  * Assert that the condition holds and if not, throw an error with the given message.
  *
- * @param {boolean} condition
- * @param {string} message
- * @param {typeof Error} ErrorType
+ * @param {boolean} condition Condition to verify.
+ * @param {string} message Error message when the condition fails.
+ * @param {typeof Error} ErrorType Error class to throw.
+ * @returns {void}
  */
 function assert(condition, message, ErrorType = Error) {
     if (!condition) {
@@ -27,9 +29,9 @@ function assert(condition, message, ErrorType = Error) {
 /**
  * Return the amount required to align value to the given alignment.
  * It calculates the difference of the alignment and the modulo of value by alignment.
- * @param {number} value
- * @param {number} alignment
- * @returns {number}
+ * @param {number} value Source value.
+ * @param {number} alignment Target alignment.
+ * @returns {number} Additional offset needed to reach the next aligned value.
  */
 function alignTo(value, alignment) {
     return (alignment - (value % alignment)) % alignment;
@@ -38,8 +40,8 @@ function alignTo(value, alignment) {
 /**
  * Method for hashing a string (e.g. a partition name) to a 32-bit unsigned integer.
  *
- * @param {string} str
- * @returns {number}
+ * @param {string} str Input string.
+ * @returns {number} 32-bit unsigned hash value.
  */
 function hash(str) {
     /* c8 ignore next 3 */
@@ -115,8 +117,9 @@ function wrapAndCheck(index, length) {
 /**
  * Iterate an array-like list in forward or reverse order.
  *
- * @param {Iterable} entries
- * @param {boolean} forwards
+ * @param {Iterable|ArrayLike<any>} entries Entries to iterate.
+ * @param {boolean} forwards Iteration direction.
+ * @returns {Generator<any>}
  */
 function* iterate(entries, forwards) {
     if (forwards) {
@@ -141,7 +144,7 @@ function* iterate(entries, forwards) {
  * @param {boolean} [ascending=true] When true, yields items in ascending key order (min-merge).
  *   When false, yields in descending key order (max-merge).
  * @param {function(*): *} [visit] Optional extractor for the yielded value. Defaults to identity.
- * @returns {Generator<*>}
+ * @returns {Generator<*>} Merged sequence in key order.
  */
 function *kWayMerge(iterables, getSortKey, ascending = true, visit = v => v) {
     const states = [];
@@ -175,9 +178,9 @@ function *kWayMerge(iterables, getSortKey, ascending = true, visit = v => v) {
  * Read a scalar value at a dot-notation path from an object.
  * Returns `undefined` if any path segment is absent or an intermediate value is not an object.
  *
- * @param {object} obj
+ * @param {object} obj Source object.
  * @param {string} dotPath Dot-separated property path, e.g. `'payload.type'`.
- * @returns {*}
+ * @returns {*} Value at the path or `undefined`.
  */
 function getPropertyAtPath(obj, dotPath) {
     let current = obj;

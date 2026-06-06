@@ -10,9 +10,9 @@ const BYTE_COMMA = 0x2c;
  * Advance past a JSON string whose opening `"` is at `i`.
  * Returns the position after the closing `"`, or -1 if the string is unterminated.
  *
- * @param {Buffer} buffer
- * @param {number} i
- * @returns {number}
+ * @param {Buffer} buffer Source JSON buffer.
+ * @param {number} i Offset of the opening quote.
+ * @returns {number} Offset after the closing quote, or -1 if unterminated.
  */
 function skipString(buffer, i) {
     let j = i + 1;
@@ -32,43 +32,43 @@ function skipString(buffer, i) {
 
 /**
  * Check if a character byte is a valid JSON value delimiter (comma, closing brace, or closing bracket).
- * @param {number} char
- * @returns {boolean}
+ * @param {number} char Byte value to test.
+ * @returns {boolean} True when `char` is `,`, `}` or `]`.
  */
 function isDelimiter(char) {
     return (char === BYTE_COMMA || char === BYTE_CLOSE_OBJECT || char === BYTE_CLOSE_ARRAY);
 }
 
 /**
- * @param {number} char
- * @returns {boolean}
+ * @param {number} char Byte value to test.
+ * @returns {boolean} True when `char` opens an object or array.
  */
 function isOpeningBracket(char) {
     return char === BYTE_OPEN_OBJECT || char === BYTE_OPEN_ARRAY;
 }
 
 /**
- * @param {number} char
- * @returns {boolean}
+ * @param {number} char Byte value to test.
+ * @returns {boolean} True when `char` closes an object or array.
  */
 function isClosingBracket(char) {
     return char === BYTE_CLOSE_OBJECT || char === BYTE_CLOSE_ARRAY;
 }
 
 /**
- * @param {number} char
- * @returns {boolean}
+ * @param {number} char Byte value to test.
+ * @returns {boolean} True when `char` is `{`.
  */
 function isOpeningObject(char) {
     return char === BYTE_OPEN_OBJECT;
 }
 
 /**
- * @param {Buffer} buffer
- * @param {Buffer} pattern
- * @param {number} startOffset
- * @param {number|undefined} lastMatchPosition
- * @returns {number}
+ * @param {Buffer} buffer Source JSON buffer.
+ * @param {Buffer} pattern Pattern to find.
+ * @param {number} startOffset Search start offset.
+ * @param {number|undefined} lastMatchPosition Optional cached candidate position.
+ * @returns {number} Match position or -1.
  */
 function nextIndexOf(buffer, pattern, startOffset, lastMatchPosition) {
     if (lastMatchPosition === undefined || lastMatchPosition < startOffset) {
@@ -88,12 +88,12 @@ function nextIndexOf(buffer, pattern, startOffset, lastMatchPosition) {
  * Returns -1 when no such position exists before the end of the buffer or when a closing brace
  * reduces depth below zero (the top-level object has ended).
  *
- * @param {Buffer} buffer
- * @param {Buffer} pattern
- * @param {number} [startOffset=0]
- * @param {number|undefined} [matchPosition=undefined]
- * @param {boolean} [isKeyPattern=false]
- * @returns {number}
+ * @param {Buffer} buffer Source JSON buffer.
+ * @param {Buffer} pattern Serialized key/value pattern.
+ * @param {number} [startOffset=0] Offset where scanning begins.
+ * @param {number|undefined} [matchPosition=undefined] Optional cached candidate position.
+ * @param {boolean} [isKeyPattern=false] Skip value-delimiter validation for key-only patterns.
+ * @returns {number} Match position at the same JSON depth, or -1.
  */
 function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition = undefined, isKeyPattern = false) {
     let depth = 0;
@@ -147,9 +147,9 @@ function indexOfSameLevel(buffer, pattern, startOffset = 0, matchPosition = unde
 /**
  * Find the end of a scalar JSON value so operator matching can parse only the relevant slice.
  *
- * @param {Buffer} buffer
- * @param {number} offset
- * @returns {number}
+ * @param {Buffer} buffer Source JSON buffer.
+ * @param {number} offset Offset where the scalar starts.
+ * @returns {number} End offset (exclusive), or -1 for invalid start.
  */
 function findJsonValueEnd(buffer, offset) {
     /* c8 ignore next 3 */
@@ -170,10 +170,10 @@ function findJsonValueEnd(buffer, offset) {
 /**
  * Parse one scalar JSON slice only after a byte-level match has already narrowed the candidate.
  *
- * @param {Buffer} buffer
- * @param {number} startOffset
- * @param {number} endOffset
- * @returns {string|number|boolean|null|undefined}
+ * @param {Buffer} buffer Source JSON buffer.
+ * @param {number} startOffset Start offset (inclusive).
+ * @param {number} endOffset End offset (exclusive).
+ * @returns {string|number|boolean|null|undefined} Parsed scalar, or `undefined` on parse failure.
  */
 function parseJsonValue(buffer, startOffset, endOffset) {
     try {
@@ -187,10 +187,10 @@ function parseJsonValue(buffer, startOffset, endOffset) {
 /**
  * Compare a matched key's scalar value against pre-serialized candidates without reparsing JSON.
  *
- * @param {Buffer} buffer
- * @param {number} valueStart
- * @param {Buffer[]} patterns
- * @returns {boolean}
+ * @param {Buffer} buffer Source JSON buffer.
+ * @param {number} valueStart Offset where the candidate scalar begins.
+ * @param {Buffer[]} patterns Pre-serialized scalar candidates.
+ * @returns {boolean} True when any candidate matches exactly and is delimiter-terminated.
  */
 function matchesAnyValuePattern(buffer, valueStart, patterns) {
     for (const pattern of patterns) {
