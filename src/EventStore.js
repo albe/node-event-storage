@@ -40,7 +40,7 @@ class OptimisticConcurrencyError extends Error {}
 class CommitCondition {
     /**
      * @param {string[]} types
-     * @param {function(object, object): boolean|object|null} [matcher]
+     * @param {(function(object, object): boolean)|object|null} [matcher]
      * @param {number}   noneMatchAfter
      * @param {boolean}  [raw=false]
      */
