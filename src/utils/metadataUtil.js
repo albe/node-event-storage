@@ -440,6 +440,32 @@ function matchesOrdering(operator, ordering) {
  }
 
 /**
+ * @param {Array<[string, any]>} entries
+ * @returns {Array<{operator: string, expectedNumeric: {isNegative: boolean, integerPart: string, fractionPart: string}}>|null}
+ */
+function buildNumericOperatorComparisons(entries) {
+    const comparisons = [];
+    for (const [operator, expectedValue] of entries) {
+        if (typeof expectedValue !== 'number') {
+            return null;
+        }
+        const expectedStr = JSON.stringify(expectedValue);
+        const expectedIsNegative = expectedStr[0] === '-';
+        const intStart = expectedIsNegative ? 1 : 0;
+        const [expectedIntegerPart, expectedFractionPart = ''] = expectedStr.substring(intStart).split('.');
+        comparisons.push({
+            operator,
+            expectedNumeric: {
+                isNegative: expectedIsNegative,
+                integerPart: expectedIntegerPart,
+                fractionPart: expectedFractionPart
+            }
+        });
+    }
+    return comparisons;
+}
+
+/**
  * Build a specialized buffer-based operator comparator by pre-compiling operator-specific
  * byte shortcuts at matcher build time. This avoids runtime dispatch and enables aggressive
  * short-circuit evaluation for sign mismatches and digit-count differences.
@@ -451,38 +477,25 @@ function matchesOrdering(operator, ordering) {
  */
 function buildOperatorBufferMatcher(operatorObj) {
     const entries = Object.entries(operatorObj);
-    const operatorChecks = getCompiledOperatorChecks(operatorObj);
-
-    if (entries.length !== 1) {
-        // Multi-operator case: fall back to generic path.
-        return (buffer, startOffset) => matchesOperatorInBuffer(buffer, startOffset, operatorChecks);
-    }
-
-    const [operator, expectedValue] = entries[0];
-
-    // Single comparison operator on a number: generate a single-pass comparator without parsing.
-    if (typeof expectedValue === 'number' && (operator === '$gt' || operator === '$gte' || operator === '$lt' || operator === '$lte')) {
-        const expectedStr = JSON.stringify(expectedValue);
-        const expectedIsNegative = expectedStr[0] === '-';
-        const intStart = expectedIsNegative ? 1 : 0;
-        const [expectedIntegerPart, expectedFractionPart = ''] = expectedStr.substring(intStart).split('.');
-        const expectedNumeric = {
-            isNegative: expectedIsNegative,
-            integerPart: expectedIntegerPart,
-            fractionPart: expectedFractionPart
-        };
-
+    const numericComparisons = buildNumericOperatorComparisons(entries);
+    if (numericComparisons) {
         return (buffer, startOffset) => {
-             const ordering = compareNumeric(buffer, startOffset, expectedNumeric);
-             /* c8 ignore next 2 */
-             if (ordering === null) {
-                 return false;
-             }
-             return matchesOrdering(operator, ordering);
-         };
+            for (const comparison of numericComparisons) {
+                const ordering = compareNumeric(buffer, startOffset, comparison.expectedNumeric);
+                /* c8 ignore next 2 */
+                if (ordering === null) {
+                    return false;
+                }
+                if (!matchesOrdering(comparison.operator, ordering)) {
+                    return false;
+                }
+            }
+            return true;
+        };
     }
 
     // Non-numeric expected value: use generic operator checks.
+    const operatorChecks = getCompiledOperatorChecks(operatorObj);
     return (buffer, startOffset) => matchesOperatorInBuffer(buffer, startOffset, operatorChecks);
 }
 

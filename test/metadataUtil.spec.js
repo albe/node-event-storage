@@ -191,6 +191,22 @@ describe('metadataUtil', function () {
             expect(matcher(Buffer.from('{"version":1}', 'utf8'))).to.be(false);
         });
 
+        it('combines multiple numeric operators including $ne', function () {
+            const matcher = buildRawBufferMatcher({version: {$gt: 1, $lt: 5, $ne: 3}});
+            expect(matcher(Buffer.from('{"version":2}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"version":3}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"version":4}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"version":5}', 'utf8'))).to.be(false);
+        });
+
+        it('supports multiple string operators via generic fallback', function () {
+            const matcher = buildRawBufferMatcher({status: {$gte: 'b', $lt: 'd'}});
+            expect(matcher(Buffer.from('{"status":"b"}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"status":"c"}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"status":"d"}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"status":"a"}', 'utf8'))).to.be(false);
+        });
+
         it('works with nested objects', function () {
             const matcher = buildRawBufferMatcher({payload: {amount: {$gte: 50}}});
             expect(matcher(Buffer.from('{"payload":{"amount":50}}', 'utf8'))).to.be(true);
@@ -238,6 +254,24 @@ describe('metadataUtil', function () {
             expect(matcher(Buffer.from('{"status":"active"}', 'utf8'))).to.be(false);
         });
 
+        it('lone $ne does not match when the key is absent', function () {
+            const matcher = buildRawBufferMatcher({status: {$ne: 'active'}});
+            expect(matcher(Buffer.from('{"other":"active"}', 'utf8'))).to.be(false);
+        });
+
+        it('lone $ne ignores matching value at the wrong nesting level', function () {
+            // "status":"active" appears only inside payload — must not match the top-level $ne check
+            const matcher = buildRawBufferMatcher({status: {$ne: 'active'}});
+            expect(matcher(Buffer.from('{"payload":{"status":"active"},"status":"inactive"}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"payload":{"status":"inactive"},"status":"active"}', 'utf8'))).to.be(false);
+        });
+
+        it('lone $ne matches a numeric value that differs', function () {
+            const matcher = buildRawBufferMatcher({version: {$ne: 3}});
+            expect(matcher(Buffer.from('{"version":4}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"version":3}', 'utf8'))).to.be(false);
+        });
+
         it('handles fractional numbers with operators', function () {
             const matcher = buildRawBufferMatcher({price: {$lte: 19.99}});
             expect(matcher(Buffer.from('{"price":19.99}', 'utf8'))).to.be(true);
@@ -268,6 +302,25 @@ describe('metadataUtil', function () {
             );
             expect(matcher(Buffer.from('{"amount":150}', 'utf8'))).to.be(true);
             expect(matcher(Buffer.from('{"amount":100}', 'utf8'))).to.be(false);
+        });
+
+        it('rejects early via fast scalar pattern when string equals precedes operator', function () {
+            // status:'active' is a fast scalar pattern; amount:{$gte:50} is slow.
+            // With reordering, the status check runs first in both preCheck and matchesNode,
+            // so documents with wrong status never reach the numeric operator.
+            const matcher = buildRawBufferMatcher({status: 'active', amount: {$gte: 50}});
+            expect(matcher(Buffer.from('{"status":"active","amount":100}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"status":"inactive","amount":100}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"status":"active","amount":10}', 'utf8'))).to.be(false);
+        });
+
+        it('rejects early when type equality is listed after a multi-operator in source order', function () {
+            // Matcher keys: amount first (slow), type second (fast).
+            // After reordering, type:"Foo" moves to front and acts as a prefilter.
+            const matcher = buildRawBufferMatcher({amount: {$gt: 10, $lt: 100}, type: 'Foo'});
+            expect(matcher(Buffer.from('{"amount":50,"type":"Foo"}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"amount":50,"type":"Bar"}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"amount":150,"type":"Foo"}', 'utf8'))).to.be(false);
         });
 
     });
