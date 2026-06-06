@@ -9,7 +9,7 @@ The code and documentation language is English, even if the user is communicatin
 ## Principles (in priority order)
 
 1. **Clean API surface** — usage for common cases should be straightforward and well-documented. Avoid breaking changes unless they significantly improve usability.
-2. **Understandable code** — cyclomatic complexity per method should stay around or below current levels. Higher-level methods should delegate to clearly-named helpers so the logic reads like pseudo-code. Use utility functions (e.g. `kWayMerge`, binary search) for generic algorithms.
+2. **Understandable code** — cyclomatic complexity per method should stay around or below current levels (~15). Higher-level methods should delegate to clearly-named helpers so the logic reads like pseudo-code. Use utility functions (e.g. `kWayMerge`, binary search) for generic algorithms.
 3. **Performance** — maintain good performance across all code paths. The Index and Partition layers are most performance-sensitive and may prefer performance over readability at the margin. Elsewhere, prefer simplicity; simpler code is often faster.
 
 ### Performance trade-off lessons
@@ -21,6 +21,14 @@ The code and documentation language is English, even if the user is communicatin
 - **Prefer a flag on a shared helper over near-duplicate functions**: when two functions differ only in a single behavioral detail, add a boolean parameter to the shared function rather than maintaining two near-identical copies. Keep the flag's semantics explicit and limited to one axis of variation.
 - **Inline single-use hot-path helpers once the surrounding flow becomes simpler**: if a helper is only called from one place and its logic can be embedded while keeping the caller below the local complexity/return-count budget, prefer the inline version. Removes call indirection and often makes the hot path easier to read as straight-line pseudo-code.
 
+
+### Code Quality standards
+
+- Keep cyclomatic complexity per method around 15 or below. If a method exceeds that, look for ways to break it down into smaller, clearly-named helper methods. Exceptions can be made for very performance-sensitive code paths, but prefer readability in general.
+- Keep number of return statements per method below 6. Multiple return points can be acceptable if they significantly improve readability, but watch for methods that become hard to follow due to too many exit points.
+- Avoid deep nesting of conditionals. If you find yourself nesting more than 3 levels deep, consider refactoring to flatten the structure, such as by using guard clauses or extracting nested logic into separate methods.
+- Use descriptive method and variable names to make the code self-documenting. Higher level methods should read like pseudo-code, delegating to well-named helpers that encapsulate specific logic or steps in the process.
+- In general, optimize the code for readability first, and only introduce complexity when there is a clear performance benefit that has been measured and justified.
 
 ## Architecture
 
