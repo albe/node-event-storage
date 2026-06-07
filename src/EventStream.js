@@ -2,8 +2,10 @@ import stream from 'stream';
 import { assert } from './utils/util.js';
 import { buildRawBufferMatcher, matches } from './utils/metadataUtil.js';
 import { normalizeRevision, normalizeMaxRevision } from './utils/apiHelpers.js';
+import { emitDeprecationWarningOnce } from './utils/deprecations.js';
 
 const NDJSON_NEWLINE = Buffer.from('\n');
+const FILTER_MATCHER_DEPRECATION_CODE = 'EVENTSTREAM_FILTER_MATCHER_DEPRECATED';
 
 /**
  * An event stream is a simple wrapper around an iterator over storage documents.
@@ -245,21 +247,42 @@ class EventStream extends stream.Readable {
     }
 
     /**
-     * Apply a filter predicate to this stream.  Only events for which `predicate(payload, metadata)`
-     * returns a truthy value will be yielded.  The predicate is stored as a first-class property
-     * of the stream and applied in {@link EventStream#next}.
+     * Apply matcher semantics to this EventStream instance (legacy `filter()` behavior).
      *
      * @api
-     * @param {function(object, object): boolean} predicate A function receiving `(payload, metadata)`.
-     *   Events for which the predicate returns falsy are skipped.
+     * @param {(function(object, object): boolean)|(function(Buffer): boolean)|object|null} [predicate]
+     *   Matcher function/object for object mode, or buffer matcher function/object for raw mode.
+     *   Omit to clear the current predicate.
      * @returns {EventStream} `this`
      */
-    filter(predicate) {
+    where(predicate) {
         this.predicate = predicate || null;
         this.rawMatcher = null;
         this._iterator = null;
         this._events = null;
         return this;
+    }
+
+    /**
+     * Readable-compatible filter entry point.
+     *
+     * - `filter(callback, options)` delegates to Node's `Readable.filter(...)`.
+     * - `filter(matcher)` keeps legacy EventStream matcher behavior and is deprecated.
+     *
+     * @api
+     * @param {function|object|null} [predicate]
+     * @param {{concurrency?: number, signal?: AbortSignal}|undefined} [options]
+     * @returns {stream.Readable|EventStream}
+     */
+    filter(predicate, options) {
+        if (options !== undefined) {
+            return super.filter(predicate, options);
+        }
+        emitDeprecationWarningOnce(
+            FILTER_MATCHER_DEPRECATION_CODE,
+            'EventStream.filter() with matcher semantics is deprecated. Use EventStream.where() for matcher/object predicates or pass options to filter() to use Readable.filter().'
+        );
+        return this.where(predicate);
     }
 
     matchesPredicate(entry) {
