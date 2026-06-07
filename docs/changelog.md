@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1
+
+- Added published TypeScript declarations (`index.d.ts`) and package-level `types` metadata so consumers can reference `EventStore` and related public APIs from `event-storage`.
+- `EventStream` now exposes `where()` for matcher-based filtering.
+- `EventStream.filter()` now supports `Readable.filter(callback, options)` delegation when options are provided.
+- Matcher-style `EventStream.filter(matcher)` remains supported for backward compatibility but now emits a deprecation warning and should be migrated to `where()`.
+
 ## 1.3.0
 
 New in 1.3:

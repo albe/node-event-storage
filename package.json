@@ -24,6 +24,7 @@
   "exports": {
     ".": "./index.js"
   },
+  "types": "./index.d.ts",
   "scripts": {
     "test": "c8 --reporter=lcov --reporter=text mocha test/*.spec.js",
     "test:grep": "c8 --reporter=lcov --reporter=text mocha test/*.spec.js --grep",
@@ -45,6 +46,7 @@
     "src/Storage/*.js",
     "src/WatchesFile.js",
     "index.js",
+    "index.d.ts",
     "src/utils/*.js"
   ],
   "license": "MIT",

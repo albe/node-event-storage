@@ -248,6 +248,27 @@ describe('EventStream', function() {
             expect(stream.events).to.eql(events);
         });
 
+        it('delegates to Readable.filter() when called with options', async function() {
+            const filteredReadable = stream.filter((payload) => payload === 'foo', { concurrency: 1 });
+            expect(filteredReadable).not.to.be(stream);
+
+            const values = [];
+            for await (const value of filteredReadable) {
+                values.push(value);
+            }
+            expect(values).to.eql(['foo']);
+        });
+
+    });
+
+    describe('where()', function() {
+
+        it('applies matcher semantics and resets the iterator', function() {
+            const filtered = stream.where({ payload: 'foo' });
+            expect(filtered).to.be(stream);
+            expect(stream.events).to.eql(['foo']);
+        });
+
     });
 
     describe('object matcher (non-raw mode)', function() {
