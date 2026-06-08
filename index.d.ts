@@ -30,6 +30,8 @@ export const ExpectedVersion: {
     EmptyStream: 0;
 };
 
+export const VERSION: string;
+
 export class EventStream extends Readable {
     constructor(name: string, eventStore: EventStore, minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean);
     name: string;
@@ -93,6 +95,7 @@ export class Index {
 export class EventStore extends EventEmitter {
     static Storage: typeof Storage;
     static Index: typeof Index;
+    static VERSION: string;
 
     storage: Storage;
     streams: Record<string, StreamInfo>;
