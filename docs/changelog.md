@@ -1,8 +1,9 @@
 # Changelog
 
-## 1.4.0
+## 1.3.2
 
 - Added `EventStore.makeReadOnly([callback])` as a niche handover API for switching a running writer process into read-only mode without restarting it. For the common case, creating a fresh read-only `EventStore` instance remains the recommended approach.
+- Added public `VERSION` export at the package root and mirrored it on `EventStore.VERSION` so dependent layers can read the `event-storage` version directly without resolving/parsing `package.json` at runtime.
 - Fixed `ReadOnlyStorage.open()` to keep the same opened-event semantics as the readable and writable storage variants, so read-only reopen paths and the `makeReadOnly()` callback now work consistently.
 
 ## 1.3.1
