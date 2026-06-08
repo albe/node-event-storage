@@ -2210,4 +2210,75 @@ describe('EventStore', function() {
 
     });
 
+    describe('makeReadOnly()', function() {
+
+        it('switches to read-only mode and calls the callback', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.on('ready', () => {
+                eventstore.commit('foo', [{ x: 1 }], () => {
+                    eventstore.makeReadOnly(() => {
+                        expect(eventstore.storage.constructor.name).to.be('ReadOnlyStorage');
+                        expect(() => eventstore.commit('foo', [{ x: 2 }])).to.throwError(/read-only/);
+                        done();
+                    });
+                });
+            });
+        });
+
+        it('can switch to read-only outside a commit callback and keeps already written events', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.on('ready', () => {
+                eventstore.commit('deployment-stream', [{ step: 'before-switch' }]);
+                eventstore.makeReadOnly(() => {
+                    expect(eventstore.storage.constructor.name).to.be('ReadOnlyStorage');
+
+                    const stream = eventstore.getEventStream('deployment-stream');
+                    expect(stream).to.not.be(false);
+                    expect(stream.events.length).to.be(1);
+                    expect(stream.events[0].step).to.be('before-switch');
+
+                    expect(() => eventstore.commit('deployment-stream', [{ step: 'after-switch' }])).to.throwError(/read-only/);
+                    done();
+                });
+            });
+        });
+
+        it('preserves existing events after switching to read-only', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.on('ready', () => {
+                eventstore.commit('bar', [{ y: 1 }, { y: 2 }], () => {
+                    eventstore.makeReadOnly(() => {
+                        const stream = eventstore.getEventStream('bar');
+                        const events = stream.events;
+                        expect(events.length).to.be(2);
+                        expect(events[0].y).to.be(1);
+                        expect(events[1].y).to.be(2);
+                        done();
+                    });
+                });
+            });
+        });
+
+        it('prevents new commits after switching to read-only', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.on('ready', () => {
+                eventstore.makeReadOnly(() => {
+                    expect(() => eventstore.commit('baz', [{ z: 1 }])).to.throwError(/read-only/);
+                    done();
+                });
+            });
+        });
+
+        it('prevents createEventStream after switching to read-only', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.on('ready', () => {
+                eventstore.makeReadOnly(() => {
+                    expect(() => eventstore.createEventStream('new-stream', { stream: 'new-stream' })).to.throwError(/read-only/);
+                    done();
+                });
+            });
+        });
+
+    });
+
 });

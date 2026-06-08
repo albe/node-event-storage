@@ -129,24 +129,34 @@ class EventStore extends events.EventEmitter {
      * @param {object} storageConfig
      */
     initialize(storeName, storageConfig) {
+        this.storageConfig = storageConfig;
         this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
-
         this.storeName = storeName;
-        this.storage = (storageConfig.readOnly === true) ?
-                        new ReadOnlyStorage(storeName, storageConfig)
-                        : new Storage(storeName, storageConfig);
-        this.streams = Object.create(null);
-        this.streams._all = { index: this.storage.index };
         this.consumers = new Map();
 
-        this.storage.on('index-created', this.registerStream.bind(this));
+        const storage = storageConfig.readOnly === true
+            ? new ReadOnlyStorage(storeName, storageConfig)
+            : new Storage(storeName, storageConfig);
 
-        this.storage.on('opened', () => {
+        this.mountStorage(storage, () => {
             this.checkUnfinishedCommits();
             this.emit('ready');
         });
+    }
 
-        this.storage.open();
+    /**
+     * Wire up a storage instance: reset the streams map, attach the index-created listener,
+     * register a one-shot opened handler, then open the storage.
+     * @private
+     * @param {ReadableStorage} storage
+     * @param {function} [onOpened] Called once when the storage is opened.
+     */
+    mountStorage(storage, onOpened) {
+        this.storage = storage;
+        this.streams = Object.create(null);
+        this.streams._all = { index: this.storage.index };
+        this.storage.on('index-created', this.registerStream.bind(this));
+        this.storage.open(onOpened);
     }
 
     /**
@@ -229,6 +239,35 @@ class EventStore extends events.EventEmitter {
         }
         this.consumers.clear();
         this.storage.close();
+    }
+
+    /**
+     * Flush all pending writes, then re-open the store in read-only mode.
+     * Any registered consumers are stopped. The `callback` is invoked once the
+     * new read-only storage has finished opening.
+     *
+     * Does not re-emit `'ready'` — use the callback to react to the transition.
+     *
+     * @api
+     * @param {function} [callback] Called when the store is ready in read-only mode.
+     */
+    makeReadOnly(callback) {
+        if (this.storage instanceof ReadOnlyStorage) {
+            callback?.();
+            return
+        }
+        for (const consumer of this.consumers.values()) {
+            consumer.stop();
+        }
+        this.consumers.clear();
+
+        this.storage.flush();
+        this.storage.close();
+
+        const readOnlyConfig = Object.assign({}, this.storageConfig, { readOnly: true });
+        this.storageConfig = readOnlyConfig;
+
+        this.mountStorage(new ReadOnlyStorage(this.storeName, readOnlyConfig), callback);
     }
 
     /**
