@@ -31,14 +31,16 @@ class ReadOnlyStorage extends ReadableStorage {
      * Will emit an 'opened' event if finished.
      *
      * @api
+     * @param {function(): void} [callback] Called after indexes open, before `'opened'` is emitted.
+     *   Can be used as a synchronous alternative to listening to the `'opened'` event.
      * @returns {boolean}
      */
-    open() {
+    open(callback) {
         if (!this.watcher) {
             this.watcher = new Watcher([this.dataDirectory, this.indexDirectory], this.storageFilesFilter);
             this.watcher.on('rename', this.onStorageFileChanged);
         }
-        return super.open();
+        return super.open(callback);
     }
 
     /**
