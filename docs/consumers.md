@@ -144,4 +144,6 @@ eventstore.on('ready', () => {
 - Multiple read-only instances can run simultaneously.
 - This enables a multi-process projection pattern: one writer process + N reader processes building different projections.
 
+If you need to hand the *current* process over from writing to reading during a deployment, use `EventStore.makeReadOnly([callback])` instead of starting a new read-only instance.
+
 > In principle this also works across machines sharing a common filesystem (e.g. NFS), as long as the Node.js file watcher functions correctly on that filesystem.

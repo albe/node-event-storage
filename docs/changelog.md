@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.0
+
+- Added `EventStore.makeReadOnly([callback])` as a niche handover API for switching a running writer process into read-only mode without restarting it. For the common case, creating a fresh read-only `EventStore` instance remains the recommended approach.
+- Fixed `ReadOnlyStorage.open()` to keep the same opened-event semantics as the readable and writable storage variants, so read-only reopen paths and the `makeReadOnly()` callback now work consistently.
+
 ## 1.3.1
 
 - Added published TypeScript declarations (`index.d.ts`) and package-level `types` metadata so consumers can reference `EventStore` and related public APIs from `event-storage`.

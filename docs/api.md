@@ -47,6 +47,19 @@ Close the event store and free all resources.
 
 ---
 
+#### `makeReadOnly([callback])` ✅ Stable
+
+```javascript
+eventstore.makeReadOnly([callback])
+```
+
+Flush pending writes, close the writable storage, and reopen the store in read-only mode.
+The optional `callback` is called after the new read-only storage has emitted `'opened'`.
+
+This is mainly useful for deployment handover workflows where one process stops writing and the same process switches into read-only mode; for most applications, `eventstore.close(); new EventStore(..., { readOnly: true })` is the simpler option.
+
+---
+
 #### `commit(streamName, events, [expectedVersion], [metadata], [callback])` ✅ Stable
 
 ```javascript
