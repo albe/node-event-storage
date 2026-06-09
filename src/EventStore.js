@@ -257,7 +257,7 @@ class EventStore extends events.EventEmitter {
     makeReadOnly(callback) {
         if (this.storage instanceof ReadOnlyStorage) {
             callback?.();
-            return
+            return;
         }
         for (const consumer of this.consumers.values()) {
             consumer.stop();
