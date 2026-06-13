@@ -2,7 +2,7 @@
 
 ## General guidelines for interaction
 
-Do not repeat yourself. Be concise and precise in your answers. No paraphrasing of previous information unless specifically asked for.
+Do not repeat yourself. Be concise and precise in your internal thoughts, but especially your answers. No paraphrasing of previous information unless specifically asked for. Only quote code you generated if less than 5 lines, otherwise just refer to the file and line number where it can be found. If you need to refer to a specific part of the code, quote only the relevant lines.
 If you run into a decision point, maybe because the instructions given were contradictory or incomplete, try to identify the underlying principle or intent and unless that is absolutely clear, ask for clarification and/or a decision. Explain the issue you stumbled upon and the options you see, and ask for guidance on how to proceed.
 The code and documentation language is English, even if the user is communicating in another language.
 Read the Platform.md file if it exists to know which platform you are running on and what capabilities you have, instead of trying to run linux tools on a Windows machine.
@@ -43,6 +43,8 @@ EventStore  →  Storage  →  Partition (append-only data files)
 
 - **Storage/Index/Partition** each follow a 3-tier class hierarchy under `src/<Component>/`: `Readable*` → `ReadOnly*` → `Writable*`. The facade file `src/<Component>.js` re-exports the Writable + ReadOnly variants.
 - **EventStore** (`src/EventStore.js`) is the main entry point — owns a `Storage` instance, manages stream indexes in a `streams/` subdirectory, and provides `commit()` / `getEventStream()` / `query()` / `createConsumer()`.
+- **`event-storage-ui` prebuilt CLI** must start `react-router-serve` with the package directory as its working directory so `build/client` assets resolve from the installed package, not from the caller project's folder.
+- **`event-storage-ui` config file paths are config-relative** — relative `storeName` / `storesDirectory` values resolve from the config file's directory, not from `process.cwd()`, so packaged CLI execution remains stable after changing the server working directory.
 - **DCB concurrency**: `query()` returns a `CommitCondition` capturing the global log position + type/matcher filter. Passing it as `expectedVersion` to `commit()` rejects only when matching events were appended since the query.
 - Streams are named indexes over a shared storage file; events are partitioned by `event.stream`. Category queries use `<category>-<id>` naming convention.
 
