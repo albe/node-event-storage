@@ -4,9 +4,16 @@ import { Readable } from 'node:stream';
 export type EventMatcher = Record<string, unknown> | ((payload: any, metadata?: any) => boolean);
 export type EventPredicate = EventMatcher | ((buffer: Buffer) => boolean) | null;
 
+export interface IndexEntry {
+    number: number;
+    position: number;
+    size: number;
+    partition: number;
+}
 export interface StreamIndexInfo {
     length: number;
     metadata?: Record<string, unknown> | null;
+    lastEntry: IndexEntry;
 }
 
 export interface StreamInfo {
