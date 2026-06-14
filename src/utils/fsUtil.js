@@ -121,7 +121,46 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
     scanDir(directory, '', true, regexPattern, onEach, onDone);
 }
 
+/**
+ * Synchronously scan one directory level, then recurse into subdirectories.
+ *
+ * @param {string} dir Absolute directory path.
+ * @param {string} relativePrefix Relative prefix for match paths.
+ * @param {boolean} isRoot True for the initial call.
+ * @param {RegExp} regexPattern Regex for file paths.
+ * @param {function(string): void} onEach Callback for matching files.
+ * @returns {void}
+ */
+function scanDirSync(dir, relativePrefix, isRoot, regexPattern, onEach) {
+    let entries;
+    try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+        if (!isRoot && err.code === 'ENOENT') return;
+        throw err;
+    }
+    const subdirs = classifyEntries(entries, relativePrefix, regexPattern, onEach);
+    for (const name of subdirs) {
+        scanDirSync(path.join(dir, name), relativePrefix + name + '/', false, regexPattern, onEach);
+    }
+}
+
+/**
+ * Synchronous counterpart to {@link scanForFiles}. Used on cold paths where a blocking scan is
+ * acceptable and the result is needed immediately (e.g. lazily registering a partition referenced
+ * by a freshly appended index entry during live watching).
+ *
+ * @param {string} directory The root directory to scan.
+ * @param {RegExp} regexPattern The pattern to match relative file paths against.
+ * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching path.
+ * @returns {void}
+ */
+function scanForFilesSync(directory, regexPattern, onEach) {
+    scanDirSync(directory, '', true, regexPattern, onEach);
+}
+
 export {
     ensureDirectory,
     scanForFiles,
+    scanForFilesSync,
 };
