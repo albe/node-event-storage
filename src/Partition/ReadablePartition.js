@@ -155,6 +155,7 @@ class ReadablePartition extends events.EventEmitter {
      */
     readFileSize() {
         const stat = fs.statSync(this.fileName);
+        this.crtime = stat.birthtimeMs;
         return stat.size - this.headerSize;
     }
 

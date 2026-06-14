@@ -128,6 +128,7 @@ class ReadableIndex extends events.EventEmitter {
         stat.size -= this.readMetadata();
         assert(stat.size >= 0, 'Invalid index file!');
 
+        this.crtime = stat.birthtimeMs;
         const length = Math.floor(stat.size / this.EntryClass.size);
         assert(stat.size === length * this.EntryClass.size, 'Index file is corrupt!', CorruptedIndexErrorFactory(length));
 
