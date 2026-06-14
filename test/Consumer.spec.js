@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import fsNative from 'fs';
 import Storage from '../src/Storage.js';
 import Consumer from '../src/Consumer.js';
+import ConsumerPersistence from '../src/Consumer/ConsumerPersistence.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -44,18 +45,22 @@ describe('Consumer', function() {
         expect(fs.existsSync(dataDirectory + '/consumers')).to.be(true);
     });
 
-    it('cleans up failed write left-overs', function() {
+    it('cleans up failed write left-overs', function(done) {
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();
-        fs.writeFileSync(consumer.fileName + '.1', 'failed write!');
+        const failedWriteFile = consumer.persistence.fileName + '.1';
+        fs.writeFileSync(failedWriteFile, 'failed write!');
         consumer = new Consumer(storage, 'foobar', 'consumer1');
-        expect(fs.existsSync(consumer.fileName + '.1')).to.be(false);
+        consumer.once('ready', () => {
+            expect(fs.existsSync(failedWriteFile)).to.be(false);
+            done();
+        });
     });
 
-    it('rethrows cleanup unlink errors other than ENOENT', function() {
+    it('rethrows cleanup unlink errors other than ENOENT', function(done) {
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();
-        const failedWriteFile = consumer.fileName + '.1';
+        const failedWriteFile = consumer.persistence.fileName + '.1';
         fs.writeFileSync(failedWriteFile, 'failed write!');
 
         const originalUnlinkSync = fsNative.unlinkSync;
@@ -65,14 +70,19 @@ describe('Consumer', function() {
             throw error;
         };
 
-        try {
-            expect(() => consumer.cleanUpFailedWrites()).to.throwError(/permission denied/);
-        } finally {
+        consumer.persistence.cleanUpFailedWrites((error) => {
             fsNative.unlinkSync = originalUnlinkSync;
-            if (fs.existsSync(failedWriteFile)) {
-                fs.unlinkSync(failedWriteFile);
+            try {
+                expect(error).to.be.an(Error);
+                expect(error.message).to.match(/permission denied/);
+                if (fs.existsSync(failedWriteFile)) {
+                    fs.unlinkSync(failedWriteFile);
+                }
+                done();
+            } catch (assertionError) {
+                done(assertionError);
             }
-        }
+        });
     });
 
     it('emits event when catching up', function(done){
@@ -328,21 +338,23 @@ describe('Consumer', function() {
 
     it('ignores concurrent persist calls while one write is scheduled', function(done) {
         consumer = new Consumer(storage, 'foobar', 'consumer-1');
-        consumer.position = 1;
-        consumer.state = Object.freeze({ foo: 1 });
+        consumer.once('ready', () => {
+            consumer.position = 1;
+            consumer.state = Object.freeze({ foo: 1 });
 
-        let persistedCount = 0;
-        consumer.on('persisted', () => {
-            persistedCount++;
+            let persistedCount = 0;
+            consumer.on('persisted', () => {
+                persistedCount++;
+            });
+
+            consumer.persist();
+            consumer.persist();
+
+            setTimeout(() => {
+                expect(persistedCount).to.be(1);
+                done();
+            }, 40);
         });
-
-        consumer.persist();
-        consumer.persist();
-
-        setTimeout(() => {
-            expect(persistedCount).to.be(1);
-            done();
-        }, 15);
     });
 
     it('swallows persistence write errors and removes temp files', function(done) {
@@ -350,7 +362,7 @@ describe('Consumer', function() {
         consumer.position = 1;
         consumer.state = Object.freeze({ foo: 1 });
 
-        const tmpFile = consumer.fileName + '.1';
+        const tmpFile = consumer.persistence.fileName + '.1';
         const originalWriteFileSync = fsNative.writeFileSync;
         fsNative.writeFileSync = () => {
             const error = new Error('disk full');
@@ -375,10 +387,44 @@ describe('Consumer', function() {
             consumer.setState(newState);
             consumer.once('persisted', () => {
                 consumer = new Consumer(storage, 'foobar', 'consumer-1');
-                expect(consumer.state.foo).to.be(1);
-                done();
+                consumer.once('ready', () => {
+                    expect(consumer.state.foo).to.be(1);
+                    done();
+                });
             });
             consumer.stop();
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('waits for asynchronous persistence opening before consuming', function(done) {
+        let opened = false;
+        class AsyncOpenPersistence extends ConsumerPersistence {
+            async open() {
+                return new Promise((resolve) => {
+                    setTimeout(() => {
+                        opened = true;
+                        resolve();
+                    }, 10);
+                });
+            }
+
+            async load(initialState, startFrom) {
+                return { position: startFrom, state: initialState };
+            }
+
+            async persist(position, state) {
+                return JSON.stringify(state);
+            }
+        }
+
+        const persistence = new AsyncOpenPersistence();
+
+        consumer = new Consumer(storage, 'foobar', 'consumer-open', {}, 0, { persistence });
+        consumer.on('data', () => {
+            expect(opened).to.be(true);
+            done();
         });
 
         storage.write({ type: 'Foobar', id: 1 });
@@ -395,6 +441,147 @@ describe('Consumer', function() {
         });
 
         storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('supports custom persistence adapters', function(done) {
+        let loadCalls = 0;
+        let persistedPosition = 0;
+        let persistedState = null;
+        class TestPersistence extends ConsumerPersistence {
+            async open() {
+            }
+
+            async load(initialState, startFrom) {
+                loadCalls++;
+                return { position: startFrom, state: initialState };
+            }
+
+            async persist(position, state) {
+                persistedPosition = position;
+                persistedState = state;
+                return JSON.stringify(state);
+            }
+        }
+
+        const persistence = new TestPersistence();
+
+        consumer = new Consumer(storage, 'foobar', 'consumer-custom', { foo: 0 }, 0, { persistence });
+        consumer.once('ready', () => {
+            expect(loadCalls).to.be(1);
+        });
+
+        consumer.on('data', (document) => {
+            consumer.setState({ foo: document.id });
+            consumer.once('persisted', () => {
+                expect(persistedPosition).to.be(1);
+                expect(persistedState).to.eql({ foo: 1 });
+                done();
+            });
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('throws when custom persistence is not a ConsumerPersistence instance', function() {
+        expect(() => new Consumer(storage, 'foobar', 'consumer-x', {}, 0, {
+            persistence: {
+                async load(initialState, startFrom) {
+                    return { position: startFrom, state: initialState };
+                },
+                async persist() {
+                    return '{}';
+                }
+            }
+        })).to.throwError(/ConsumerPersistence/);
+
+        expect(() => new Consumer(storage, 'foobar', 'consumer-y', {}, 0, {
+            persistence: {
+                async open() {
+                },
+                async persist() {
+                    return '{}';
+                }
+            }
+        })).to.throwError(/ConsumerPersistence/);
+    });
+
+    it('throws when persistence open() does not return a promise', function() {
+        class NonAsyncOpenPersistence extends ConsumerPersistence {
+            open() {
+            }
+
+            async load(initialState, startFrom) {
+                return { position: startFrom, state: initialState };
+            }
+
+            async persist(position, state) {
+                return JSON.stringify(state);
+            }
+        }
+
+        expect(() => new Consumer(storage, 'foobar', 'consumer-sync-open', {}, 0, {
+            persistence: new NonAsyncOpenPersistence()
+        })).to.throwError(/open\(\) must return a Promise/);
+    });
+
+    it('throws when persistence persist() does not return a promise', function(done) {
+        class NonAsyncPersistPersistence extends ConsumerPersistence {
+            async open() {
+            }
+
+            async load(initialState, startFrom) {
+                return { position: startFrom, state: initialState };
+            }
+
+            persist() {
+                return '{}';
+            }
+        }
+
+        consumer = new Consumer(storage, 'foobar', 'consumer-sync-persist', {}, 0, {
+            persistence: new NonAsyncPersistPersistence()
+        });
+        consumer.position = 1;
+        consumer.state = Object.freeze({ foo: 1 });
+        consumer.once('error', (error) => {
+            expect(error.message).to.match(/persist\(\) must return a Promise/);
+            done();
+        });
+        consumer.persist();
+    });
+
+    it('awaits asynchronous persist before allowing the next persist', function(done) {
+        let activeWrites = 0;
+        let maxActiveWrites = 0;
+        class AsyncPersistTestPersistence extends ConsumerPersistence {
+            async open() {
+            }
+
+            async load(initialState, startFrom) {
+                return { position: startFrom, state: initialState };
+            }
+
+            async persist(position, state) {
+                activeWrites++;
+                maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+                await new Promise((resolve) => setTimeout(resolve, 15));
+                activeWrites--;
+                return JSON.stringify(state);
+            }
+        }
+
+        const persistence = new AsyncPersistTestPersistence();
+
+        consumer = new Consumer(storage, 'foobar', 'consumer-async-persist', {}, 0, { persistence });
+        consumer.position = 1;
+        consumer.state = Object.freeze({ foo: 1 });
+        consumer.persist();
+        consumer.persist();
+
+        setTimeout(() => {
+            expect(maxActiveWrites).to.be(1);
+            done();
+        }, 40);
     });
 
     it('can be reset and reprocesses all events', function(done) {

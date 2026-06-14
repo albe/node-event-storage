@@ -19,6 +19,22 @@ function ensureDirectory(dirName) {
 }
 
 /**
+ * Safely unlink a file and ignore missing files.
+ * @param {string} fileName
+ * @returns {void}
+ */
+function safeUnlink(fileName) {
+    /* c8 ignore next */
+    try {
+        fs.unlinkSync(fileName);
+    } catch (e) {
+        if (e.code !== 'ENOENT') {
+            throw e;
+        }
+    }
+}
+
+/**
  * Invoke `onEach` if `relativePath` matches `regexPattern`, passing the first capture group or the full match.
  *
  * @param {string} relativePath Relative file path.
@@ -123,5 +139,6 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
 
 export {
     ensureDirectory,
+    safeUnlink,
     scanForFiles,
 };

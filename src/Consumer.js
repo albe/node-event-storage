@@ -1,26 +1,10 @@
 import stream from 'stream';
-import fs from 'fs';
-import path from 'path';
 import { assert } from './utils/util.js';
-import { ensureDirectory } from './utils/fsUtil.js';
 import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
 import Storage from './Storage/ReadableStorage.js';
-const MAX_CATCHUP_BATCH = 10;
-
-/**
- * Safely unlink a file and ignore if it doesn't exist.
- * @param {string} filename
- */
-const safeUnlink = (filename) => {
-    /* c8 ignore next */
-    try {
-        fs.unlinkSync(filename);
-    } catch (e) {
-        if (e.code !== "ENOENT") {
-            throw e;
-        }
-    }
-};
+import StorageSubscription from './Consumer/StorageSubscription.js';
+import FlatFilePersistence from './Consumer/FlatFilePersistence.js';
+import ConsumerPersistence from './Consumer/ConsumerPersistence.js';
 
 /**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
@@ -28,80 +12,94 @@ const safeUnlink = (filename) => {
 class Consumer extends stream.Readable {
 
     /**
+     * @private
+     * @param {unknown} value
+     * @param {string} methodName
+     * @returns {Promise<unknown>}
+     */
+    static requirePromise(value, methodName) {
+        assert(value && typeof value.then === 'function', `Consumer persistence method ${methodName}() must return a Promise.`);
+        return value;
+    }
+
+    /**
      * @param {Storage} storage The storage to create the consumer for.
      * @param {string} indexName The name of the index to consume.
      * @param {string} identifier The unique name to identify this consumer.
-     * @param {object} [initialState={}] The initial state of the consumer.
-     * @param {number} [startFrom=0] The revision to start from within the index to consume.
+     * @param {object} [initialState={}]
+     * @param {number} [startFrom=0]
+     * @param {{ persistence?: ConsumerPersistence, subscription?: StorageSubscription }} [options={}]
      */
-    constructor(storage, indexName, identifier, initialState = {}, startFrom = 0) {
+    constructor(storage, indexName, identifier, initialState = {}, startFrom = 0, options = {}) {
         super({ objectMode: true });
 
         assert(storage instanceof Storage, 'Must provide a storage for the consumer.');
         assert(typeof indexName === 'string' && indexName !== '', 'Must specify an index name for the consumer.');
         assert(typeof identifier === 'string' && identifier !== '', 'Must specify an identifier name for the consumer.');
 
-        this.initializeStorage(storage, indexName, identifier);
+        this.initializeSubscription(storage, indexName, options.subscription);
+        this.initializePersistence(storage, indexName, identifier, options.persistence);
         this.restoreState(initialState, startFrom);
-        this.handler = this.handleNewDocument.bind(this);
         this.on('error', () => (this.handleDocument = false));
     }
 
     /**
      * @private
-     * @param {Storage} storage The storage to create the consumer for.
-     * @param {string} indexName The name of the index to consume.
-     * @param {string} identifier The unique name to identify this consumer.
+     * @param {Storage} storage
+     * @param {string} indexName
+     * @param {StorageSubscription} [subscription]
      */
-    initializeStorage(storage, indexName, identifier) {
+    initializeSubscription(storage, indexName, subscription) {
+        this.subscription = subscription || new StorageSubscription(storage, indexName);
+        assert(this.subscription instanceof StorageSubscription, 'Consumer subscription must be a StorageSubscription instance.');
+
         this.storage = storage;
-        this.index = this.storage.openIndex(indexName);
+        this.index = this.subscription.index;
         this.indexName = indexName;
-        const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
-        this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
-        if (ensureDirectory(consumerDirectory)) {
-            this.cleanUpFailedWrites();
-        }
     }
 
     /**
-     * Iterate over all files in the directory of this consumer and unlink any file that starts with the filename followed by a dot.
      * @private
+     * @param {Storage} storage
+     * @param {string} indexName
+     * @param {string} identifier
+     * @param {ConsumerPersistence} [persistence]
      */
-    cleanUpFailedWrites() {
-        const consumerNamePrefix = path.basename(this.fileName) + '.';
-        const consumerDirectory = path.dirname(this.fileName);
-        const files = fs.readdirSync(consumerDirectory);
-        for (let file of files) {
-            if (file.startsWith(consumerNamePrefix)) {
-                safeUnlink(path.join(consumerDirectory, file));
-            }
-        }
+    initializePersistence(storage, indexName, identifier, persistence) {
+        this.persistence = persistence || new FlatFilePersistence(storage.indexDirectory, storage.storageFile, indexName, identifier);
+        assert(this.persistence instanceof ConsumerPersistence,
+            'Consumer persistence must be an instance of ConsumerPersistence (or a subclass).');
     }
 
     /**
      * @private
-     * @param {object} initialState The initial state if no persisted state exists.
-     * @param {number} startFrom The revision to start from within the index to consume.
+     * @param {object} initialState
+     * @param {number} startFrom
      */
     restoreState(initialState, startFrom) {
-        /* c8 ignore next 3 */
-        if (!this.fileName) {
-            return;
-        }
         ({ initialState, startFrom } = normalizeConsumerStateArgs(initialState, startFrom));
-        try {
-            const consumerData = fs.readFileSync(this.fileName);
-            this.position = consumerData.readInt32LE(0);
-            this.state = JSON.parse(consumerData.toString('utf8', 4));
-        } catch (e) {
-            this.position = startFrom;
-            this.state = initialState;
-        }
-        Object.freeze(this.state);
-
+        this.position = startFrom;
+        this.state = Object.freeze(initialState);
         this.persisting = null;
         this.consuming = false;
+        this.ready = this.openPersistence(initialState, startFrom);
+        this.ready.catch(() => undefined);
+    }
+
+    /**
+     * @private
+     * @param {object} initialState
+     * @param {number} startFrom
+     * @returns {Promise<void>}
+     */
+    openPersistence(initialState, startFrom) {
+        return Consumer.requirePromise(this.persistence.open(initialState, startFrom), 'open')
+            .then(() => Consumer.requirePromise(this.persistence.load(initialState, startFrom), 'load'))
+            .then((restoredState) => {
+                this.position = restoredState.position;
+                this.state = Object.freeze(restoredState.state);
+                this.emit('ready', this.position, this.state);
+            });
     }
 
     /**
@@ -123,22 +121,11 @@ class Consumer extends stream.Readable {
     }
 
     /**
-     * Handler method that is supposed to be triggered for each new document in the storage.
-     *
      * @private
-     * @param {string} name The name of the index the document was added for.
-     * @param {number} position The 1-based position inside the index that the document was added to.
-     * @param {object} document The document that was added.
+     * @param {number} position
+     * @param {object} document
      */
-    handleNewDocument(name, position, document) {
-        if (name !== this.indexName) {
-            return;
-        }
-
-        if (this.position !== position - 1) {
-            return;
-        }
-
+    handleNewDocument(position, document) {
         this.handleDocument = true;
         this.once('data', () => (this.handleDocument = false));
         if (!this.push(document)) {
@@ -152,8 +139,19 @@ class Consumer extends stream.Readable {
     }
 
     /**
+     * @private
+     * @param {Array|Generator} documents
+     * @param {function(): void} done
+     */
+    handleCatchUpBatch(documents, done) {
+        this.consumeDocuments(documents);
+        this.emit('progress', this.position, this.state);
+        this.once('persisted', done);
+        this.persist();
+    }
+
+    /**
      * Persist current state of this consumer.
-     * This will write the current position and state to the consumer storage file.
      *
      * @private
      */
@@ -162,57 +160,43 @@ class Consumer extends stream.Readable {
             return;
         }
         this.persisting = setImmediate(() => {
-            const consumerState = JSON.stringify(this.state);
-            const consumerData = Buffer.allocUnsafe(4 + consumerState.length);
-            consumerData.writeInt32LE(this.position, 0);
-            consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
-            const tmpFile = this.fileName + '.' + this.position;
-            this.persisting = null;
-            /* c8 ignore next 3 */
-            if (fs.existsSync(tmpFile)) {
-                throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
-            }
+            let persistCall;
             try {
-                fs.writeFileSync(tmpFile, consumerData);
-                // If the write fails (half-way), the consumer state file will not be corrupted
-                fs.renameSync(tmpFile, this.fileName);
-                this.emit('persisted', consumerState);
-            } catch (e) {
-                /* c8 ignore next */
-                safeUnlink(tmpFile);
+                persistCall = Consumer.requirePromise(this.persistence.persist(this.position, this.state, this.name), 'persist');
+            } catch (error) {
+                this.persisting = null;
+                this.emit('error', error);
+                return;
             }
+            persistCall
+                .then((persistedState) => {
+                    this.persisting = null;
+                    this.emit('persisted', persistedState);
+                })
+                .catch(() => {
+                    this.persisting = null;
+                });
         });
-    }
-
-    /**
-     * Check if this consumer has caught up. If so, register a handler for the stream and emit a 'caught-up' event.
-     *
-     * @private
-     * @returns {boolean} True if this consumer has caught up and can
-     */
-    checkCaughtUp() {
-        if (this.index.length <= this.position) {
-            this.handleDocument = false;
-            this.storage.on('index-add', this.handler);
-            this.emit('caught-up');
-            return true;
-        }
-        return (this.consuming === false);
     }
 
     /**
      * Consume (push) a number of documents and update the position record.
      *
      * @private
-     * @param {Array|Generator} documents The list or a stream of documents to consume
+     * @param {Array|Generator} documents
      */
     consumeDocuments(documents) {
-        for (let document of documents) {
+        for (let documentEntry of documents) {
+            const hasPosition = documentEntry &&
+                typeof documentEntry === 'object' &&
+                Object.prototype.hasOwnProperty.call(documentEntry, 'position') &&
+                Object.prototype.hasOwnProperty.call(documentEntry, 'document');
+            const document = hasPosition ? documentEntry.document : documentEntry;
             if (!this.push(document)) {
                 this.stop();
                 break;
             }
-            ++this.position;
+            this.position = hasPosition ? documentEntry.position : this.position + 1;
         }
     }
 
@@ -232,22 +216,26 @@ class Consumer extends stream.Readable {
         this.consuming = true;
         this.handleDocument = true;
 
-        // Catch up to current index position
-        const catchUpBatch = () => {
-            setImmediate(() => {
-                if (this.checkCaughtUp()) {
+        this.ready
+            .then(() => {
+                if (!this.consuming) {
                     return;
                 }
-
-                const maxBatchPosition = Math.min(this.position + MAX_CATCHUP_BATCH + 1, this.index.length);
-                const documents = this.storage.readRange(this.position + 1, maxBatchPosition, this.index);
-                this.consumeDocuments(documents);
-                this.emit('progress', this.position, this.state);
-                this.once('persisted', () => catchUpBatch());
-                this.persist();
+                this.subscription.start({
+                    getPosition: () => this.position,
+                    onDocument: this.handleNewDocument.bind(this),
+                    onCatchUpBatch: this.handleCatchUpBatch.bind(this),
+                    onCaughtUp: () => {
+                        this.handleDocument = false;
+                        this.emit('caught-up');
+                    }
+                });
+            })
+            .catch((error) => {
+                this.consuming = false;
+                this.handleDocument = false;
+                this.emit('error', error);
             });
-        };
-        catchUpBatch();
     }
 
     /**
@@ -258,7 +246,7 @@ class Consumer extends stream.Readable {
         if (this.consuming) {
             this.pause();
         }
-        this.storage.removeListener('index-add', this.handler);
+        this.subscription.stop();
         this.consuming = false;
         this.handleDocument = false;
     }
@@ -266,8 +254,8 @@ class Consumer extends stream.Readable {
     /**
      * Reset this projection to restart processing all documents again.
      * NOTE: This will overwrite the current state of the projection and hence be destructive.
-     * @param {object} [initialState={}] The initial state of the consumer.
-     * @param {number} [startFrom=0] The revision to start from within the index to consume.
+     * @param {object} [initialState={}]
+     * @param {number} [startFrom=0]
      * @api
      */
     reset(initialState = {}, startFrom = 0) {

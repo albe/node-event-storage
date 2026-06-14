@@ -4,6 +4,8 @@ import fsSync from 'fs';
 import path from 'path';
 import EventStore, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
 import Consumer from '../src/Consumer.js';
+import ConsumerPersistence from '../src/Consumer/ConsumerPersistence.js';
+import StorageSubscription from '../src/Consumer/StorageSubscription.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -1376,6 +1378,126 @@ describe('EventStore', function() {
             });
             eventstore.commit('foo', { foo: 'bar', id: 1 });
             eventstore.commit('bar', { foo: 'baz', id: 2 });
+        });
+
+        it('passes custom consumer options through getConsumer', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+
+            let persistedPosition = 0;
+            class TestPersistence extends ConsumerPersistence {
+                async open() {
+                }
+
+                async load(initialState, startFrom) {
+                    return { position: startFrom, state: initialState };
+                }
+
+                async persist(position, state) {
+                    persistedPosition = position;
+                    return JSON.stringify(state);
+                }
+            }
+
+            const persistence = new TestPersistence();
+
+            const consumer = eventstore.getConsumer('foo-bar', 'consumer-custom', { count: 0 }, 0, { persistence });
+            consumer.on('data', () => consumer.setState(state => ({ count: state.count + 1 })));
+            consumer.once('persisted', () => {
+                expect(persistedPosition).to.be(1);
+                done();
+            });
+
+            eventstore.commit('foo', { foo: 'bar', id: 1 });
+        });
+
+        it('supports multi-index subscriptions with matcher filters', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+            eventstore.createEventStream('bar-baz', event => event.payload.foo === 'baz');
+
+            class TestPersistence extends ConsumerPersistence {
+                async open() {
+                }
+
+                async load(initialState, startFrom) {
+                    return { position: startFrom, state: initialState };
+                }
+
+                async persist(position, state) {
+                    return JSON.stringify({ position, state });
+                }
+            }
+
+            const subscription = new StorageSubscription(eventstore.storage, ['stream-foo-bar', 'stream-bar-baz'], {
+                batchSize: 5,
+                matcher: { payload: { type: 'Wanted' } }
+            });
+            const persistence = new TestPersistence();
+            const consumer = eventstore.getConsumer('_all', 'consumer-multi-index', { ids: [] }, 0, { subscription, persistence });
+
+            const seen = [];
+            consumer.on('data', event => {
+                seen.push(event.payload.id);
+                consumer.setState(state => ({ ids: state.ids.concat(event.payload.id) }));
+                if (seen.length === 2) {
+                    expect(seen).to.eql([1, 3]);
+                    setImmediate(() => {
+                        expect(consumer.position).to.be(3);
+                        done();
+                    });
+                }
+            });
+
+            eventstore.commit('foo', { type: 'Wanted', foo: 'bar', id: 1 });
+            eventstore.commit('bar', { type: 'Ignored', foo: 'baz', id: 2 });
+            eventstore.commit('bar', { type: 'Wanted', foo: 'baz', id: 3 });
+        });
+
+        it('can build a subscription from JoinEventStream', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
+            eventstore.createEventStream('bar-baz', event => event.payload.foo === 'baz');
+            const joinStream = eventstore.fromStreams('foo-bar-joined', ['foo-bar', 'bar-baz'], 1, -1, {
+                payload: { type: 'Wanted' }
+            });
+
+            class TestPersistence extends ConsumerPersistence {
+                async open() {
+                }
+
+                async load(initialState, startFrom) {
+                    return { position: startFrom, state: initialState };
+                }
+
+                async persist(position, state) {
+                    return JSON.stringify({ position, state });
+                }
+            }
+
+            const subscription = StorageSubscription.fromEventStream(eventstore.storage, joinStream, 5);
+            const persistence = new TestPersistence();
+            const consumer = eventstore.getConsumer('_all', 'consumer-join-stream', { ids: [] }, 0, { subscription, persistence });
+
+            const seen = [];
+            consumer.on('data', event => {
+                seen.push(event.payload.id);
+                consumer.setState(state => ({ ids: state.ids.concat(event.payload.id) }));
+                if (seen.length === 2) {
+                    expect(seen).to.eql([1, 3]);
+                    done();
+                }
+            });
+
+            eventstore.commit('foo', { type: 'Wanted', foo: 'bar', id: 1 });
+            eventstore.commit('bar', { type: 'Ignored', foo: 'baz', id: 2 });
+            eventstore.commit('bar', { type: 'Wanted', foo: 'baz', id: 3 });
         });
 
         it('rebinds an existing identifier to a different stream when requested', function(done) {

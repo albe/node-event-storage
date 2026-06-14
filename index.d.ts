@@ -60,14 +60,57 @@ export class EventStream extends Readable {
 }
 
 export class Consumer extends Readable {
-    constructor(storage: Storage, indexName: string, identifier: string, initialState?: Record<string, unknown>, startFrom?: number);
+    constructor(
+        storage: Storage,
+        indexName: string,
+        identifier: string,
+        initialState?: Record<string, unknown>,
+        startFrom?: number,
+        options?: { persistence?: ConsumerPersistence; subscription?: StorageSubscription }
+    );
     streamName: string;
     position: number;
     state: Record<string, unknown>;
+    ready: Promise<void>;
     start(): this;
     stop(): void;
     reset(initialState?: Record<string, unknown>, startFrom?: number): this;
     setState(state: Record<string, unknown>): this;
+}
+
+export class ConsumerPersistence {
+    fileName?: string;
+    open(initialState: Record<string, unknown>, startFrom: number): Promise<void>;
+    load(initialState: Record<string, unknown>, startFrom: number): Promise<{ position: number; state: Record<string, unknown> }>;
+    persist(position: number, state: Record<string, unknown>, consumerName?: string): Promise<unknown>;
+}
+
+export class FlatFilePersistence extends ConsumerPersistence {
+    constructor(indexDirectory: string, storageFile: string, indexName: string, identifier: string);
+    consumerDirectory: string;
+    fileName: string;
+    open(initialState?: Record<string, unknown>, startFrom?: number): Promise<void>;
+    load(initialState?: Record<string, unknown>, startFrom?: number): Promise<{ position: number; state: Record<string, unknown> }>;
+    persist(position: number, state: Record<string, unknown>, consumerName?: string): Promise<string>;
+    cleanUpFailedWrites(callback: (error?: Error | null) => void): void;
+}
+
+export class StorageSubscription {
+    constructor(storage: Storage, indexName: string, batchSize?: number);
+    constructor(storage: Storage, indexName: string, options?: { batchSize?: number; matcher?: Record<string, unknown> | ((document: any) => boolean) });
+    constructor(storage: Storage, indexNames: string[], options?: { batchSize?: number; matcher?: Record<string, unknown> | ((document: any) => boolean) });
+    index: StreamIndexInfo;
+    indexNames: string[];
+    batchSize: number;
+    matcher: Record<string, unknown> | ((document: any) => boolean) | null;
+    static fromEventStream(storage: Storage, eventStream: EventStream, batchSize?: number): StorageSubscription;
+    start(handlers: {
+        getPosition: () => number;
+        onDocument: (position: number, document: any) => void;
+        onCatchUpBatch: (documents: Iterable<any>, done: () => void) => void;
+        onCaughtUp: () => void;
+    }): void;
+    stop(): void;
 }
 
 export class Storage extends EventEmitter {
@@ -124,7 +167,13 @@ export class EventStore extends EventEmitter {
         callback: (error: Error | null, commit?: Record<string, unknown>) => void
     ): void;
 
-    getConsumer(streamName: string, identifier: string, initialState?: Record<string, unknown>, since?: number): Consumer;
+    getConsumer(
+        streamName: string,
+        identifier: string,
+        initialState?: Record<string, unknown>,
+        since?: number,
+        options?: { persistence?: ConsumerPersistence; subscription?: StorageSubscription }
+    ): Consumer;
     getConsumer(identifier: string): Consumer | null;
     scanConsumers(
         callback: (error: Error | null, consumers: Array<{ name: string; stream: string; identifier: string }>) => void,

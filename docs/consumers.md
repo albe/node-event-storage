@@ -81,6 +81,76 @@ consumer.reset();
 consumer.reset({ count: 0 }, 10);
 ```
 
+## Custom Persistence and Subscription
+
+You can keep the consumer logic and plug in your own persistence adapter.
+
+```javascript
+import { EventStore, StorageSubscription } from 'event-storage';
+
+class InMemoryPersistence {
+    constructor() {
+        this.snapshot = null;
+    }
+
+    async open(initialState, startFrom) {
+        // Optional setup step (DB connection, migration, etc.)
+    }
+
+    async load(initialState, startFrom) {
+        return this.snapshot || { position: startFrom, state: initialState };
+    }
+
+    async persist(position, state) {
+        this.snapshot = { position, state };
+        return JSON.stringify(state);
+    }
+}
+
+const eventstore = new EventStore('my-store', { storageDirectory: './data' });
+
+eventstore.on('ready', () => {
+    const subscription = new StorageSubscription(eventstore.storage, 'stream-orders', 50);
+    const persistence = new InMemoryPersistence();
+
+    const consumer = eventstore.getConsumer('orders', 'orders-projection', { total: 0 }, 0, {
+        subscription,
+        persistence
+    });
+
+    consumer.once('ready', () => {
+        console.log('consumer state loaded', consumer.position, consumer.state);
+    });
+
+    consumer.on('data', (event) => {
+        consumer.setState((state) => ({ total: state.total + (event.amount || 0) }));
+    });
+});
+```
+
+Notes:
+
+- `StorageSubscription` handles catch-up + live `index-add` wiring.
+- Subscribe to multiple indexes and apply an additional matcher:
+
+```javascript
+const subscription = new StorageSubscription(eventstore.storage, ['stream-orders', 'stream-refunds'], {
+    batchSize: 50,
+    matcher: { payload: { type: 'OrderSettled' } }
+});
+```
+
+- You can derive a subscription directly from an `EventStream` or `JoinEventStream`:
+
+```javascript
+const joined = eventstore.fromStreams('orders-and-refunds', ['orders', 'refunds'], 1, -1, {
+    payload: { type: 'OrderSettled' }
+});
+const subscription = StorageSubscription.fromEventStream(eventstore.storage, joined, 50);
+```
+
+- A custom persistence adapter must extend `ConsumerPersistence` and implement `open()`, `load()`, and `persist()`. All three methods are required and asynchronous.
+
 ## Consistency Guards (Aggregates)
 
 A *consistency guard* (what DDD calls an *Aggregate*) is a consumer of its own stream that uses `setState` for exactly-once state tracking and raises an `OptimisticConcurrencyError` when two concurrent commands conflict.

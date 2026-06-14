@@ -4,6 +4,9 @@ import EventStream from './src/EventStream.js';
 import Storage, { StorageLockedError } from './src/Storage.js';
 import Index from './src/Index.js';
 import Consumer from './src/Consumer.js';
+import ConsumerPersistence from './src/Consumer/ConsumerPersistence.js';
+import FlatFilePersistence from './src/Consumer/FlatFilePersistence.js';
+import StorageSubscription from './src/Consumer/StorageSubscription.js';
 import { matches, buildRawBufferMatcher } from './src/utils/metadataUtil.js';
 
 const VERSION = packageJson.version;
@@ -23,6 +26,9 @@ export {
 	StorageLockedError,
 	Index,
 	Consumer,
+	ConsumerPersistence,
+	FlatFilePersistence,
+	StorageSubscription,
 	matches,
 	buildRawBufferMatcher
 };

@@ -251,10 +251,10 @@ Throws if any named stream does not exist.
 
 ---
 
-#### `getConsumer(streamName, identifier, [initialState], [since])`
+#### `getConsumer(streamName, identifier, [initialState], [since], [options])`
 
 ```javascript
-eventstore.getConsumer(streamName, identifier [, initialState [, since]]) → Consumer
+eventstore.getConsumer(streamName, identifier [, initialState [, since [, options]]]) → Consumer
 ```
 
 Return a durable `Consumer` that tracks its position across process restarts.
@@ -265,6 +265,19 @@ Return a durable `Consumer` that tracks its position across process restarts.
 | `identifier` | `string` | — | Unique consumer name (used for the state file). |
 | `initialState` | `object` | `{}` | Initial consumer state. |
 | `since` | `number` | `0` | Stream revision to start from. |
+| `options` | `object` | `{}` | Optional adapters: `{ persistence?, subscription? }`. |
+
+`options.subscription` expects a `StorageSubscription` instance.
+`StorageSubscription` supports:
+
+- single-index mode: `new StorageSubscription(storage, 'stream-orders', 50)`
+- multi-index + matcher mode: `new StorageSubscription(storage, ['stream-orders', 'stream-refunds'], { batchSize: 50, matcher: { payload: { type: 'OrderSettled' } } })`
+- stream-derived mode: `StorageSubscription.fromEventStream(storage, eventStream, 50)`
+
+`options.persistence` expects an instance of `ConsumerPersistence` (or subclass) implementing
+`open(initialState, startFrom)`, `load(initialState, startFrom)` and
+`persist(position, state, consumerName)`.
+All three persistence methods are required and must return a Promise.
 
 ---
 
