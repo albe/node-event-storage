@@ -38,7 +38,7 @@ describe('JoinEventStream', function() {
 
     it('throws if no or invalid stream list specified in constructor', function(){
         expect(() => new JoinEventStream('foo-bar', 'foo', eventstore)).to.throwError();
-        expect(() => new JoinEventStream('foo-bar', [], eventstore)).to.throwError();
+        expect(() => new JoinEventStream('foo-bar', undefined, eventstore)).to.throwError();
     });
 
     it('throws if no EventStore specified in constructor', function(){

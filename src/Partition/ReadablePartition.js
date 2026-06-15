@@ -489,8 +489,8 @@ class ReadablePartition extends events.EventEmitter {
      * If from > until, documents are yielded in reverse order.
      *
      * @api
-     * @param {number} [from=0]
-     * @param {number} [until=Number.MAX_SAFE_INTEGER]
+     * @param {number} [from=0] Inclusive lower bound of the document sequence number range.
+     * @param {number} [until=Number.MAX_SAFE_INTEGER] Inclusive upper bound of the document sequence number range.
      * @returns {Generator<{ data: Buffer, header: object, entry: object }>}
      */
     *readRange(from = 0, until = Number.MAX_SAFE_INTEGER) {

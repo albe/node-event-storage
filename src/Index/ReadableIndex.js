@@ -381,7 +381,7 @@ class ReadableIndex extends events.EventEmitter {
     /**
      * Find the given global sequence number inside this index and return the last entry position with a sequence
      * number lower than or equal to `number`. This is equal to the `high` value in the binary search.
-     * If the the parameter `min` is set to true, it will search for the first entry position that is at least equal
+     * If the parameter `min` is set to true, it will search for the first entry position that is at least equal
      * to `number`. This is equal to the `low` value in the binary search.
      *
      * Complexity: O(log `number`) - because we only need to search up to the `number`-th element maximum.

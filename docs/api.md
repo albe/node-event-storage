@@ -72,11 +72,13 @@ Append one or more events to a stream.
 |-----------|------|---------|-------------|
 | `streamName` | `string` | — | Name of the target stream. |
 | `events` | `object\|Array<object>` | — | Event or array of events to commit. |
-| `expectedVersion` | `number` | `ExpectedVersion.Any` | Optimistic concurrency version check. Use `ExpectedVersion.Any` (`-1`) to skip, `ExpectedVersion.EmptyStream` (`0`) for a new stream, or any positive integer for an exact version match. |
+| `expectedVersion` | `number\|CommitCondition\|ExpectStream.*` | `ExpectedVersion.Any` | Optimistic concurrency expectation. Supports legacy numeric stream versions, `CommitCondition` from `query()`, and explicit markers: `ExpectStream.AtVersion(n)`, `ExpectStream.AtGlobalSequence(n)`, `ExpectStream.Any()`, `ExpectStream.Empty()`, `ExpectStream.MatchCondition(condition)`. |
 | `metadata` | `object` | `{}` | Additional metadata merged into every event's metadata envelope. |
 | `callback` | `function(commit)` | — | Called after all events have been persisted. |
 
 Throws `OptimisticConcurrencyError` when the stream is not at `expectedVersion`.
+
+Use explicit marker instances for object-based expectations. Plain object lookalikes (e.g. `{ streamVersion: 2 }`) are treated as metadata, not as expected-version markers.
 
 ---
 
@@ -103,6 +105,29 @@ Return an `EventStream` for the named stream, or `false` if no such stream exist
 
 ---
 
+#### `getStream(streamName, [options])`
+
+```javascript
+eventstore.getStream(streamName [, options]) → EventStream
+```
+
+Unified stream access:
+
+- regular stream name (e.g. `'orders-42'`) -> single-stream `EventStream`
+- `'_all'` -> global stream
+- category selector ending in `'-*'` or `'/*'` (e.g. `'orders-*'`, `'orders/*'`) -> category join stream
+- array of stream names -> explicit join stream
+
+Behavior for empty targets:
+
+- missing regular stream -> empty stream
+- empty array (`[]`) -> empty joined stream
+- category selector with no matching streams -> empty joined stream
+
+For array targets, throws if any named stream does not exist.
+
+---
+
 #### `getAllEvents([minRevision], [maxRevision], [predicate], [raw])` ✅ Stable
 
 ```javascript
@@ -120,10 +145,10 @@ eventstore.getEventStreamForCategory(categoryName [, minRevision [, maxRevision 
 ```
 
 Return a joined `EventStream` for all streams whose names begin with
-`categoryName + '-'`.  If a dedicated physical stream named `categoryName`
+`categoryName + '-'` or `categoryName + '/'`.  If a dedicated physical stream named `categoryName`
 already exists, that stream is returned directly.
 
-Throws if no streams for the category exist.
+If no streams match the category selector, returns an empty stream.
 
 ---
 
@@ -246,6 +271,8 @@ Create a virtual `EventStream` by joining the listed streams in sequence-number 
 |-----------|------|-------------|
 | `streamName` | `string` | Transient name for the joined stream. |
 | `streamNames` | `Array<string>` | Names of the streams to join. |
+
+If `streamNames` is empty, returns an empty stream.
 
 Throws if any named stream does not exist.
 

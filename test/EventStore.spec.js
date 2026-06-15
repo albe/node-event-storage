@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import fsSync from 'fs';
 import path from 'path';
 import EventStore, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
+import { ExpectStream } from '../src/ExpectStream.js';
 import Consumer from '../src/Consumer.js';
 import { fileURLToPath } from 'url';
 
@@ -442,6 +443,41 @@ describe('EventStore', function() {
             });
         });
 
+        it('accepts ExpectStream.AtVersion() as explicit stream-version marker', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', { foo: 'bar' }, () => {
+                expect(() => eventstore.commit('foo-bar', { foo: 'baz' }, ExpectStream.AtVersion(1))).to.not.throwError();
+                done();
+            });
+        });
+
+        it('accepts ExpectStream.AtGlobalSequence() as explicit global-sequence marker', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', { foo: 'bar' }, () => {
+                expect(() => eventstore.commit('foo-bar', { foo: 'baz' }, ExpectStream.AtGlobalSequence(1))).to.not.throwError();
+                done();
+            });
+        });
+
+        it('accepts ExpectStream.MatchCondition() wrapper as CommitCondition marker', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            const { condition } = eventstore.query(['OrderPlaced']);
+            expect(() => eventstore.commit('s', [{ type: 'OrderShipped' }], ExpectStream.MatchCondition(condition))).to.not.throwError();
+            done();
+        });
+
+        it('rejects condition-like plain objects for ExpectStream.MatchCondition()', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            expect(() => ExpectStream.MatchCondition({ types: ['OrderPlaced'], matcher: null, noneMatchAfter: 0 }))
+                .to.throwError(/requires a CommitCondition instance/);
+        });
+
         it('uses metadata from argument for commit', function(done) {
             eventstore = new EventStore({
                 storageDirectory
@@ -547,6 +583,14 @@ describe('EventStore', function() {
     });
 
     describe('getEventStream', function() {
+
+        it('returns false when opening a non-existing stream', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            expect(eventstore.getEventStream('missing-stream')).to.be(false);
+        });
 
         it('can open existing streams', function(done) {
             eventstore = new EventStore({
@@ -798,6 +842,16 @@ describe('EventStore', function() {
             expect(() => eventstore.fromStreams('join-foo-bar')).to.throwError();
         });
 
+        it('returns an empty stream when joining an empty stream list', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            const stream = eventstore.fromStreams('join-empty', []);
+            expect(stream.name).to.be('join-empty');
+            expect(stream.events.length).to.be(0);
+        });
+
         it('throws when specifying a non-existing stream to join', function() {
             eventstore = new EventStore({
                 storageDirectory
@@ -880,12 +934,13 @@ describe('EventStore', function() {
 
     describe('getEventStreamForCategory', function() {
 
-        it('throws when not specifying category without streams', function () {
+        it('returns an empty stream when category has no streams', function () {
             eventstore = new EventStore({
                 storageDirectory
             });
 
-            expect(() => eventstore.getEventStreamForCategory('non-existing-category')).to.throwError();
+            const stream = eventstore.getEventStreamForCategory('non-existing-category');
+            expect(stream.events.length).to.be(0);
         });
 
         it('iterates events for all streams with a given category prefix', function () {
@@ -1002,6 +1057,94 @@ describe('EventStore', function() {
             const chunks = [...stream];
             expect(chunks.length).to.be(2);
             expect(Buffer.isBuffer(chunks[0])).to.be(true);
+        });
+
+    });
+
+    describe('getStream', function() {
+
+        it('returns an empty stream when a regular stream does not exist', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            const stream = eventstore.getStream('orders-404');
+            expect(stream).not.to.be(false);
+            expect(stream.events.length).to.be(0);
+        });
+
+        it('returns an empty joined stream when streamName is an empty array', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            const stream = eventstore.getStream([]);
+            expect(stream.events.length).to.be(0);
+        });
+
+        it('returns a category joined stream when streamName uses the -*/ wildcard selector', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('orders-1', [{ key: 1 }]);
+            eventstore.commit('orders/2', [{ key: 2 }]);
+            eventstore.commit('orders-3', [{ key: 3 }]);
+
+            const stream = eventstore.getStream('orders-*');
+            const keys = [];
+            for (const event of stream) {
+                keys.push(event.key);
+            }
+            expect(keys).to.eql([1, 2, 3]);
+        });
+
+        it('returns a category joined stream when streamName uses the /* wildcard selector', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('accounts-1', [{ key: 1 }]);
+            eventstore.commit('accounts/2', [{ key: 2 }]);
+            eventstore.commit('accounts-3', [{ key: 3 }]);
+
+            const stream = eventstore.getStream('accounts/*');
+            const keys = [];
+            for (const event of stream) {
+                keys.push(event.key);
+            }
+            expect(keys).to.eql([1, 2, 3]);
+        });
+
+        it('supports fromSequenceNumber/toSequenceNumber options for a single stream', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('account-1', [{ key: 1 }]);
+            eventstore.commit('other-1', [{ key: 2 }]);
+            eventstore.commit('account-1', [{ key: 3 }]);
+
+            const stream = eventstore.getStream('account-1', { fromSequenceNumber: 3, toSequenceNumber: 3 });
+            const keys = [];
+            for (const event of stream) {
+                keys.push(event.key);
+            }
+            expect(keys).to.eql([3]);
+        });
+
+        it('accepts an array of stream names and returns joined results in global order', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('orders-1', [{ key: 1 }]);
+            eventstore.commit('payments-1', [{ key: 2 }]);
+            eventstore.commit('orders-1', [{ key: 3 }]);
+
+            const stream = eventstore.getStream(['orders-1', 'payments-1'], { fromSequenceNumber: 1 });
+            const keys = [];
+            for (const event of stream) {
+                keys.push(event.key);
+            }
+            expect(keys).to.eql([1, 2, 3]);
+        });
+
+        it('returns the exact stream when a category selector prefix matches an existing stream name', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('orders', [{ key: 1 }]);
+            eventstore.commit('orders-1', [{ key: 2 }]);
+
+            const stream = eventstore.getStream('orders-*', { fromStreamVersion: 1, toStreamVersion: -1 });
+            const keys = [];
+            for (const event of stream) {
+                keys.push(event.key);
+            }
+            expect(keys).to.eql([1]);
         });
 
     });
@@ -1973,6 +2116,22 @@ describe('EventStore', function() {
                     expect(chunks.length).to.be(1);
                     expect(condition.matcher).to.be(matcher);
                     expect(condition.raw).to.be(true);
+                    done();
+                });
+            });
+        });
+
+        it('supports options-object form with matcher in options', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
+            eventstore.commit('order-1', [{ type: 'OrderPlaced', orderId: 'a' }], () => {
+                eventstore.commit('order-2', [{ type: 'OrderPlaced', orderId: 'b' }], () => {
+                    const { stream } = eventstore.query(['OrderPlaced'], {
+                        matcher: { payload: { orderId: 'b' } },
+                        fromSequenceNumber: 1,
+                        raw: false
+                    });
+                    expect(stream.events.length).to.be(1);
+                    expect(stream.events[0].orderId).to.be('b');
                     done();
                 });
             });

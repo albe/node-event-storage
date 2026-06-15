@@ -8,11 +8,11 @@ Events are appended to a named stream with `commit`. The stream is created autom
 
 ```javascript
 eventstore.commit('user-123', [
-    { type: 'UserRegistered', email: 'alice@example.com' },
-    { type: 'ProfileCompleted', name: 'Alice' }
-], EventStore.ExpectedVersion.EmptyStream, (err) => {
-    if (err) throw err;
-    console.log('Committed!');
+  {type: 'UserRegistered', email: 'alice@example.com'},
+  {type: 'ProfileCompleted', name: 'Alice'}
+], ExpectStream.Empty(), (err) => {
+  if (err) throw err;
+  console.log('Committed!');
 });
 ```
 
@@ -53,9 +53,13 @@ try {
 
 | Value | Meaning |
 |-------|---------|
-| `EventStore.ExpectedVersion.Any` (`-1`) | No check — always succeeds (default). |
-| `EventStore.ExpectedVersion.EmptyStream` (`0`) | Stream must not exist yet. |
-| Positive integer | Stream must be at exactly that version. |
+| `ExpectStream.Any()` | No check — always succeeds (default). |
+| `ExpectStream.Empty()` | Stream must not exist yet. |
+| `ExpectStream.AtVersion(n)` | Stream must be at exactly version `n`. |
+| `ExpectStream.AtGlobalSequence(n)` | Stream must have the last event at global sequence number `n`. |
+| `ExpectStream.MatchCondition(condition)` | The condition must match, where `condition` is the `CommitCondition` returned by `query()`. |
+
+Legacy numeric values remain supported for backward compatibility: `EventStore.ExpectedVersion.Any` (`-1`), `EventStore.ExpectedVersion.EmptyStream` (`0`), and positive integers.
 
 ## Reading Streams
 
@@ -228,6 +232,10 @@ for (const event of joined) {
 
 The result is not persisted and cannot be used with consumers. For frequently-needed joins, create a permanent derived stream with `createStream` instead.
 
+If `streamNames` is an empty array, `fromStreams()` returns an empty stream.
+
+`fromStreams()` throws only when at least one named stream in `streamNames` does not exist.
+
 ## Stream Categories
 
 ### Flat category streams (`category-id`)
@@ -245,6 +253,8 @@ for (const event of allUsersStream) {
 ```
 
 If you already created a dedicated stream for the category (e.g. via `createStream`), that stream is returned directly.
+
+If no streams match the category prefix, `getEventStreamForCategory()` returns an empty stream.
 
 This layout stores every stream as a flat file in the data directory:
 
@@ -280,12 +290,12 @@ data/
     2
     42
     …
-streams/
-  eventstore.stream-user/
-    1.index
-    2.index
-    42.index
-    …
+  streams/
+    eventstore.stream-user/
+      1.index
+      2.index
+      42.index
+      …
 ```
 
 Category queries work the same way — pass any prefix up to (but not including) the last separator. The query returns every stream whose name starts with that prefix followed by either `-` or `/`:
@@ -302,6 +312,8 @@ const leafStream = eventstore.getEventStreamForCategory('user/a3/f7');
 ```
 
 `getEventStreamForCategory` unions **both layouts**: it returns events from all matching streams in global insertion order, regardless of whether they use the dash or slash convention.
+
+For the unified API, `getStream('user/*')` requires a separator and a wildcard '*' as signal to return all streams within that category.
 
 #### Hash-based sharding for very large entity populations
 
@@ -399,8 +411,9 @@ stream.forEach((event, metadata, streamName) => {
 You can also pass extra metadata through when committing, and it will be merged into this object:
 
 ```javascript
-eventstore.commit('my-stream', [{ type: 'Foo' }], EventStore.ExpectedVersion.Any, () => {}, {
-    causationId: 'cmd-123',
-    correlationId: 'req-456'
+eventstore.commit('my-stream', [{type: 'Foo'}], ExpectStream.Any(), () => {
+}, {
+  causationId: 'cmd-123',
+  correlationId: 'req-456'
 });
 ```

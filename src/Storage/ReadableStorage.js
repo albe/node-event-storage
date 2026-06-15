@@ -310,8 +310,9 @@ class ReadableStorage extends events.EventEmitter {
      * Returns a generator in order to reduce memory usage and be able to read lots of documents with little latency.
      *
      * @api
-     * @param {number} from The 1-based document number (inclusive) to start reading from.
-     * @param {number} [until] The 1-based document number (inclusive) to read until. Defaults to index.length.
+     * @param {number} from The 1-based index position (inclusive) to start reading from.
+     *   On the primary index this equals the global sequence number; on secondary indexes this is index-local.
+     * @param {number} [until] The 1-based index position (inclusive) to read until. Defaults to index.length.
      * @param {ReadableIndex|false} [index] The index to use for finding the documents in the range.
      *   Pass `false` to skip the global index and iterate all partitions directly in sequenceNumber order
      *   (useful when the global index is unavailable or corrupted).
@@ -334,11 +335,11 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Iterate all documents in this storage in range from to until inside the index.
+     * Iterate all documents in this storage in the inclusive index-position range [from, until].
      * If index is false, iterates all partitions directly in sequenceNumber order.
      * @private
-     * @param {number} from
-     * @param {number} until
+     * @param {number} from 1-based index position in the chosen index.
+     * @param {number} until 1-based index position in the chosen index.
      * @param {ReadableIndex|false|null} index
      * @param {boolean} [raw] Whether to return raw buffers instead of deserialized objects. Default false.
      * @returns {Generator<object>}

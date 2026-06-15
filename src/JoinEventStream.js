@@ -15,19 +15,19 @@ class JoinEventStream extends EventStream {
      * @param {string} name The name of the stream.
      * @param {Array<string>} streams The name of the streams to join together.
      * @param {EventStore} eventStore The event store to get the stream from.
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number} [minSequenceNumber] The 1-based minimum global sequence number to include in the events (inclusive).
+     * @param {number} [maxSequenceNumber] The 1-based maximum global sequence number to include in the events (inclusive).
      * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
      * @param {boolean} [raw=false] If true, emit NDJSON Buffers.
      */
-    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        super(name, eventStore, minRevision, maxRevision, predicate, raw);
-        assert(streams instanceof Array && streams.length > 0, `Invalid list of streams supplied to JoinStream ${name}.`);
+    constructor(name, streams, eventStore, minSequenceNumber = 1, maxSequenceNumber = -1, predicate = null, raw = false) {
+        super(name, eventStore, minSequenceNumber, maxSequenceNumber, predicate, raw);
+        assert(streams instanceof Array, `Invalid list of streams supplied to JoinStream ${name}.`);
 
         this.streamIndex = eventStore.storage.index;
-        // Translate revisions to index numbers (1-based) and wrap around negatives
-        this.minRevision = normalizeRevision(minRevision, eventStore.length);
-        this.maxRevision = normalizeRevision(maxRevision, eventStore.length);
+        // Translate global sequence numbers to index numbers (1-based) and wrap around negatives.
+        this.minRevision = normalizeRevision(minSequenceNumber, eventStore.length);
+        this.maxRevision = normalizeRevision(maxSequenceNumber, eventStore.length);
         this.fetch = function() {
             return streams.map(streamName => {
                 const streamIndex = eventStore.streams[streamName]?.index;
@@ -37,7 +37,7 @@ class JoinEventStream extends EventStream {
                 const from = streamIndex.find(this.minRevision, this.minRevision <= this.maxRevision);
                 const until = streamIndex.find(this.maxRevision, this.minRevision > this.maxRevision);
                 if (from === 0 || until === 0) {
-                    // find() returns 0 when the requested revision is outside the stream's range
+                    // find() returns 0 when the requested sequence range is outside this stream's entries
                     // (e.g. minRevision > all entries, or maxRevision < all entries).
                     return emptyIterator;
                 }
@@ -46,7 +46,7 @@ class JoinEventStream extends EventStream {
                 return eventStore.storage.readRange(from, until, streamIndex, this.raw);
             });
         }
-        this._iterator = null;
+        this._iterator = streams.length === 0 ? emptyIterator : null;
     }
 
     /**

@@ -18,13 +18,13 @@ npm install event-storage
 
 
 ```javascript
-import { EventStore } from 'event-storage';
+import { EventStore, ExpectStream } from 'event-storage';
 
 const eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
 
 eventstore.on('ready', () => {
     // Write events
-    eventstore.commit('my-stream', [{ type: 'UserRegistered', userId: 1, email: 'user@example.com' }], 0, () => {
+    eventstore.commit('my-stream', [{ type: 'UserRegistered', userId: 1, email: 'user@example.com' }], ExpectStream.Empty(), () => {
         console.log('Events written!');
     });
 
@@ -60,19 +60,23 @@ Use `eventstore.commit(streamName, events, [expectedVersion], [callback])` to ap
 
 ```javascript
 // Append with no concurrency check (default)
-eventstore.commit('orders', [{ type: 'OrderPlaced', orderId: 42 }]);
+eventstore.commit('orders', [{type: 'OrderPlaced', orderId: 42}]);
 
 // Append only if the stream is currently at version 3
-eventstore.commit('orders', [{ type: 'OrderShipped', orderId: 42 }], 3, (err) => {
+eventstore.commit('orders', [{type: 'OrderShipped', orderId: 42}], ExpectStream.AtVersion(3), (err) => {
     if (err) console.error('Commit failed:', err.message);
 });
 ```
 
 The `expectedVersion` can be:
 
-- `ExpectedVersion.Any` (`-1`) — no check (the default).
-- `ExpectedVersion.EmptyStream` (`0`) — only succeeds when the stream has no events yet.
-- Any positive integer — the stream must currently be at exactly that version.
+- `ExpectStream.Any()` — no check (the default).
+- `ExpectStream.Empty()` — only succeeds when the stream has no events yet.
+- `ExpectStream.AtVersion(n)` — stream must currently be at exactly version `n`.
+
+Legacy numeric values remain supported for backward compatibility:
+
+- `-1` (any), `0` (empty), or any positive integer (exact stream version).
 
 An `OptimisticConcurrencyError` is thrown when the stream version does not match. See [Optimistic Concurrency](streams.md#optimistic-concurrency) for more details.
 

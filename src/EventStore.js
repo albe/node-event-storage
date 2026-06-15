@@ -6,15 +6,22 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
+import {
+    CommitCondition,
+    ExpectedVersion,
+    ExpectedStreamVersion,
+    ExpectedGlobalSequenceNumber
+} from './ExpectStream.js';
 import { assert, getPropertyAtPath } from './utils/util.js';
 import { ensureDirectory, scanForFiles } from './utils/fsUtil.js';
 import { buildTypeMatcherFn } from './utils/metadataUtil.js';
-import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
-
-const ExpectedVersion = {
-    Any: -1,
-    EmptyStream: 0
-};
+import {
+    normalizeCommitArgumentTypes,
+    parseStreamFromIndexName,
+    normalizeQueryArguments,
+    normalizeStreamReadOptions,
+    resolveCategorySelectorPrefix
+} from './utils/apiHelpers.js';
 
 /**
  * Default matcher property paths mirroring the Storage default, used for index optimization.
@@ -25,31 +32,8 @@ const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 class OptimisticConcurrencyError extends Error {}
 
-/**
- * An accept condition that captures the global event-log position at the time a {@link EventStore#query}
- * call was made.  Pass it as the `expectedVersion` argument to {@link EventStore#commit} to enforce
- * DCB-style (Dynamic Consistency Boundary) optimistic concurrency: the commit is rejected only when
- * one or more events that match the original query (types + optional matcher) have been appended to
- * the store between the `query` call and the `commit` call.
- *
- * @property {string[]} types   The event types included in the query.
- * @property {function(object, object): boolean|null} matcher An optional function `(payload, metadata) => boolean`
- *   used to narrow the conflict check.  When `null`, any new event of a listed type causes a conflict.
- * @property {number}   noneMatchAfter The global store length (total event count) at the time the query was made.
- */
-class CommitCondition {
-    /**
-     * @param {string[]} types
-     * @param {(function(object, object): boolean)|object|null} [matcher]
-     * @param {number}   noneMatchAfter
-     * @param {boolean}  [raw=false]
-     */
-    constructor(types, matcher = null, noneMatchAfter, raw = false) {
-        this.types = types;
-        this.matcher = matcher;
-        this.raw = raw;
-        this.noneMatchAfter = noneMatchAfter;
-    }
+function isStorageHookEvent(event) {
+    return STORAGE_HOOK_EVENTS.has(event);
 }
 
 /**
@@ -58,6 +42,7 @@ class CommitCondition {
  * and highly performant in read-only mode.
  */
 class EventStore extends events.EventEmitter {
+
 
     /**
      * @param {string} [storeName] The name of the store which will be used as storage prefix. Default 'eventstore'.
@@ -280,7 +265,7 @@ class EventStore extends events.EventEmitter {
      * @returns {this}
      */
     on(event, listener) {
-        if (this.isStorageHookEvent(event)) {
+        if (isStorageHookEvent(event)) {
             this.delegateStorageHookEvent('on', event, listener);
             return this;
         }
@@ -302,7 +287,7 @@ class EventStore extends events.EventEmitter {
      * @returns {this}
      */
     once(event, listener) {
-        if (this.isStorageHookEvent(event)) {
+        if (isStorageHookEvent(event)) {
             this.delegateStorageHookEvent('once', event, listener);
             return this;
         }
@@ -318,15 +303,11 @@ class EventStore extends events.EventEmitter {
      * @returns {this}
      */
     off(event, listener) {
-        if (this.isStorageHookEvent(event)) {
+        if (isStorageHookEvent(event)) {
             this.storage.off(event, listener);
             return this;
         }
         return super.off(event, listener);
-    }
-
-    isStorageHookEvent(event) {
-        return STORAGE_HOOK_EVENTS.has(event);
     }
 
     delegateStorageHookEvent(method, event, listener) {
@@ -468,6 +449,45 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
+     * Perform optimistic concurrency checks for a commit, based on the given expected version.
+     *
+     * @param {string} streamName The name for the stream to do the optimistic concurrency check on.
+     * @param {number|CommitCondition|ExpectedStreamVersion|ExpectedGlobalSequenceNumber} expectation The expectation the stream has to fullfill to allow the commit.
+     * @returns {number} The stream version that the stream is currently at, if no concurrency error occurred
+     * @throws {OptimisticConcurrencyError} When the stream does not match the expectation
+     * @throws {Error} When the expectation is invalid
+     */
+    doOptimisticConcurrencyCheck(streamName, expectation) {
+        let streamVersion = this.streams[streamName].index.length;
+        if (expectation instanceof CommitCondition) {
+            this.checkCondition(expectation);
+        } else if (expectation instanceof ExpectedGlobalSequenceNumber) {
+            if (expectation.sequenceNumber === ExpectedVersion.Any) {
+                return streamVersion;
+            }
+            const streamLastEntry = this.streams[streamName].index.lastEntry;
+            const streamLastSequenceNumber = streamLastEntry === false ? 0 : streamLastEntry.number;
+            assert(streamLastSequenceNumber === expectation.sequenceNumber,
+                `Optimistic Concurrency error. Expected stream "${streamName}" last sequence number ${expectation.sequenceNumber} but is ${streamLastSequenceNumber}.`,
+                OptimisticConcurrencyError
+            );
+        } else {
+            assert(
+                typeof expectation === 'number' || expectation instanceof ExpectedStreamVersion,
+                'Invalid expectedVersion. Use a number, CommitCondition, or an ExpectStream marker (AtVersion/AtGlobalSequence/Any/Empty/MatchCondition).'
+            );
+            const expectedStreamVersion = expectation instanceof ExpectedStreamVersion
+                ? expectation.streamVersion
+                : expectation;
+            assert(expectedStreamVersion === ExpectedVersion.Any || streamVersion === expectedStreamVersion,
+                `Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedStreamVersion} but is at version ${streamVersion}.`,
+                OptimisticConcurrencyError
+            );
+        }
+        return streamVersion;
+    }
+
+    /**
      * Commit a list of events for the given stream name, which is expected to be at the given version.
      * Note that the events committed may still appear in other streams too - the given stream name is only
      * relevant for optimistic concurrency checks with the given expected version.
@@ -475,8 +495,9 @@ class EventStore extends events.EventEmitter {
      * @api
      * @param {string} streamName The name of the stream to commit the events to.
      * @param {Array<object>|object} events The events to commit or a single event.
-     * @param {number|CommitCondition} [expectedVersion] One of the `ExpectedVersion` constants, a positive
-     *   stream version number, or a {@link CommitCondition} obtained from {@link EventStore#query}.
+     * @param {number|CommitCondition|ExpectedStreamVersion|ExpectedGlobalSequenceNumber} [expectedVersion] One of the `ExpectedVersion` constants, a positive
+     *   stream version number, a {@link CommitCondition}, or an `ExpectStream.*()` value
+     *   (`AtVersion`, `AtGlobalSequence`, `Any`, `Empty`, `MatchCondition`).
      * @param {object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
      * @param {function} [callback] A function that will be executed when all events have been committed.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version, or if a
@@ -487,20 +508,12 @@ class EventStore extends events.EventEmitter {
         assert(typeof streamName === 'string' && streamName !== '', 'Must specify a stream name for commit.');
         assert(typeof events !== 'undefined' && events !== null, 'No events specified for commit.');
 
-        ({ events, expectedVersion, metadata, callback } = fixCommitArgumentTypes(
+        ({ events, expectedVersion, metadata, callback } = normalizeCommitArgumentTypes(
             events,
             expectedVersion,
             metadata,
-            callback,
-            ExpectedVersion.Any,
-            CommitCondition
+            callback
         ));
-
-        // Perform DCB-style concurrency check when a CommitCondition is provided.
-        if (expectedVersion instanceof CommitCondition) {
-            this.checkCondition(expectedVersion);
-            expectedVersion = ExpectedVersion.Any;
-        }
 
         // When typeAccessor is configured, ensure a dedicated type stream exists for each event
         // before the entity stream write so the type stream index is never incomplete.
@@ -510,11 +523,7 @@ class EventStore extends events.EventEmitter {
             this.createEventStream(streamName, { stream: streamName }, false);
         }
         assert(!this.streams[streamName].closed, `Stream "${streamName}" is closed and cannot be written to.`);
-        let streamVersion = this.streams[streamName].index.length;
-        assert(expectedVersion === ExpectedVersion.Any || streamVersion === expectedVersion,
-            `Optimistic Concurrency error. Expected stream "${streamName}" at version ${expectedVersion} but is at version ${streamVersion}.`,
-            OptimisticConcurrencyError
-        );
+        let streamVersion = this.doOptimisticConcurrencyCheck(streamName, expectedVersion);
 
         if (events.length > 1) {
             delete metadata.commitVersion;
@@ -558,6 +567,121 @@ class EventStore extends events.EventEmitter {
         return this.streams[streamName].index.length;
     }
 
+    getCategoryStreams(prefix) {
+        return Object.keys(this.streams).filter(streamName =>
+            streamName.startsWith(prefix + '-') || streamName.startsWith(prefix + '/')
+        );
+    }
+
+    createEmptyStream(streamName, options = {}) {
+        const { predicate = null, raw = false } = options;
+        return new EventStream(streamName, this, 1, 0, predicate, raw);
+    }
+
+    resolveJoinedStream(streamNames, options) {
+        const {
+            fromStreamVersion,
+            toStreamVersion,
+            fromSequenceNumber = 1,
+            toSequenceNumber = -1,
+            predicate = null,
+            raw = false
+        } = options;
+
+        for (const name of streamNames) {
+            assert(name in this.streams, `Stream "${name}" does not exist.`);
+        }
+        assert(
+            fromStreamVersion === undefined && toStreamVersion === undefined,
+            'Joined streams support sequenceNumber ranges only.'
+        );
+
+        const joinName = streamNames.length === 0 ? '_empty-join' : streamNames.join('+');
+        return new JoinEventStream(joinName, streamNames, this, fromSequenceNumber, toSequenceNumber, predicate, raw);
+    }
+
+    resolveCategoryStream(streamName, options) {
+        const {
+            fromStreamVersion,
+            toStreamVersion,
+            fromSequenceNumber = 1,
+            toSequenceNumber = -1,
+            predicate = null,
+            raw = false
+        } = options;
+
+        const categoryPrefix = resolveCategorySelectorPrefix(streamName);
+        if (categoryPrefix === null) {
+            return null;
+        }
+        if (categoryPrefix in this.streams) {
+            return this.resolveRegularStream(categoryPrefix, options);
+        }
+
+        assert(
+            fromStreamVersion === undefined && toStreamVersion === undefined,
+            'Category streams support sequenceNumber ranges only.'
+        );
+        const categoryStreams = this.getCategoryStreams(categoryPrefix);
+        return new JoinEventStream(streamName, categoryStreams, this, fromSequenceNumber, toSequenceNumber, predicate, raw);
+    }
+
+    resolveRegularStream(streamName, options) {
+        const {
+            fromStreamVersion,
+            toStreamVersion,
+            fromSequenceNumber = 1,
+            toSequenceNumber = -1,
+            predicate = null,
+            raw = false
+        } = options;
+
+        if (!(streamName in this.streams)) {
+            return this.createEmptyStream(streamName, options);
+        }
+
+        if (fromStreamVersion !== undefined || toStreamVersion !== undefined) {
+            return new EventStream(streamName, this, fromStreamVersion ?? 1, toStreamVersion ?? -1, predicate, raw);
+        }
+
+        if (fromSequenceNumber === 1 && toSequenceNumber === -1) {
+            return new EventStream(streamName, this, 1, -1, predicate, raw);
+        }
+
+        const streamIndex = this.streams[streamName].index;
+        const ascending = fromSequenceNumber <= toSequenceNumber;
+        const fromResolved = streamIndex.find(fromSequenceNumber, ascending);
+        const toResolved = streamIndex.find(toSequenceNumber, !ascending);
+        if (fromResolved === 0 || toResolved === 0) {
+            return new EventStream(streamName, this, 1, 0, predicate, raw);
+        }
+        return new EventStream(streamName, this, fromResolved, toResolved, predicate, raw);
+    }
+
+    /**
+     * Unified stream access API.
+     *
+     * - Regular stream name (e.g. `orders-42`) => single stream EventStream.
+     * - `_all` => global stream over all events.
+     * - Category selector ending with '-*' or '/*' (e.g. `orders-*`, `orders/*`) => joined category stream.
+     * - Array of stream names => joined stream over exactly those streams.
+     *
+     * @api
+     * @param {string|string[]} streamName Stream name, category selector, or list of stream names.
+     * @param {object} [options] Stream read options.
+     * @returns {EventStream}
+     */
+    getStream(streamName, options = {}) {
+        if (Array.isArray(streamName)) {
+            return this.resolveJoinedStream(streamName, options);
+        }
+        const category = this.resolveCategoryStream(streamName, options);
+        if (category !== null) {
+            return category;
+        }
+        return this.resolveRegularStream(streamName, options);
+    }
+
     /**
      * Query the event store for events matching a set of event types and an optional filter function.
      * Returns a pre-filtered event stream and a {@link CommitCondition} that can be passed to
@@ -576,94 +700,92 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string[]} types A non-empty array of event-type names to query.
-     * @param {function|object|null} [matcher] Optional matcher used for stream pre-filtering.
+     * @param {function|object|null|{matcher?: function|object|null, fromSequenceNumber?: number, toSequenceNumber?: number, raw?: boolean}} [matcher]
+     *   Optional matcher used for stream pre-filtering, or an options object.
      *   In object mode, function predicates receive `(payload, metadata)`.
-     * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned stream (inclusive).
+     * @param {number} [minSequenceNumber=1] The 1-based minimum global sequence number to include in the returned stream (inclusive).
+     *   When querying multiple types, events are ordered globally by their sequence number.
      * @param {boolean} [raw=false] If true, return NDJSON buffers from the query stream.
      * @returns {{ condition: CommitCondition, stream: EventStream }} An object with:
      *   - `condition` — the {@link CommitCondition} to pass to {@link EventStore#commit}.
-     *   - `stream` — a read-only event stream containing all matching events.
+     *   - `stream` — a read-only event stream containing all matching events in global sequence order.
      * @throws {Error} if `types` is not a non-empty array.
      * @throws {Error} if `typeAccessor` is not configured and any of the listed type streams do not exist.
-     */
-    query(types, matcher = null, minRevision = 1, raw = false) {
+    */
+    query(types, matcher = null, minSequenceNumber = 1, raw = false) {
         assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for query.');
+        ({ matcher, minSequenceNumber, raw } = normalizeQueryArguments(matcher, minSequenceNumber, raw));
         const queryTypes = this.getExistingQueryTypes(types);
         const condition = new CommitCondition(types, matcher, this.storage.length, raw);
-        const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher, raw);
+        const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minSequenceNumber, -1, matcher, raw);
         return { stream, condition };
     }
 
     /**
-     * Get an event stream for the given stream name within the revision boundaries.
+     * Get an event stream for the given stream name within the stream version boundaries.
      *
      * @api
      * @param {string} streamName The name of the stream to get.
-     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number|object} [fromStreamVersion=1] The 1-based minimum stream version or an options object.
+     *   This is a stream-local position. To query by global sequence number, use the options-based overload (Phase A).
+     * @param {number} [toStreamVersion=-1] The 1-based maximum stream version to include in the events (inclusive).
      * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
      * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream|boolean} The event stream or false if a stream with the name doesn't exist.
      */
-    getEventStream(streamName, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
+    getEventStream(streamName, fromStreamVersion = 1, toStreamVersion = -1, predicate = null, raw = false) {
+        const options = normalizeStreamReadOptions(fromStreamVersion, toStreamVersion, predicate, raw, 'stream');
         if (!(streamName in this.streams)) {
             return false;
         }
-        return new EventStream(streamName, this, minRevision, maxRevision, predicate, raw);
+        return this.getStream(streamName, options);
     }
 
     /**
-     * Get a stream for all events within the revision boundaries.
+     * Get a stream for all events within the sequence number boundaries.
      * This is the same as `getEventStream('_all', ...)`.
      *
      * @api
-     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number|object} [fromSequenceNumber=1] The 1-based minimum global sequence number or an options object
+     *   (`{ fromSequenceNumber, toSequenceNumber, predicate, raw }`).
+     *   This addresses all events across all streams by their global sequence position.
+     * @param {number} [toSequenceNumber=-1] The 1-based maximum global sequence number to include in the events (inclusive).
      * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
      * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream} The event stream.
      */
-    getAllEvents(minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
-        return this.getEventStream('_all', minRevision, maxRevision, predicate, raw);
+    getAllEvents(fromSequenceNumber = 1, toSequenceNumber = -1, predicate = null, raw = false) {
+        const options = normalizeStreamReadOptions(fromSequenceNumber, toSequenceNumber, predicate, raw, 'sequence');
+        return this.getStream('_all', options);
     }
 
     /**
-     * Create a virtual event stream from existing streams by joining them.
+     * Create a virtual event stream from existing streams by joining them in global sequence number order.
      *
+     * @api
      * @param {string} streamName The (transient) name of the joined stream.
      * @param {Array<string>} streamNames An array of the stream names to join.
-     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number|object} [fromSequenceNumber=1] The 1-based minimum global sequence number or an options object
+     *   (`{ fromSequenceNumber, toSequenceNumber, predicate, raw }`).
+     *   Events are ordered globally across the joined streams by their sequence number.
+     * @param {number} [toSequenceNumber=-1] The 1-based maximum global sequence number to include in the events (inclusive).
      * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
      * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream} The joined event stream.
      * @throws {Error} if any of the streams doesn't exist.
      */
-    fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
+    fromStreams(streamName, streamNames, fromSequenceNumber = 1, toSequenceNumber = -1, predicate = null, raw = false) {
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
-        if (streamNames.length === 0) {
-            return new EventStream(streamName, this);
-        }
-
-        for (let stream of streamNames) {
-            assert(stream in this.streams, `Stream "${stream}" does not exist.`);
-        }
-
-        if (streamNames.length === 1) {
-            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate, raw);
-            stream.name = streamName;
-            return stream;
-        }
-
-        return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate, raw);
+        const options = normalizeStreamReadOptions(fromSequenceNumber, toSequenceNumber, predicate, raw, 'sequence');
+        const stream = this.getStream(streamNames, options);
+        stream.name = streamName;
+        return stream;
     }
 
     /**
-     * Get a stream for a category of streams. This will effectively return a joined stream of all streams that start
+     * Get a stream for a category of streams joined by global sequence number order.
+     * This will effectively return a joined stream of all streams that start
      * with the given `categoryName` followed by a dash (flat layout, e.g. `users-123`) or a slash (hierarchical
      * layout, e.g. `users/123`).
      * If you frequently use this for a category consisting of a lot of streams (e.g. `users`), consider creating a
@@ -673,26 +795,16 @@ class EventStore extends events.EventEmitter {
      *
      * @api
      * @param {string} categoryName The name of the category to get a stream for. A category is a stream name prefix.
-     * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
+     * @param {number|object} [fromSequenceNumber=1] The 1-based minimum global sequence number or an options object.
+     *   When joining multiple streams, events are ordered by their global sequence number.
+     * @param {number} [toSequenceNumber=-1] The 1-based maximum global sequence number to include in the events (inclusive).
      * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
      * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream} The joined event stream for all streams of the given category.
-     * @throws {Error} If no stream for this category exists.
      */
-    getEventStreamForCategory(categoryName, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
-        ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
-        if (categoryName in this.streams) {
-            return this.getEventStream(categoryName, minRevision, maxRevision, predicate, raw);
-        }
-        const categoryStreams = Object.keys(this.streams).filter(streamName =>
-            streamName.startsWith(categoryName + '-') ||
-            streamName.startsWith(categoryName + '/')
-        );
-
-        assert(categoryStreams.length > 0, `No streams for category '${categoryName}' exist.`);
-
-        return this.fromStreams(categoryName, categoryStreams, minRevision, maxRevision, predicate, raw);
+    getEventStreamForCategory(categoryName, fromSequenceNumber = 1, toSequenceNumber = -1, predicate = null, raw = false) {
+        const options = normalizeStreamReadOptions(fromSequenceNumber, toSequenceNumber, predicate, raw, 'sequence');
+        return this.getStream(categoryName + '-*', options);
     }
 
     /**

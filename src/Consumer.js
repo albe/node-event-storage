@@ -32,7 +32,7 @@ class Consumer extends stream.Readable {
      * @param {string} indexName The name of the index to consume.
      * @param {string} identifier The unique name to identify this consumer.
      * @param {object} [initialState={}] The initial state of the consumer.
-     * @param {number} [startFrom=0] The revision to start from within the index to consume.
+     * @param {number} [startFrom=0] The position (1-based) to start from within the index to consume.
      */
     constructor(storage, indexName, identifier, initialState = {}, startFrom = 0) {
         super({ objectMode: true });
@@ -82,7 +82,7 @@ class Consumer extends stream.Readable {
     /**
      * @private
      * @param {object} initialState The initial state if no persisted state exists.
-     * @param {number} startFrom The revision to start from within the index to consume.
+     * @param {number} startFrom The position (1-based) to start from within the index to consume.
      */
     restoreState(initialState, startFrom) {
         /* c8 ignore next 3 */
@@ -267,7 +267,7 @@ class Consumer extends stream.Readable {
      * Reset this projection to restart processing all documents again.
      * NOTE: This will overwrite the current state of the projection and hence be destructive.
      * @param {object} [initialState={}] The initial state of the consumer.
-     * @param {number} [startFrom=0] The revision to start from within the index to consume.
+     * @param {number} [startFrom=0] The position (1-based) to start from within the index to consume.
      * @api
      */
     reset(initialState = {}, startFrom = 0) {

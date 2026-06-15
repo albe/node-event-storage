@@ -37,10 +37,54 @@ export const ExpectedVersion: {
     EmptyStream: 0;
 };
 
+// New class-based expected values for commit() Phase A
+export class ExpectedStreamVersion {
+    constructor(streamVersion: number);
+    streamVersion: number;
+}
+export class ExpectedGlobalSequenceNumber {
+    constructor(sequenceNumber: number);
+    sequenceNumber: number;
+}
+export class ExpectedAny extends ExpectedStreamVersion {
+    streamVersion: -1;
+}
+export class ExpectedEmpty extends ExpectedStreamVersion {
+    streamVersion: 0;
+}
+export class ExpectedCondition extends CommitCondition {
+    constructor(condition: CommitCondition);
+}
+export type ExpectedVersionLike = number | ExpectedStreamVersion | ExpectedGlobalSequenceNumber | ExpectedAny | ExpectedEmpty | ExpectedCondition | CommitCondition;
+
+export const ExpectStream: {
+    AtVersion: (streamVersion: number) => ExpectedStreamVersion;
+    AtGlobalSequence: (sequenceNumber: number) => ExpectedGlobalSequenceNumber;
+    Any: () => ExpectedAny;
+    Empty: () => ExpectedEmpty;
+    MatchCondition: (condition: CommitCondition) => ExpectedCondition;
+};
+
+// Stream range options for Phase A
+export interface StreamVersionRangeOptions {
+    fromStreamVersion?: number;
+    toStreamVersion?: number;
+    predicate?: EventPredicate;
+    raw?: boolean;
+}
+export interface SequenceNumberRangeOptions {
+    fromSequenceNumber?: number;
+    toSequenceNumber?: number;
+    predicate?: EventPredicate;
+    raw?: boolean;
+}
+export type StreamRangeOptions = StreamVersionRangeOptions | SequenceNumberRangeOptions;
+export interface StreamReadOptions extends StreamVersionRangeOptions, SequenceNumberRangeOptions {}
+
 export const VERSION: string;
 
 export class EventStream extends Readable {
-    constructor(name: string, eventStore: EventStore, minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean);
+    constructor(name: string, eventStore: EventStore, minStreamVersion?: number, maxStreamVersion?: number, predicate?: EventPredicate, raw?: boolean);
     name: string;
     raw: boolean;
     version: number;
@@ -49,8 +93,8 @@ export class EventStream extends Readable {
     streamIndex: StreamIndexInfo;
     predicate: EventPredicate;
 
-    from(revision: number): this;
-    until(revision: number): this;
+    from(streamVersion: number): this;
+    until(streamVersion: number): this;
     fromStart(): this;
     fromEnd(): this;
     previous(amount: number): this;
@@ -115,20 +159,43 @@ export class EventStore extends EventEmitter {
     close(callback?: (err?: Error | null) => void): void;
 
     getStreamVersion(streamName: string): number;
-    getEventStream(streamName: string, minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream | false;
-    getAllEvents(minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
-    fromStreams(streamName: string, streamNames: string[], minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
-    getEventStreamForCategory(categoryName: string, minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
 
-    query(types: string[], matcher?: EventMatcher | null, minRevision?: number, raw?: boolean): { stream: EventStream; condition: CommitCondition };
+    // Unified stream API:
+    // - regular stream name => single stream
+    // - `_all` => all events
+    // - category selector ending with '-' or '/' => joined category stream
+    getStream(streamName: string | string[], options?: StreamReadOptions): EventStream;
+
+    // Legacy positional API (keep for BC)
+    getEventStream(streamName: string, minStreamVersion?: number, maxStreamVersion?: number, predicate?: EventPredicate, raw?: boolean): EventStream | false;
+
+    // New options-based API (Phase A)
+    getEventStream(streamName: string, options: StreamRangeOptions): EventStream | false;
+
+    getAllEvents(minSequenceNumber?: number, maxSequenceNumber?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
+    getAllEvents(options: SequenceNumberRangeOptions): EventStream;
+    fromStreams(streamName: string, streamNames: string[], fromSequenceNumber?: number, toSequenceNumber?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
+    fromStreams(streamName: string, streamNames: string[], options: SequenceNumberRangeOptions): EventStream;
+    getEventStreamForCategory(categoryName: string, fromSequenceNumber?: number, toSequenceNumber?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
+    getEventStreamForCategory(categoryName: string, options: SequenceNumberRangeOptions): EventStream;
+
+    query(types: string[], matcher?: EventMatcher | null, minSequenceNumber?: number, raw?: boolean): { stream: EventStream; condition: CommitCondition };
+    query(types: string[], matcher: EventMatcher | null | undefined, options: SequenceNumberRangeOptions): { stream: EventStream; condition: CommitCondition };
     createEventStream(streamName: string, matcher: EventMatcher, reindex?: boolean): EventStream;
 
     commit(
         streamName: string,
         events: any[],
-        expectedVersion: number | CommitCondition,
-        metadata: Record<string, unknown>,
-        callback: (error: Error | null, commit?: Record<string, unknown>) => void
+        expectedVersion?: ExpectedVersionLike,
+        metadata?: Record<string, unknown>,
+        callback?: (error: Error | null, commit?: Record<string, unknown>) => void
+    ): void;
+
+    commit(
+        streamName: string,
+        events: any[],
+        metadata?: Record<string, unknown>,
+        callback?: (error: Error | null, commit?: Record<string, unknown>) => void
     ): void;
 
     getConsumer(streamName: string, identifier: string, initialState?: Record<string, unknown>, since?: number): Consumer;

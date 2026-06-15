@@ -5,6 +5,7 @@ import Storage, { StorageLockedError } from './src/Storage.js';
 import Index from './src/Index.js';
 import Consumer from './src/Consumer.js';
 import { matches, buildRawBufferMatcher } from './src/utils/metadataUtil.js';
+import { ExpectStream } from './src/ExpectStream.js';
 
 const VERSION = packageJson.version;
 EventStore.VERSION = VERSION;
@@ -13,6 +14,7 @@ export {
 	EventStore,
 	EventStore as default,
 	ExpectedVersion,
+	ExpectStream,
 	OptimisticConcurrencyError,
 	CommitCondition,
 	LOCK_THROW,

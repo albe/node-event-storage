@@ -16,8 +16,10 @@ class EventStream extends stream.Readable {
     /**
      * @param {string} name The name of the stream.
      * @param {EventStore} eventStore The event store to get the stream from.
-     * @param {number} [minRevision] The minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The maximum revision to include in the events (inclusive).
+     * @param {number} [minRevision] The 1-based minimum stream version to include in the events (inclusive).
+     *   This is a stream-local position, not a global sequence number.
+     * @param {number} [maxRevision] The 1-based maximum stream version to include in the events (inclusive).
+     *   This is a stream-local position, not a global sequence number.
      * @param {function|object|null} [predicate] Optional matcher:
      *   - object mode: function `(payload, metadata) => boolean` or object matcher against `{ stream, payload, metadata }`
      *   - raw mode: function `(buffer) => boolean` or object matcher against compact NDJSON bytes.
@@ -52,21 +54,21 @@ class EventStream extends stream.Readable {
 
     /**
      * @api
-     * @param {number} revision The event revision to start reading from (inclusive).
+     * @param {number} streamVersion The stream-local version to start reading from (inclusive).
      * @returns {EventStream}
      */
-    from(revision) {
-        this.minRevision = normalizeRevision(revision, this.streamIndex.length);
+    from(streamVersion) {
+        this.minRevision = normalizeRevision(streamVersion, this.streamIndex.length);
         return this;
     }
 
     /**
      * @api
-     * @param {number} revision The event revision to read until (inclusive).
+     * @param {number} streamVersion The stream-local version to read until (inclusive).
      * @returns {EventStream}
      */
-    until(revision) {
-        this.maxRevision = normalizeRevision(revision, this.streamIndex.length);
+    until(streamVersion) {
+        this.maxRevision = normalizeRevision(streamVersion, this.streamIndex.length);
         this.version = normalizeMaxRevision(this.streamIndex.length, this.maxRevision);
         return this;
     }

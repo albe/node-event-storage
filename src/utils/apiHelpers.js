@@ -1,22 +1,22 @@
+import {ExpectedVersion, isExpectedVersionMarker} from "../ExpectStream.js";
+
 /**
  * Normalize commit overloads into a single argument object.
  *
  * @param {object|object[]} events Event or event list.
- * @param {number|object|function} expectedVersion Expected version, CommitCondition, or already metadata/callback.
+ * @param {number|object|function} expectedVersion Expected version marker, or already metadata/callback.
  * @param {object|function} metadata Commit metadata or callback.
  * @param {function} callback Completion callback.
- * @param {number} ExpectedVersionAny Fallback value for "any" expectedVersion.
- * @param {Function} CommitConditionClass Class used for CommitCondition checks.
  * @returns {{events: object[], expectedVersion: number|object, metadata: object, callback: function}} Normalized commit arguments.
  */
-function fixCommitArgumentTypes(events, expectedVersion, metadata, callback, ExpectedVersionAny, CommitConditionClass) {
+function normalizeCommitArgumentTypes(events, expectedVersion, metadata, callback) {
     if (!(events instanceof Array)) {
         events = [events];
     }
-    if (typeof expectedVersion !== 'number' && !(expectedVersion instanceof CommitConditionClass)) {
+    if (typeof expectedVersion !== 'number' && !isExpectedVersionMarker(expectedVersion)) {
         callback = metadata;
         metadata = expectedVersion;
-        expectedVersion = ExpectedVersionAny;
+        expectedVersion = ExpectedVersion.Any;
     }
     if (typeof metadata !== 'object') {
         callback = metadata;
@@ -109,14 +109,124 @@ function normalizeConsumerStateArgs(initialState, startFrom) {
     return { initialState, startFrom };
 }
 
+/**
+ * Normalize query() overloads.
+ *
+ * Supports:
+ * - query(types, matcher?, minSequenceNumber?, raw?)
+ * - query(types, options)
+ * - query(types, matcher, options)
+ *
+ * @param {object|function|null} matcherOrOptions Matcher function/object or options object.
+ * @param {number|object} minSequenceNumber Positional minimum sequence number or options object.
+ * @param {boolean} raw Positional raw flag.
+ * @returns {{matcher: object|function|null, minSequenceNumber: number, raw: boolean}}
+ */
+function normalizeQueryArguments(matcherOrOptions, minSequenceNumber, raw) {
+    if (minSequenceNumber && typeof minSequenceNumber === 'object' && !(minSequenceNumber instanceof Function)) {
+        const options = minSequenceNumber;
+        return {
+            matcher: matcherOrOptions ?? options.matcher ?? null,
+            minSequenceNumber: options.fromSequenceNumber ?? 1,
+            raw: options.raw ?? false
+        };
+    }
+
+    let matcher = matcherOrOptions;
+    let queryOptions = null;
+    if (matcherOrOptions && typeof matcherOrOptions === 'object' && typeof matcherOrOptions !== 'function') {
+        const looksLikeOptions =
+            matcherOrOptions.fromSequenceNumber !== undefined ||
+            matcherOrOptions.toSequenceNumber !== undefined ||
+            matcherOrOptions.raw !== undefined ||
+            matcherOrOptions.matcher !== undefined;
+        if (looksLikeOptions) {
+            queryOptions = matcherOrOptions;
+            matcher = queryOptions.matcher ?? null;
+        }
+    }
+
+    if (queryOptions) {
+        return {
+            matcher,
+            minSequenceNumber: queryOptions.fromSequenceNumber ?? 1,
+            raw: queryOptions.raw ?? false
+        };
+    }
+    return { matcher, minSequenceNumber, raw };
+}
+
+/**
+ * Normalize legacy stream read arguments into a canonical options object with defaults.
+ *
+ * @param {number|object} fromOrOptions Positional `from` value or options object.
+ * @param {number} to Positional `to` value.
+ * @param {object|function|boolean|null} predicate Matcher/predicate or raw shorthand.
+ * @param {boolean} raw Raw flag from the positional signature.
+ * @param {'stream'|'sequence'} mode Positional interpretation mode.
+ * @returns {{fromStreamVersion?: number, toStreamVersion?: number, fromSequenceNumber?: number, toSequenceNumber?: number, predicate: object|function|null, raw: boolean}}
+ */
+function normalizeStreamReadOptions(fromOrOptions, to, predicate, raw, mode) {
+    if (typeof fromOrOptions === 'object' && fromOrOptions !== null && !(fromOrOptions instanceof Function)) {
+        const options = fromOrOptions;
+        ({ predicate, raw } = normalizePredicateRaw(options.predicate ?? null, options.raw ?? false));
+        return {
+            fromStreamVersion: options.fromStreamVersion,
+            toStreamVersion: options.toStreamVersion,
+            fromSequenceNumber: options.fromSequenceNumber,
+            toSequenceNumber: options.toSequenceNumber,
+            predicate,
+            raw
+        };
+    }
+
+    ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
+    if (mode === 'sequence') {
+        return {
+            fromSequenceNumber: fromOrOptions,
+            toSequenceNumber: to,
+            predicate,
+            raw
+        };
+    }
+    return {
+        fromStreamVersion: fromOrOptions,
+        toStreamVersion: to,
+        predicate,
+        raw
+    };
+}
+
+/**
+ * Parse category selector prefixes.
+ *
+ * Supports selectors ending with '-*' or '/*'.
+ * Returns null when no category selector syntax is used.
+ *
+ * @param {string|string[]} streamName
+ * @returns {string|null}
+ */
+function resolveCategorySelectorPrefix(streamName) {
+    if (typeof streamName !== 'string') {
+        return null;
+    }
+    if (streamName.endsWith('-*') || streamName.endsWith('/*')) {
+        return streamName.slice(0, -2);
+    }
+    return null;
+}
+
 export {
-    fixCommitArgumentTypes,
+    normalizeCommitArgumentTypes,
     parseStreamFromIndexName,
     normalizePredicateRaw,
     normalizeNamedCtorArgs,
     normalizeRevision,
     normalizeMaxRevision,
-    normalizeConsumerStateArgs
+    normalizeConsumerStateArgs,
+    normalizeQueryArguments,
+    normalizeStreamReadOptions,
+    resolveCategorySelectorPrefix
 };
 
 
