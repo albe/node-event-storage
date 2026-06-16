@@ -1274,7 +1274,7 @@ describe('Storage', function() {
         it('delivers runtime appends to many new partitions without crashing', function(done){
             storage = createStorage({
                 syncOnFlush: true,
-                indexOptions: { flushDelay: 0 },
+                indexOptions: { flushDelay: 1 },
                 partitioner: (document) => document.type
             });
             storage.open();
@@ -1306,8 +1306,8 @@ describe('Storage', function() {
 
             for (let i = 1; i <= writes; i++) {
                 storage.write({ foo: i, type: `p-${i}` });
-                storage.flush();
             }
+            storage.flush();
         });
 
         it('updates secondary indexes when writer appends', function(done){
