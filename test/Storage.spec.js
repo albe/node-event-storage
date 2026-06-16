@@ -1272,11 +1272,11 @@ describe('Storage', function() {
         });
 
         it('delivers runtime appends to many new partitions without crashing', function(done){
-            const RACE_CONDITION_WRITES = 100;
-            const RACE_CONDITION_TIMEOUT_MS = 5000;
+            const RACE_CONDITION_WRITES = 400;
+            const RACE_CONDITION_TIMEOUT_MS = 10000;
             storage = createStorage({
                 syncOnFlush: true,
-                indexOptions: { flushDelay: 1 },
+                indexOptions: { flushDelay: 0 },
                 partitioner: (document) => document.type
             });
             storage.open();
