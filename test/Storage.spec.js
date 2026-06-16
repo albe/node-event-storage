@@ -1272,6 +1272,8 @@ describe('Storage', function() {
         });
 
         it('delivers runtime appends to many new partitions without crashing', function(done){
+            const RACE_CONDITION_WRITES = 100;
+            const RACE_CONDITION_TIMEOUT_MS = 5000;
             storage = createStorage({
                 syncOnFlush: true,
                 indexOptions: { flushDelay: 1 },
@@ -1279,15 +1281,13 @@ describe('Storage', function() {
             });
             storage.open();
 
-            const writes = 100;
-            const timeoutMs = 5000;
             let received = 0;
             const timer = setTimeout(() => {
                 reader.close();
-                done(new Error(`Timeout while waiting for ${writes} appends, got ${received}`));
-            }, timeoutMs);
+                done(new Error(`Timeout while waiting for ${RACE_CONDITION_WRITES} appends, got ${received}`));
+            }, RACE_CONDITION_TIMEOUT_MS);
 
-            const reader = createReader();
+            let reader = createReader();
             reader.open();
             reader.on('error', (error) => {
                 clearTimeout(timer);
@@ -1298,14 +1298,14 @@ describe('Storage', function() {
                 received++;
                 expect(doc).to.eql({ foo: entry.number, type: `p-${entry.number}` });
                 expect(reader.partitions.has(entry.partition)).to.be(true);
-                if (received === writes) {
+                if (received === RACE_CONDITION_WRITES) {
                     clearTimeout(timer);
                     reader.close();
                     done();
                 }
             });
 
-            for (let i = 1; i <= writes; i++) {
+            for (let i = 1; i <= RACE_CONDITION_WRITES; i++) {
                 storage.write({ foo: i, type: `p-${i}` });
             }
             storage.flush();
