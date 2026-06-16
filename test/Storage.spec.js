@@ -1280,11 +1280,12 @@ describe('Storage', function() {
             storage.open();
 
             const writes = 100;
+            const timeoutMs = 5000;
             let received = 0;
             const timer = setTimeout(() => {
                 reader.close();
                 done(new Error(`Timeout while waiting for ${writes} appends, got ${received}`));
-            }, 5000);
+            }, timeoutMs);
 
             const reader = createReader();
             reader.open();
