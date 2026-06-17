@@ -2,6 +2,52 @@ import fs from 'fs';
 import path from 'path';
 import { mkdirpSync } from 'mkdirp';
 
+const SAFE_RELATIVE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
+
+// Best-effort cleanup for temporary files after interrupted/failed writes.
+function safeUnlink(fileName) {
+    try {
+        fs.unlinkSync(fileName);
+    } catch (e) {
+        if (e.code !== 'ENOENT') {
+            throw e;
+        }
+    }
+}
+
+// Prevent partially written persistence files from replacing the last valid state.
+function writeFileAtomic(fileName, data, options = {}, onSuccess = null) {
+    const tmpFileName = options.tmpFileName || `${fileName}.tmp`;
+    const writeOptions = options.encoding ? { encoding: options.encoding } : undefined;
+    try {
+        fs.writeFileSync(tmpFileName, data, writeOptions);
+        fs.renameSync(tmpFileName, fileName);
+        if (typeof onSuccess === 'function') {
+            onSuccess();
+        }
+    } catch (e) {
+        safeUnlink(tmpFileName);
+        throw e;
+    }
+    return fileName;
+}
+
+function isSafeRelativeName(name) {
+    return typeof name === 'string'
+        && name !== ''
+        && SAFE_RELATIVE_NAME_PATTERN.test(name);
+}
+
+function resolvePathWithinRoot(rootDirectory, relativePath) {
+    const root = path.resolve(rootDirectory);
+    const resolvedPath = path.resolve(root, relativePath);
+    const rootRelativePath = path.relative(root, resolvedPath);
+    if (rootRelativePath.startsWith('..') || path.isAbsolute(rootRelativePath)) {
+        throw new Error(`Invalid relative path "${relativePath}".`);
+    }
+    return resolvedPath;
+}
+
 /**
  * Ensure that the given directory exists.
  * @param {string} dirName Target directory.
@@ -123,5 +169,9 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
 
 export {
     ensureDirectory,
+    safeUnlink,
+    writeFileAtomic,
     scanForFiles,
+    isSafeRelativeName,
+    resolvePathWithinRoot,
 };

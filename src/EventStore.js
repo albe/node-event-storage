@@ -6,9 +6,10 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
+import Projection from './Projection.js';
 import { assert, getPropertyAtPath } from './utils/util.js';
-import { ensureDirectory, scanForFiles } from './utils/fsUtil.js';
-import { buildTypeMatcherFn } from './utils/metadataUtil.js';
+import { ensureDirectory, isSafeRelativeName, scanForFiles } from './utils/fsUtil.js';
+import { buildTypeMatcherFn, isPlainObject } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 
 const ExpectedVersion = {
@@ -20,7 +21,6 @@ const ExpectedVersion = {
  * Default matcher property paths mirroring the Storage default, used for index optimization.
  */
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
-const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
 const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 class OptimisticConcurrencyError extends Error {}
@@ -120,6 +120,9 @@ class EventStore extends events.EventEmitter {
             }
         }
 
+        this.projectionTypeAccessor = this.typeAccessor
+            ? (event) => this.typeAccessor(event?.payload || event)
+            : undefined;
         this.initialize(storeName, storageConfig);
     }
 
@@ -254,7 +257,7 @@ class EventStore extends events.EventEmitter {
     makeReadOnly(callback) {
         if (this.storage instanceof ReadOnlyStorage) {
             callback?.();
-            return
+            return;
         }
         for (const consumer of this.consumers.values()) {
             consumer.stop();
@@ -444,7 +447,7 @@ class EventStore extends events.EventEmitter {
             return null;
         }
         assert(typeof type === 'string', 'typeAccessor must return a string.');
-        assert(STREAM_NAME_PATTERN.test(type), `typeAccessor must return a valid stream name. Got: "${type}"`);
+        assert(isSafeRelativeName(type), `typeAccessor must return a valid stream name. Got: "${type}"`);
         return type;
     }
 
@@ -816,9 +819,42 @@ class EventStore extends events.EventEmitter {
             existingConsumer.stop();
         }
         const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
+        const consumerProjectionFileName = `${consumer.fileName}.projection`;
+        if (fs.existsSync(consumerProjectionFileName)) {
+            Projection.restoreFromFile(consumerProjectionFileName, {
+                hmac: this.storage.hmac,
+                typeAccessor: this.projectionTypeAccessor
+            }).subscribe(consumer);
+        }
         consumer.streamName = streamName;
         this.consumers.set(identifier, consumer);
         return consumer;
+    }
+
+    /**
+     * Get or create a projection with EventStore defaults.
+     *
+     * @param {string} name Projection name.
+     * @param {function(object, object): object|object} [handlers] Projection handlers (reducer fn or reducer map).
+     * @param {object} [initialState={}] Projection initial state.
+     * @param {object|function(object): boolean} [matcher] Optional projection matcher.
+     * @returns {Projection}
+     */
+    getProjection(name, handlers, initialState = {}, matcher) {
+        assert(typeof name === 'string' && name !== '', 'Must provide a projection name.');
+        const projectionFileName = path.join(this.storage.indexDirectory, 'projections', this.storage.storageFile + '.' + name + '.projection');
+        const projectionOptions = {
+            fileName: projectionFileName,
+            hmac: this.storage.hmac,
+            typeAccessor: this.projectionTypeAccessor
+        };
+        if (handlers !== undefined) {
+            const definition = isProjectionDefinitionObject(handlers)
+                ? handlers
+                : { handlers, initialState, matcher };
+            return new Projection(name, definition, projectionOptions);
+        }
+        return Projection.restore(name, projectionOptions);
     }
 
     /**
@@ -860,6 +896,10 @@ class EventStore extends events.EventEmitter {
     }
 }
 
+
+function isProjectionDefinitionObject(value) {
+    return isPlainObject(value) && Object.hasOwn(value, 'handlers');
+}
 
 EventStore.Storage = Storage;
 EventStore.Index = Index;

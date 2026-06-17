@@ -3,6 +3,8 @@ import fs from 'fs-extra';
 import fsNative from 'fs';
 import Storage from '../src/Storage.js';
 import Consumer from '../src/Consumer.js';
+import Projection, { CompositeProjection } from '../src/Projection.js';
+import { createHmac } from '../src/utils/metadataUtil.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -37,6 +39,14 @@ describe('Consumer', function() {
 
     it('throws when instanciated without an identifier', function() {
         expect(() => new Consumer(storage, 'foobar')).to.throwError(/identifier/);
+    });
+
+    it('throws for invalid consumer index names', function() {
+        expect(() => new Consumer(storage, '../foobar', 'consumer1')).to.throwError(/Invalid index name/);
+    });
+
+    it('throws for invalid consumer identifiers', function() {
+        expect(() => new Consumer(storage, 'foobar', '../consumer1')).to.throwError(/Invalid identifier/);
     });
 
     it('creates consumer directory if not existing', function() {
@@ -345,26 +355,28 @@ describe('Consumer', function() {
         }, 15);
     });
 
-    it('swallows persistence write errors and removes temp files', function(done) {
+    it('rethrows persistence write errors and removes temp files', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer-1');
         consumer.position = 1;
         consumer.state = Object.freeze({ foo: 1 });
 
         const tmpFile = consumer.fileName + '.1';
         const originalWriteFileSync = fsNative.writeFileSync;
+        const originalSetImmediate = global.setImmediate;
+        global.setImmediate = (fn) => {
+            fn();
+            return null;
+        };
         fsNative.writeFileSync = () => {
             const error = new Error('disk full');
             error.code = 'ENOSPC';
             throw error;
         };
 
-        consumer.persist();
-
-        setTimeout(() => {
-            fsNative.writeFileSync = originalWriteFileSync;
-            expect(fs.existsSync(tmpFile)).to.be(false);
-            done();
-        }, 15);
+        expect(() => consumer.persist()).to.throwError(/disk full/);
+        fsNative.writeFileSync = originalWriteFileSync;
+        global.setImmediate = originalSetImmediate;
+        expect(fs.existsSync(tmpFile)).to.be(false);
     });
 
     it('restores state after reopening', function(done) {
@@ -517,6 +529,132 @@ describe('Consumer', function() {
             storage.write({ type: 'Foobar', id: 2 });
             storage.write({ type: 'Foobar', id: 3 });
         });
+    });
+
+    it('can attach projections from a reducer function', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-projection', { count: 0 });
+        new Projection('consumer-projection', {
+            initialState: { count: 0 },
+            handlers: (state, event) => ({ ...state, count: state.count + event.id })
+        }, {
+            hmac: createHmac('test-secret')
+        }).subscribe(consumer);
+        consumer.on('caught-up', () => {
+            expect(consumer.state.count).to.be(6);
+            done();
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('consumer.project persists a projection when attaching', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-project-method', { count: 0 });
+        const projection = new Projection('consumer-project-method', {
+            initialState: { count: 0 },
+            handlers: {
+                Foobar: (state, event) => ({ ...state, count: state.count + event.id })
+            }
+        }, { hmac: createHmac('test-secret') });
+
+        consumer.project(projection);
+        expect(fs.existsSync(`${consumer.fileName}.projection`)).to.be(true);
+        consumer.on('caught-up', () => {
+            expect(consumer.state.count).to.be(6);
+            done();
+        });
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('can attach and restore projections from event-type reducer maps', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-projection-map', { count: 0 });
+        const projection = new Projection('consumer-projection-map', {
+            initialState: { count: 0 },
+            handlers: {
+                Foobar: (state, event) => ({ ...state, count: state.count + event.id }),
+                Bazinga: (state) => state
+            }
+        }, { hmac: createHmac('test-secret') });
+        projection.subscribe(consumer);
+
+        consumer.on('caught-up', () => {
+            consumer.stop();
+            consumer = new Consumer(storage, 'foobar', 'consumer-projection-map', {});
+            Projection.restoreFromFile(`${consumer.fileName}.projection`, {
+                hmac: createHmac('test-secret')
+            }).subscribe(consumer);
+            consumer.on('progress', () => {
+                if (consumer.state.count === 10) {
+                    done();
+                }
+            });
+            storage.write({ type: 'Foobar', id: 4 });
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('throws if function projection is restored without trusted hmac', function() {
+        consumer = new Consumer(storage, 'foobar', 'consumer-projection-hmac');
+        new Projection('consumer-projection-hmac', {
+            initialState: {},
+            handlers: (state, event) => ({ ...state, lastId: event.id })
+        }, {
+            hmac: createHmac('test-secret')
+        }).subscribe(consumer);
+        expect(() => Projection.restoreFromFile(`${consumer.fileName}.projection`, {
+            hmac: createHmac('wrong-secret')
+        })).to.throwError(/Invalid HMAC/);
+    });
+
+    it('can attach a projection instance and restore it on reopen', function(done) {
+        consumer = new Consumer(storage, 'foobar', 'consumer-projection-instance', { count: 0 });
+        const projection = new Projection('consumer-projection-instance', {
+            initialState: { count: 0 },
+            handlers: {
+                Foobar: (state, event) => ({ ...state, count: state.count + event.id })
+            }
+        }, {
+            hmac: createHmac('test-secret')
+        });
+        projection.subscribe(consumer);
+        consumer.on('caught-up', () => {
+            expect(consumer.state.count).to.be(6);
+            consumer.stop();
+            consumer = new Consumer(storage, 'foobar', 'consumer-projection-instance', {});
+            Projection.restoreFromFile(`${consumer.fileName}.projection`, {
+                hmac: createHmac('test-secret')
+            }).subscribe(consumer);
+            consumer.on('progress', () => {
+                if (consumer.state.count === 10) {
+                    done();
+                }
+            });
+            storage.write({ type: 'Foobar', id: 4 });
+        });
+        storage.write({ type: 'Foobar', id: 1 });
+        storage.write({ type: 'Foobar', id: 2 });
+        storage.write({ type: 'Foobar', id: 3 });
+    });
+
+    it('supports composite projections', function() {
+        const projection = new CompositeProjection('overview', {
+            count: {
+                initialState: 0,
+                handlers: { Foobar: (state) => state + 1 }
+            },
+            last: {
+                initialState: null,
+                handlers: { Foobar: (state, event) => event.id || state }
+            }
+        });
+        projection.handle([{ type: 'Foobar', id: 1 }, { type: 'Foobar', id: 2 }]);
+        expect(projection.state).to.eql({ count: 2, last: 2 });
     });
 
     it('can build consistency guards (aggregates)', function(done) {

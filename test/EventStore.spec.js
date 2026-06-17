@@ -4,6 +4,8 @@ import fsSync from 'fs';
 import path from 'path';
 import EventStore, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
 import Consumer from '../src/Consumer.js';
+import Projection from '../src/Projection.js';
+import { createHmac } from '../src/utils/metadataUtil.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -1378,6 +1380,74 @@ describe('EventStore', function() {
             eventstore.commit('bar', { foo: 'baz', id: 2 });
         });
 
+        it('restores a projected consumer with eventStore typeAccessor defaults', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                typeAccessor: 'type',
+                storageConfig: {
+                    hmacSecret: 'test-secret'
+                }
+            });
+            eventstore.createEventStream('user-stream', (event) => event.stream === 'user-stream');
+
+            const consumer = eventstore.getConsumer('user-stream', 'user-counter', { count: 0 });
+            new Projection('user-counter', {
+                initialState: { count: 0 },
+                handlers: {
+                    UserCreated: (state) => ({ ...state, count: state.count + 1 })
+                }
+            }, {
+                hmac: eventstore.storage.hmac
+            }).subscribe(consumer);
+            eventstore.commit('user-stream', [{ type: 'UserCreated', id: 1 }]);
+            eventstore.commit('user-stream', [{ type: 'UserCreated', id: 2 }]);
+
+            consumer.on('progress', () => {
+                if (consumer.state.count !== 2) {
+                    return;
+                }
+                eventstore.close();
+                eventstore = new EventStore({
+                    storageDirectory,
+                    typeAccessor: 'type',
+                    storageConfig: {
+                        hmacSecret: 'test-secret'
+                    }
+                });
+                const reopened = eventstore.getConsumer('user-stream', 'user-counter', { count: 0 });
+                reopened.on('progress', () => {
+                    if (reopened.state.count === 3) {
+                        done();
+                    }
+                });
+                eventstore.commit('user-stream', [{ type: 'UserCreated', id: 3 }]);
+            });
+        });
+    });
+
+    describe('getProjection', function() {
+
+        it('creates and restores persisted projections with EventStore defaults', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                typeAccessor: 'type',
+                storageConfig: {
+                    hmacSecret: 'test-secret'
+                }
+            });
+            const projection = eventstore.getProjection('user-count', {
+                UserCreated: (state) => state + 1
+            }, 0);
+            projection.persist();
+
+            const restored = eventstore.getProjection('user-count');
+            const state = restored.handle([
+                { payload: { type: 'UserCreated' } },
+                { payload: { type: 'UserCreated' } }
+            ]);
+            expect(state).to.be(2);
+        });
+
         it('rebinds an existing identifier to a different stream when requested', function(done) {
             eventstore = new EventStore({
                 storageDirectory
@@ -1401,6 +1471,74 @@ describe('EventStore', function() {
 
             eventstore.commit('foo', { foo: 'bar', id: 1 });
             eventstore.commit('bar', { foo: 'baz', id: 2 });
+        });
+
+        it('restores a projected consumer with eventStore typeAccessor defaults', function(done) {
+            eventstore = new EventStore({
+                storageDirectory,
+                typeAccessor: 'type',
+                storageConfig: {
+                    hmacSecret: 'test-secret'
+                }
+            });
+            eventstore.createEventStream('user-stream', (event) => event.stream === 'user-stream');
+
+            const consumer = eventstore.getConsumer('user-stream', 'user-counter', { count: 0 });
+            new Projection('user-counter', {
+                initialState: { count: 0 },
+                handlers: {
+                    UserCreated: (state) => ({ ...state, count: state.count + 1 })
+                }
+            }, {
+                hmac: eventstore.storage.hmac
+            }).subscribe(consumer);
+            eventstore.commit('user-stream', [{ type: 'UserCreated', id: 1 }]);
+            eventstore.commit('user-stream', [{ type: 'UserCreated', id: 2 }]);
+
+            consumer.on('progress', () => {
+                if (consumer.state.count !== 2) {
+                    return;
+                }
+                eventstore.close();
+                eventstore = new EventStore({
+                    storageDirectory,
+                    typeAccessor: 'type',
+                    storageConfig: {
+                        hmacSecret: 'test-secret'
+                    }
+                });
+                const reopened = eventstore.getConsumer('user-stream', 'user-counter', { count: 0 });
+                reopened.on('progress', () => {
+                    if (reopened.state.count === 3) {
+                        done();
+                    }
+                });
+                eventstore.commit('user-stream', [{ type: 'UserCreated', id: 3 }]);
+            });
+        });
+    });
+
+    describe('getProjection', function() {
+
+        it('creates and restores persisted projections with EventStore defaults', function() {
+            eventstore = new EventStore({
+                storageDirectory,
+                typeAccessor: 'type',
+                storageConfig: {
+                    hmacSecret: 'test-secret'
+                }
+            });
+            const projection = eventstore.getProjection('user-count', {
+                UserCreated: (state) => state + 1
+            }, 0);
+            projection.persist();
+
+            const restored = eventstore.getProjection('user-count');
+            const state = restored.handle([
+                { payload: { type: 'UserCreated' } },
+                { payload: { type: 'UserCreated' } }
+            ]);
+            expect(state).to.be(2);
         });
     });
 

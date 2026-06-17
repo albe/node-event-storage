@@ -2,25 +2,10 @@ import stream from 'stream';
 import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
-import { ensureDirectory } from './utils/fsUtil.js';
+import { ensureDirectory, isSafeRelativeName, resolvePathWithinRoot, safeUnlink, writeFileAtomic } from './utils/fsUtil.js';
 import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
-
-/**
- * Safely unlink a file and ignore if it doesn't exist.
- * @param {string} filename
- */
-const safeUnlink = (filename) => {
-    /* c8 ignore next */
-    try {
-        fs.unlinkSync(filename);
-    } catch (e) {
-        if (e.code !== "ENOENT") {
-            throw e;
-        }
-    }
-};
 
 /**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
@@ -54,11 +39,15 @@ class Consumer extends stream.Readable {
      * @param {string} identifier The unique name to identify this consumer.
      */
     initializeStorage(storage, indexName, identifier) {
+        assert(indexName === '_all' || isSafeRelativeName(indexName), `Invalid index name "${indexName}" for consumer.`);
+        assert(isSafeRelativeName(identifier), `Invalid identifier "${identifier}" for consumer.`);
         this.storage = storage;
         this.index = this.storage.openIndex(indexName);
         this.indexName = indexName;
+        this.identifier = identifier;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
-        this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
+        this.fileName = resolvePathWithinRoot(consumerDirectory, `${this.storage.storageFile}.${indexName}.${identifier}`);
+        ensureDirectory(path.dirname(this.fileName));
         if (ensureDirectory(consumerDirectory)) {
             this.cleanUpFailedWrites();
         }
@@ -69,11 +58,15 @@ class Consumer extends stream.Readable {
      * @private
      */
     cleanUpFailedWrites() {
-        const consumerNamePrefix = path.basename(this.fileName) + '.';
+        const consumerBaseName = path.basename(this.fileName);
         const consumerDirectory = path.dirname(this.fileName);
         const files = fs.readdirSync(consumerDirectory);
         for (let file of files) {
-            if (file.startsWith(consumerNamePrefix)) {
+            if (!file.startsWith(consumerBaseName + '.')) {
+                continue;
+            }
+            const suffix = file.slice(consumerBaseName.length + 1);
+            if (/^\d+$/.test(suffix)) {
                 safeUnlink(path.join(consumerDirectory, file));
             }
         }
@@ -105,6 +98,32 @@ class Consumer extends stream.Readable {
     }
 
     /**
+     * Register a projection as `data` event handler.
+     * @api
+     * @param {{ apply: function(object, object): object }} projection
+     */
+    project(projection) {
+        assert(projection && typeof projection.apply === 'function', 'Projection must implement apply(state, event).');
+        const projectionFileName = this.fileName ? `${this.fileName}.projection` : null;
+        const isAlreadySubscribed = this.projection === projection;
+        const isAlreadyPersisted = projectionFileName
+            && projection.fileName === projectionFileName
+            && fs.existsSync(projectionFileName);
+        if (this.projectionHandler) {
+            this.removeListener('data', this.projectionHandler);
+        }
+        this.projection = projection;
+        this.projectionHandler = (event) => {
+            this.setState(projection.apply(this.state, event));
+        };
+        this.on('data', this.projectionHandler);
+        if (!isAlreadySubscribed && !isAlreadyPersisted && typeof projection.persist === 'function') {
+            projection.persist({ fileName: projectionFileName || projection.fileName });
+        }
+        return this;
+    }
+
+    /**
      * Update the state of this consumer transactionally with the position.
      * May only be called from within the document handling callback.
      *
@@ -117,6 +136,9 @@ class Consumer extends stream.Readable {
 
         if (typeof newState === 'function') {
             newState = newState(this.state);
+        }
+        if (this.state === newState) {
+            return;
         }
         this.state = Object.freeze(newState);
         this.doPersist = persist;
@@ -172,15 +194,7 @@ class Consumer extends stream.Readable {
             if (fs.existsSync(tmpFile)) {
                 throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
             }
-            try {
-                fs.writeFileSync(tmpFile, consumerData);
-                // If the write fails (half-way), the consumer state file will not be corrupted
-                fs.renameSync(tmpFile, this.fileName);
-                this.emit('persisted', consumerState);
-            } catch (e) {
-                /* c8 ignore next */
-                safeUnlink(tmpFile);
-            }
+            writeFileAtomic(this.fileName, consumerData, { tmpFileName: tmpFile }, () => this.emit('persisted', consumerState));
         });
     }
 
