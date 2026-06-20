@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import events from 'events';
 import { assert } from './utils/util.js';
+import { isSameOrParentDirectory } from "./utils/fsUtil.js";
 
 /** @type {Map<string, DirectoryWatcher>} */
 const directoryWatchers = new Map();
@@ -56,12 +57,38 @@ class DirectoryWatcher extends events.EventEmitter {
 class Watcher {
 
     /**
+     * Remove redundant nested directories so each tree is watched only once.
+     *
+     * @private
+     * @param {string[]} directories
+     * @param {boolean} recursive
+     * @returns {string[]}
+     */
+    static deduplicateDirectories(directories, recursive = true) {
+        const normalized = [...new Set(directories.map(dir => path.resolve(path.normalize(dir))))];
+        if (!recursive) {
+            return normalized;
+        }
+        normalized.sort((a, b) => a.length - b.length);
+        const deduplicated = [];
+        for (const directory of normalized) {
+            if (deduplicated.some(parent => isSameOrParentDirectory(parent, directory))) {
+                continue;
+            }
+            deduplicated.push(directory);
+        }
+        return deduplicated;
+    }
+
+    /**
      * @param {string|string[]} fileOrDirectory The filename or directory or list of directories to watch
      * @param {function(string): boolean} [fileFilter] A filter that will receive a filename and needs to return true if this watcher should be invoked. Will be ignored if the first argument is a file.
+     * @param {object|null} [watchOptions] Options forwarded to fs.watch for each directory watcher.
      * @returns {Watcher}
      */
-    constructor(fileOrDirectory, fileFilter = null) {
+    constructor(fileOrDirectory, fileFilter = null, watchOptions = null) {
         let directories;
+        const options = Object.assign({ recursive: true }, watchOptions);
         if (typeof fileOrDirectory === 'string') {
             directories = [fileOrDirectory];
             if (!fs.statSync(fileOrDirectory).isDirectory()) {
@@ -70,10 +97,10 @@ class Watcher {
                 fileFilter = changedFilename => changedFilename === filename;
             }
         } else {
-            directories = [...new Set(fileOrDirectory.map(path.normalize))];
+            directories = Watcher.deduplicateDirectories(fileOrDirectory, options.recursive);
         }
 
-        this.watchers = directories.map(dir => new DirectoryWatcher(dir));
+        this.watchers = directories.map(dir => new DirectoryWatcher(dir, options));
 
         if (fileFilter === null) {
             fileFilter = () => true;
