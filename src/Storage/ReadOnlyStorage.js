@@ -24,7 +24,7 @@ class ReadOnlyStorage extends ReadableStorage {
      * @returns {boolean}
      */
     storageFilesFilter(filename) {
-        return !filename.endsWith('.branch') && filename.substring(0, this.storageFile.length) === this.storageFile;
+        return !filename.endsWith('.branch') && filename.substring(0, this.storageFile.length + 1) === this.storageFile + '.';
     }
 
     /**
