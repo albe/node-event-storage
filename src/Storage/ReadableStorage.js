@@ -4,7 +4,7 @@ import events from 'events';
 import { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import { ReadOnly as ReadOnlyIndex } from '../Index.js';
 import { assert, wrapAndCheck, iterate, kWayMerge } from '../utils/util.js';
-import { scanForFiles } from '../utils/fsUtil.js';
+import { resolvePath, scanForFiles } from '../utils/fsUtil.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import IndexMatcher from '../IndexMatcher.js';
@@ -78,7 +78,7 @@ class ReadableStorage extends events.EventEmitter {
 
         this.hmac = createHmac(config.hmacSecret);
 
-        this.dataDirectory = path.resolve(config.dataDirectory);
+        this.dataDirectory = resolvePath(config.dataDirectory);
 
         const partitionDefaults = { readBufferSize: DEFAULT_READ_BUFFER_SIZE };
         this.partitionConfig = Object.assign(partitionDefaults, config);
@@ -120,7 +120,7 @@ class ReadableStorage extends events.EventEmitter {
      * @returns void
      */
     initializeIndexes(config) {
-        this.indexDirectory = path.resolve(config.indexDirectory || this.dataDirectory);
+        this.indexDirectory = resolvePath(config.indexDirectory || this.dataDirectory);
 
         this.indexOptions = config.indexOptions;
         this.indexOptions.dataDirectory = this.indexDirectory;

@@ -1,9 +1,9 @@
 import fs from 'fs';
-import path from 'path';
 import events from 'events';
 import Entry, { assertValidEntryClass } from '../IndexEntry.js';
 import { assert, wrapAndCheck, binarySearch } from '../utils/util.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
+import { resolvePath } from "../utils/fsUtil.js";
 
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";
@@ -69,7 +69,7 @@ class ReadableIndex extends events.EventEmitter {
         this.fileMode = 'r';
         this.EntryClass = options.EntryClass;
         this.dataDirectory = options.dataDirectory;
-        this.fileName = path.resolve(options.dataDirectory, this.name);
+        this.fileName = resolvePath(options.dataDirectory, this.name);
         this.readBuffer = Buffer.allocUnsafe(Math.max(options.EntryClass.size, options.writeBufferSize > 0 ? options.writeBufferSize : 4096));
 
         if (options.metadata) {
