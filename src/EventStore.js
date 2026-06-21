@@ -139,7 +139,9 @@ class EventStore extends events.EventEmitter {
             : new Storage(storeName, storageConfig);
 
         this.mountStorage(storage, () => {
-            this.checkUnfinishedCommits();
+            if (storageConfig.readOnly !== true) {
+                this.checkUnfinishedCommits();
+            }
             this.emit('ready');
         });
     }
