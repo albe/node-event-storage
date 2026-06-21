@@ -41,7 +41,7 @@ class ReadOnlyStorage extends ReadableStorage {
             this.watcher = new Watcher([this.dataDirectory, this.indexDirectory], this.storageFilesFilter);
             this.watcher.on('rename', this.onStorageFileChanged);
             // Emit change events without filename as a signal to resync
-            this.watcher.on('change', (filename) => !filename && this.this.scheduleScan());
+            this.watcher.on('change', (filename) => !filename && this.scheduleScan());
         }
         return super.open(callback);
     }
