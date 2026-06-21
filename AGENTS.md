@@ -26,6 +26,7 @@ Read the Platform.md file if it exists to know which platform you are running on
 
 ### Code Quality standards
 
+- Keep it simple! Follow the KISS principle and avoid unnecessary abstractions or optimizations. Simple code is easier to read, test, and maintain and most of the time also more performant.
 - Keep cyclomatic complexity per method around 15 or below. If a method exceeds that, look for ways to break it down into smaller, clearly-named helper methods. Exceptions can be made for very performance-sensitive code paths, but prefer readability in general.
 - Keep number of return statements per method below 6. Multiple return points can be acceptable if they significantly improve readability, but watch for methods that become hard to follow due to too many exit points.
 - Avoid deep nesting of conditionals. If you find yourself nesting more than 3 levels deep, consider refactoring to flatten the structure, such as by using guard clauses or extracting nested logic into separate methods.
@@ -59,6 +60,8 @@ EventStore  →  Storage  →  Partition (append-only data files)
 - **`open(callback)` hook** — fires after `openIndexes()` and before `'opened'`. Used by `WritableStorage` for torn-write repair.
 - **LOCK_RECLAIM in `open()`** — orphaned lock removal lives in `WritableStorage.open()`, directly before `lock()`; torn-write repair runs via the `open(callback)` hook.
 - **EventStore `initialize()`** — register `storage.on('index-created', ...)` *before* calling `storage.open()`.
+- **Watcher singleton key includes watch options** — do not share one `DirectoryWatcher` across different `fs.watch` option sets (notably recursive vs non-recursive), or read-only/file watchers can miss events.
+- **ReadOnlyStorage watcher filenames may contain leading directories** — normalize watched filenames to the storage-relative segment (starting at `<storageFile>...`) so nested index roots (e.g. `streams/`) and hierarchical stream paths both resolve correctly.
 
 ## Key Commands
 
