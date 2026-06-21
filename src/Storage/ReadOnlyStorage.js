@@ -63,7 +63,7 @@ class ReadOnlyStorage extends ReadableStorage {
         this.scanSchedule = this.scanSchedule || setTimeout(() =>
             this.scanFiles(() => {
                 this.scanSchedule = null;
-                const callbacks = this.onScanFinished.slice();
+                const callbacks = this.onScanFinished || [];
                 this.onScanFinished = [];
                 callbacks.forEach(callback => callback());
             }), typeof callback === 'number' ? callback : time);
