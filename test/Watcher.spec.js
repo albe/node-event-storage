@@ -78,14 +78,24 @@ describe('Watcher', function() {
         let fd = fs.openSync(dataDirectory + '/.file', 'w');
         fs.closeSync(fd);
         const watcher = createWatcher('');
-        let count = 0;
+        let finished = false;
+        const seen = new Set();
+        const finish = (error) => {
+            if (finished) {
+                return;
+            }
+            finished = true;
+            done(error);
+        };
         watcher.on('rename', (filename) => {
-            count++;
-            if (count === 1) {
-                expect(filename).to.be('.file');
-            } else if (count === 2) {
-                expect(filename).to.be('.file2');
-                done();
+            try {
+                expect(filename === '.file' || filename === '.file2').to.be(true);
+                seen.add(filename);
+                if (seen.has('.file') && seen.has('.file2')) {
+                    finish();
+                }
+            } catch (error) {
+                finish(error);
             }
         });
         fs.renameSync(dataDirectory + '/.file', dataDirectory + '/.file2');
