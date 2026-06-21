@@ -37,7 +37,7 @@ describe('Watcher', function() {
     it('is singleton per directory', function(){
         const watcher1 = createWatcher('');
         const watcher2 = createWatcher('');
-        expect(watcher1.watcher).to.equal(watcher2.watcher);
+        expect(watcher1.watchers[0]).to.equal(watcher2.watchers[0]);
     });
 
     it('can be closed multiple times safely', function(){
