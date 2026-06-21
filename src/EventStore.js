@@ -655,12 +655,6 @@ class EventStore extends events.EventEmitter {
             assert(stream in this.streams, `Stream "${stream}" does not exist.`);
         }
 
-        if (streamNames.length === 1) {
-            const stream = new EventStream(streamNames[0], this, minRevision, maxRevision, predicate, raw);
-            stream.name = streamName;
-            return stream;
-        }
-
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate, raw);
     }
 
