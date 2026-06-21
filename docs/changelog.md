@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.4
+
+- Fix edge case in JoinStream when range not inside selected streams
+- Fix bug with overwriting Stream internals
+
 ## 1.3.3
 
 - Raised the minimum supported Node.js version to `>=20.0`.
