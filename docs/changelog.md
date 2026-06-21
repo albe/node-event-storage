@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.3
+
+- Raised the minimum supported Node.js version to `>=20.0`.
+- Improved `ReadOnlyStorage` live-watch behavior for hierarchical partition/index layouts by relying on recursive file watching for nested paths.
+- Fixed a bug around `ReadOnlyStorage` when watch events don't come in reliably; ReadOnly mode is much more robust now
+- Documented the runtime dependency for read-only file watching: reliable recursive `fs.watch` support is required (currently supported on Windows, macOS, and Linux).
+
 ## 1.3.2
 
 - Added `EventStore.makeReadOnly([callback])` as a niche handover API for switching a running writer process into read-only mode without restarting it. For the common case, creating a fresh read-only `EventStore` instance remains the recommended approach.

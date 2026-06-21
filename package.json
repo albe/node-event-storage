@@ -1,6 +1,6 @@
 {
   "name": "event-storage",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "type": "module",
   "description": "An optimized embedded event store for node.js",
   "keywords": [
@@ -27,7 +27,7 @@
   "types": "./index.d.ts",
   "scripts": {
     "test": "c8 --reporter=lcov --reporter=text mocha test/*.spec.js",
-    "test:grep": "c8 --reporter=lcov --reporter=text mocha test/*.spec.js --grep",
+    "test:grep": "mocha test/*.spec.js --grep",
     "coverage": "c8 report --reporter=text-lcov | coveralls"
   },
   "files": [
