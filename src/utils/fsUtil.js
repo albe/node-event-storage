@@ -134,46 +134,21 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
 }
 
 /**
- * Synchronously scan one directory level, then recurse into subdirectories.
+ * Return true when both paths are equal or `child` is nested inside `parent`.
  *
- * @param {string} dir Absolute directory path.
- * @param {string} relativePrefix Relative prefix for match paths.
- * @param {boolean} isRoot True for the initial call.
- * @param {RegExp} regexPattern Regex for file paths.
- * @param {function(string): void} onEach Callback for matching files.
- * @returns {void}
+ * @private
+ * @param {string} parent
+ * @param {string} child
+ * @returns {boolean}
  */
-function scanDirSync(dir, relativePrefix, isRoot, regexPattern, onEach) {
-    let entries;
-    try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (err) {
-        if (!isRoot && err.code === 'ENOENT') return;
-        throw err;
-    }
-    const subdirs = classifyEntries(entries, relativePrefix, regexPattern, onEach);
-    for (const name of subdirs) {
-        scanDirSync(path.join(dir, name), relativePrefix + name + '/', false, regexPattern, onEach);
-    }
-}
-
-/**
- * Synchronous counterpart to {@link scanForFiles}. Used on cold paths where a blocking scan is
- * acceptable and the result is needed immediately (e.g. lazily registering a partition referenced
- * by a freshly appended index entry during live watching).
- *
- * @param {string} directory The root directory to scan.
- * @param {RegExp} regexPattern The pattern to match relative file paths against.
- * @param {function(string)} onEach Called with the first capturing group (or full match) for each matching path.
- * @returns {void}
- */
-function scanForFilesSync(directory, regexPattern, onEach) {
-    scanDirSync(directory, '', true, regexPattern, onEach);
+function isSameOrParentDirectory(parent, child) {
+    const relative = path.relative(parent, child);
+    return !relative || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 export {
     resolvePath,
     ensureDirectory,
     scanForFiles,
-    scanForFilesSync,
+    isSameOrParentDirectory
 };

@@ -1,7 +1,7 @@
 import ReadableStorage from './ReadableStorage.js';
-import ReadablePartition from '../Partition/ReadablePartition.js';
 import Watcher from '../Watcher.js';
-import { scanForFilesSync } from '../utils/fsUtil.js';
+
+const DEFAULT_SCAN_DELAY_MS = 10;
 
 /**
  * An append-only storage with highly performant positional range scans.
@@ -24,7 +24,7 @@ class ReadOnlyStorage extends ReadableStorage {
      * @returns {boolean}
      */
     storageFilesFilter(filename) {
-        return !filename.endsWith('.branch') && filename.substring(0, this.storageFile.length + 1) === this.storageFile + '.';
+        return !filename.endsWith('.branch') && (filename === this.storageFile || filename.substring(0, this.storageFile.length + 1) === this.storageFile + '.');
     }
 
     /**
@@ -40,8 +40,33 @@ class ReadOnlyStorage extends ReadableStorage {
         if (!this.watcher) {
             this.watcher = new Watcher([this.dataDirectory, this.indexDirectory], this.storageFilesFilter);
             this.watcher.on('rename', this.onStorageFileChanged);
+            // Emit change events without filename as a signal to resync
+            this.watcher.on('change', (filename) => !filename && this.this.scheduleScan());
         }
         return super.open(callback);
+    }
+
+    /**
+     * Schedule a fresh scan of the filesystem to get the ReadOnly instance in sync.
+     * Scheduling will be throttled so multiple calls will not cause multiple scan operations.
+     * Note though that the callback will not be deduplicated, so calling this repeatedly with the same callback will
+     * lead to this callback being executed multiple times once the scan is finished.
+     *
+     * @param {function} [callback] If provided, will be added to the callbacks invoked after the next full scan.
+     * @param {number} [time=SCAN_DELAY_MS] The delay in ms to schedule the scan for
+     */
+    scheduleScan(callback, time = DEFAULT_SCAN_DELAY_MS) {
+        if (typeof callback === 'function') {
+            this.onScanFinished = this.onScanFinished || [];
+            this.onScanFinished.push(callback);
+        }
+        this.scanSchedule = this.scanSchedule || setTimeout(() =>
+            this.scanFiles(() => {
+                this.scanSchedule = null;
+                const callbacks = this.onScanFinished.slice();
+                this.onScanFinished = [];
+                callbacks.forEach(callback => callback());
+            }), typeof callback === 'number' ? callback : time);
     }
 
     /**
@@ -57,49 +82,6 @@ class ReadOnlyStorage extends ReadableStorage {
         }
 
         this.registerPartitionFile(filename);
-    }
-
-    /**
-     * Register a partition by its relative file name if it is not already known.
-     * Shared by the file-watch path and the index-append path so both stay consistent.
-     *
-     * @private
-     * @param {string} filename
-     * @returns {number} The id of the (now registered) partition.
-     */
-    registerPartitionFile(filename) {
-        const partitionId = ReadablePartition.idFor(filename);
-        if (!this.partitions.has(partitionId)) {
-            const partition = this.createPartition(filename, this.partitionConfig);
-            this.partitions.add(partition.id, partition);
-            this.emit('partition-created', partition.id);
-        }
-        return partitionId;
-    }
-
-    /**
-     * Ensure the partition referenced by an appended index entry is registered.
-     *
-     * The index file and the partition file are watched independently, so an `'append'` can be
-     * observed before the corresponding partition-creation event has been dispatched. The writer
-     * always flushes the partition before appending to the index, so the file already exists on
-     * disk; a one-off synchronous scan registers it on demand and closes the race.
-     *
-     * @private
-     * @param {number} partitionId
-     * @returns {boolean} True if the partition is registered after this call.
-     */
-    ensurePartitionRegistered(partitionId) {
-        if (this.partitions.has(partitionId)) {
-            return true;
-        }
-        const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const partitionPattern = new RegExp(`^(${escaped}.*)$`);
-        scanForFilesSync(this.dataDirectory, partitionPattern, (file) => {
-            if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
-            this.registerPartitionFile(file);
-        });
-        return this.partitions.has(partitionId);
     }
 
     /**
@@ -162,25 +144,14 @@ class ReadOnlyStorage extends ReadableStorage {
     processAppendedEntries(index, indexShortName, entries, startIndex = 0) {
         for (let i = startIndex; i < entries.length; i++) {
             const entry = entries[i];
-            if (!this.ensurePartitionRegistered(entry.partition)) {
-                this.scheduleAppendRetry(index, indexShortName, entries, i);
+            if (!this.partitions.has(entry.partition)) {
+                this.scheduleScan(() => {
+                    this.processAppendedEntries(index, indexShortName, entries, i);
+                });
                 return;
             }
             this.emitAppendedEntry(index, indexShortName, entry);
         }
-    }
-
-    /**
-     * Re-process appended entries from the given offset on the next tick.
-     * @private
-     */
-    scheduleAppendRetry(index, indexShortName, entries, startIndex) {
-        setTimeout(() => {
-            if (!this.watcher) {
-                return;
-            }
-            this.processAppendedEntries(index, indexShortName, entries, startIndex);
-        }, 1);
     }
 
     /**
@@ -193,10 +164,8 @@ class ReadOnlyStorage extends ReadableStorage {
         try {
             document = this.readFrom(entry.partition, entry.position, entry.size);
         } catch (error) {
-            /* c8 ignore next 3 */
-            if (this.listenerCount('error') > 0) {
-                this.emit('error', error);
-            }
+            /* c8 ignore next  */
+            this.emit('error', error);
             return;
         }
         if (index === this.index) {
