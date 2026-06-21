@@ -1479,6 +1479,28 @@ describe('Storage', function() {
             }, 5);
         });
 
+        it('delivers a runtime append into a not-yet-registered partition without crashing', function(done){
+            // Reproduces the race where the index 'append' watch event arrives before the
+            // partition-creation watch event has registered the new partition. We simulate the
+            // pending partition-creation event by disabling the storage-file watch path, forcing
+            // the index-append path to register the partition on demand.
+            storage = createStorage({ syncOnFlush: true, partitioner: (document) => document.type });
+            storage.open();
+
+            let reader = createReader();
+            reader.onStorageFileChanged = () => {};
+            reader.open();
+            reader.on('wrote', (doc, entry, position) => {
+                expect(doc).to.eql({ foo: 1, type: 'one' });
+                expect(reader.partitions.has(entry.partition)).to.be(true);
+                reader.close();
+                done();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.flush();
+        });
+
         it('can be opened and closed multiple times', function(){
             storage = createStorage();
             storage.open();
