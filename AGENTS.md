@@ -75,6 +75,7 @@ No build step; source is plain ESM consumed directly. No linter configured.
 
 - **ESM only** — all files use `import`/`export`.
 - **No underscore-prefixed names** for methods or properties. Use descriptive public names even for internal helpers (e.g. `scanFiles`, `openIndexes`).
+- **Do not reuse EventEmitter internals for app state**: in classes extending `EventEmitter`/`Readable`, never use reserved fields like `_events` as custom caches; keep cache state in dedicated properties (e.g. `cachedEvents`) to avoid breaking listener registration/pipe behavior.
 - **Expressive names over comments**: prefer renaming or extracting a method with a clear name rather than adding a comment that explains what the code does.
 - **Doc blocks only for the "why"**: skip doc blocks whose content is obvious from the function name and signature. When a doc block is warranted, keep it to one or two sentences explaining *why* the code exists, not *how* it works. Avoid restating the code in prose.
 - **No redundant inline comments**: a comment like `// Re-open after close()` above a clearly named `openIndexes()` call adds no value. Only add inline comments for non-obvious logic or required context.
