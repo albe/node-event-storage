@@ -597,6 +597,8 @@ new Storage.ReadOnly([storageName], [config])
 
 Accepts the same options as `Storage` (writable) except for write-specific fields (`writeBufferSize`, `maxWriteBufferDocuments`, `syncOnFlush`, `dirtyReads`, `partitioner`, `lock`).  In addition to the read API it watches the data directory for new partitions and index files created by a concurrent writer.
 
+> **Note:** Read-only live change detection relies on reliable **recursive** `fs.watch` support in Node.js. This is currently available on Windows, macOS, and Linux (Node.js runtime support required).
+
 ### Shared methods (readable and writable)
 
 #### `open()` ✅ Stable

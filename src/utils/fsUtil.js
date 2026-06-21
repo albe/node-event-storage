@@ -1,6 +1,18 @@
 import fs from 'fs';
+import os from "os";
 import path from 'path';
 import { mkdirpSync } from 'mkdirp';
+
+/**
+ * Resolve a file or directory path, supporting `~/` for the user's home directory and joining with additional path segments.
+ * @param {string} fileOrDirectory
+ * @param {string} [directories]
+ * @returns {string} The normalized path, with resolved relative and home directory references.
+ */
+function resolvePath(fileOrDirectory, ...directories) {
+    fileOrDirectory = fileOrDirectory.replace(/^~\//, os.homedir() + '/');
+    return path.resolve(fileOrDirectory, ...directories);
+}
 
 /**
  * Ensure that the given directory exists.
@@ -121,7 +133,22 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
     scanDir(directory, '', true, regexPattern, onEach, onDone);
 }
 
+/**
+ * Return true when both paths are equal or `child` is nested inside `parent`.
+ *
+ * @private
+ * @param {string} parent
+ * @param {string} child
+ * @returns {boolean}
+ */
+function isSameOrParentDirectory(parent, child) {
+    const relative = path.relative(parent, child);
+    return !relative || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 export {
+    resolvePath,
     ensureDirectory,
     scanForFiles,
+    isSameOrParentDirectory
 };

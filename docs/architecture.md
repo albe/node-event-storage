@@ -146,6 +146,28 @@ graph TD
 
 ---
 
+## Watcher and Read-Only Runtime Synchronization
+
+The current watcher model is intentionally minimal and optimized for the EventStore runtime:
+
+- `DirectoryWatcher` is a reference-counted singleton per `(directory, recursive)` pair and uses fixed `fs.watch` behavior (`persistent: false`, `encoding: 'utf8'`).
+- `DirectoryWatcher` normalizes incoming file names to storage-relative, slash-separated paths (`'/'`), including Windows-specific absolute/namespace-prefixed paths.
+- `Watcher` registers a per-subscriber filename resolver/filter at `DirectoryWatcher` level, so events are filtered before they reach most subscribers.
+- Single-file watchers use a root-relative `fixedFilename` (not `basename`) so hierarchical paths like `a/b/c.index` are matched deterministically.
+- `rootDirectory` in single-file mode serves two purposes: it defines the relative filename space and ensures file watchers share a single root `DirectoryWatcher` instead of opening nested directory watchers.
+
+Read-only synchronization is event-driven, with a bounded rescan fallback for missing filenames:
+
+- `ReadOnlyStorage` watches both data and index roots and reacts to `rename` events for new partitions/indexes.
+- `change` events without filename are treated as a resync signal and are throttled via `scheduleScan()` to avoid scan storms.
+- `ReadOnlyIndex`/`ReadOnlyPartition` are wired through `WatchesFile`; stream and partition updates are propagated via index append events.
+- For ambiguous fs events without a filename, the primary index watcher performs a file-size check and still reacts, so read-only storage stays in sync for runtime propagation.
+- Non-primary index/partition watchers may ignore ambiguous missing-filename events and can temporarily lag until the next explicit filename event or on-demand read sync.
+
+This design keeps watch fan-out low, preserves canonical stream names across platforms, and avoids expensive global filesystem checks on the hot path.
+
+---
+
 ## Technical Decisions
 
 ### Synchronous API

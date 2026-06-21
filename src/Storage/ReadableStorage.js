@@ -4,11 +4,12 @@ import events from 'events';
 import { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import { ReadOnly as ReadOnlyIndex } from '../Index.js';
 import { assert, wrapAndCheck, iterate, kWayMerge } from '../utils/util.js';
-import { scanForFiles } from '../utils/fsUtil.js';
+import { resolvePath, scanForFiles } from '../utils/fsUtil.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import IndexMatcher from '../IndexMatcher.js';
 import PartitionPool from '../PartitionPool.js';
+import ReadablePartition from "../Partition/ReadablePartition.js";
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
@@ -78,7 +79,7 @@ class ReadableStorage extends events.EventEmitter {
 
         this.hmac = createHmac(config.hmacSecret);
 
-        this.dataDirectory = path.resolve(config.dataDirectory);
+        this.dataDirectory = resolvePath(config.dataDirectory);
 
         const partitionDefaults = { readBufferSize: DEFAULT_READ_BUFFER_SIZE };
         this.partitionConfig = Object.assign(partitionDefaults, config);
@@ -120,13 +121,13 @@ class ReadableStorage extends events.EventEmitter {
      * @returns void
      */
     initializeIndexes(config) {
-        this.indexDirectory = path.resolve(config.indexDirectory || this.dataDirectory);
+        this.indexDirectory = resolvePath(config.indexDirectory || this.dataDirectory);
 
         this.indexOptions = config.indexOptions;
         this.indexOptions.dataDirectory = this.indexDirectory;
         // Safety precaution to prevent accidentally restricting main index
         delete this.indexOptions.matcher;
-        const { index } = this.createIndex(config.indexFile, this.indexOptions);
+        const { index } = this.createIndex(config.indexFile, Object.assign({}, this.indexOptions, { syncOnMissingWatchFilename: true }));
         this.index = index;
         this.secondaryIndexes = {};
         this.readonlyIndexes = {};
@@ -144,6 +145,24 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
+     * Register a partition by its relative file name if it is not already known.
+     * Shared by the file-watch path and the initial scan so both stay consistent.
+     *
+     * @protected
+     * @param {string} filename
+     * @returns {number} The id of the (now registered) partition.
+     */
+    registerPartitionFile(filename) {
+        const partitionId = ReadablePartition.idFor(filename);
+        if (!this.partitions.has(partitionId)) {
+            const partition = this.createPartition(filename, this.partitionConfig);
+            this.partitions.add(partition.id, partition);
+            this.emit('partition-created', partition.id);
+        }
+        return partitionId;
+    }
+
+    /**
      * Scan partitions and secondary index files; emit 'index-created' for each found index.
      * @param {function} done Called when both scans finish.
      */
@@ -152,8 +171,7 @@ class ReadableStorage extends events.EventEmitter {
         const partitionPattern = new RegExp(`^(${escaped}.*)$`);
         scanForFiles(this.dataDirectory, partitionPattern, (file) => {
             if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
-            const partition = this.createPartition(file, this.partitionConfig);
-            this.partitions.add(partition.id, partition);
+            this.registerPartitionFile(file);
         }, (partErr) => {
             /* c8 ignore next */
             if (partErr) throw partErr;
@@ -167,7 +185,9 @@ class ReadableStorage extends events.EventEmitter {
             }
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
-                this.emit('index-created', name);
+                if (!(name in this.secondaryIndexes)) {
+                    this.emit('index-created', name);
+                }
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
                 /* c8 ignore next */

@@ -7,7 +7,7 @@ import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from '
 import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert, getPropertyAtPath } from './utils/util.js';
-import { ensureDirectory, scanForFiles } from './utils/fsUtil.js';
+import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { buildTypeMatcherFn } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 
@@ -90,7 +90,7 @@ class EventStore extends events.EventEmitter {
             this.typeMatcherFn = null;
         }
 
-        this.storageDirectory = path.resolve(config.storageDirectory || /* istanbul ignore next */ './data');
+        this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
         let defaults = {
             dataDirectory: this.storageDirectory,
             indexDirectory: config.streamsDirectory || path.join(this.storageDirectory, 'streams'),
@@ -130,7 +130,7 @@ class EventStore extends events.EventEmitter {
      */
     initialize(storeName, storageConfig) {
         this.storageConfig = storageConfig;
-        this.streamsDirectory = path.resolve(storageConfig.indexDirectory);
+        this.streamsDirectory = resolvePath(storageConfig.indexDirectory);
         this.storeName = storeName;
         this.consumers = new Map();
 
@@ -139,7 +139,9 @@ class EventStore extends events.EventEmitter {
             : new Storage(storeName, storageConfig);
 
         this.mountStorage(storage, () => {
-            this.checkUnfinishedCommits();
+            if (storageConfig.readOnly !== true) {
+                this.checkUnfinishedCommits();
+            }
             this.emit('ready');
         });
     }

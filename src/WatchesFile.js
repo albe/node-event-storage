@@ -14,7 +14,10 @@ const WatchesFile = Base => class extends Base {
      */
     watchFile() {
         this.stopWatching();
-        this.watcher = new Watcher(this.fileName);
+        const fileFilter = typeof this.watchFileFilter === 'function'
+            ? this.watchFileFilter.bind(this)
+            : null;
+        this.watcher = new Watcher(this.fileName, fileFilter, { rootDirectory: this.dataDirectory });
         this.watcher.on('change', this.onChange.bind(this));
         this.watcher.on('rename', this.onRename.bind(this));
     }

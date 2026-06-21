@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import events from 'events';
 import { assert, alignTo, hash, binarySearch } from '../utils/util.js';
+import { resolvePath } from "../utils/fsUtil.js";
 
 
 
@@ -50,7 +51,7 @@ class ReadablePartition extends events.EventEmitter {
             readBufferSize: DEFAULT_READ_BUFFER_SIZE
         };
         config = Object.assign(defaults, config);
-        this.dataDirectory = path.resolve(config.dataDirectory);
+        this.dataDirectory = resolvePath(config.dataDirectory);
 
         this.name = name;
         this.id = ReadablePartition.idFor(name);

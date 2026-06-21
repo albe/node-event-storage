@@ -2,12 +2,36 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import fsSync from 'fs';
 import path from 'path';
-import EventStore, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
+import EventStoreBase, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
 import Consumer from '../src/Consumer.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const storageDirectory = __dirname + 'data';
+
+const eventstores = [];
+
+class EventStore extends EventStoreBase {
+    constructor(...args) {
+        super(...args);
+        eventstores.push(this);
+    }
+}
+
+function createEventStore(storeName = 'eventstore', config = {}) {
+    if (typeof storeName !== 'string') {
+        config = storeName;
+        storeName = 'eventstore';
+    }
+    return new EventStore(storeName, config);
+}
+
+function createReader(config = {}) {
+    return createEventStore(Object.assign({
+        storageDirectory,
+        readOnly: true
+    }, config));
+}
 
 describe('EventStore', function() {
 
@@ -15,12 +39,20 @@ describe('EventStore', function() {
 
     beforeEach(function () {
         fs.emptyDirSync(storageDirectory);
+        eventstores.length = 0;
     });
 
     afterEach(function () {
-        if (eventstore) {
-            eventstore.close();
+        const closedStores = new Set();
+        for (let i = eventstores.length - 1; i >= 0; i--) {
+            const store = eventstores[i];
+            if (!store || closedStores.has(store)) {
+                continue;
+            }
+            closedStores.add(store);
+            store.close();
         }
+        eventstores.length = 0;
         eventstore = null;
     });
 
@@ -112,7 +144,6 @@ describe('EventStore', function() {
                 eventstore2.on('ready', () => {
                     expect(eventstore2.length).to.be(0);
                     expect(eventstore2.getStreamVersion('foo-bar')).to.be(0);
-                    eventstore2.close();
                     done();
                 });
             });
@@ -236,7 +267,6 @@ describe('EventStore', function() {
                         expect(eventstore2.length).to.be(committedEvents.length);
                         // The secondary stream index for stream-b must also be repaired
                         expect(eventstore2.getStreamVersion('stream-b')).to.be(0);
-                        eventstore2.close();
                         done();
                     });
                 });
@@ -270,7 +300,6 @@ describe('EventStore', function() {
                     for (let event of stream) {
                         expect(event).to.eql(events[i++]);
                     }
-                    readstore.close();
                     done();
                 });
             });
@@ -684,7 +713,6 @@ describe('EventStore', function() {
             readstore.on('stream-available', (streamName) => {
                 if (streamName === 'foo') {
                     expect(readstore.getStreamVersion('foo')).to.be(0);
-                    readstore.close();
                     done();
                 }
             });
@@ -1008,6 +1036,40 @@ describe('EventStore', function() {
 
     describe('hierarchical (slash-separated) streams', function() {
 
+        it('read-only instance recognizes newly created hierarchical streams and subsequent writes', function(done) {
+            eventstore = createEventStore({
+                storageDirectory,
+                storageConfig: { syncOnFlush: true }
+            });
+
+            const readstore = createReader();
+
+            readstore.on('ready', () => {
+                expect(readstore.getStreamVersion('a/b/c')).to.be(-1);
+
+                readstore.storage.once('index-add', (indexName, position, document) => {
+                    expect(indexName).to.be('stream-a/b/c');
+                    expect(position).to.be(1);
+                    expect(document.stream).to.be('a/b/c');
+                    expect(document.payload).to.eql({ val: 1 });
+                    expect(readstore.getStreamVersion('a/b/c')).to.be(1);
+                    const stream = readstore.getEventStream('a/b/c');
+                    expect([...stream]).to.eql([{ val: 1 }]);
+                    done();
+                });
+
+                readstore.once('stream-available', (streamName) => {
+                    expect(streamName).to.be('a/b/c');
+                    expect(readstore.getStreamVersion('a/b/c')).to.be(0);
+                    eventstore.commit('a/b/c', [{ val: 1 }], () => {
+                        eventstore.storage.flush();
+                    });
+                });
+
+                eventstore.createEventStream('a/b/c', () => true);
+            });
+        });
+
         it('persists slash-separated streams across store re-open', function (done) {
             eventstore = new EventStore({
                 storageDirectory
@@ -1092,7 +1154,6 @@ describe('EventStore', function() {
                 readOnly: true
             });
             expect(() => readstore.createEventStream('foo-bar', () => true)).to.throwError();
-            readstore.close();
         });
 
         it('throws when trying to re-create stream', function () {
@@ -1119,7 +1180,6 @@ describe('EventStore', function() {
             });
             readstore.on('ready', () => {
                 expect(() => readstore.deleteEventStream('foo-bar')).to.throwError();
-                readstore.close();
                 done();
             });
         });
@@ -1166,7 +1226,6 @@ describe('EventStore', function() {
             });
             readstore.on('ready', () => {
                 expect(() => readstore.closeEventStream('foo-bar')).to.throwError();
-                readstore.close();
                 done();
             });
         });
@@ -1291,7 +1350,6 @@ describe('EventStore', function() {
                     const stream = eventstore2.getEventStream('foo-bar');
                     expect(stream).to.not.be(false);
                     expect(stream.events.length).to.be(1);
-                    eventstore2.close();
                     done();
                 });
             });
@@ -1322,7 +1380,6 @@ describe('EventStore', function() {
                         const stream = readstore.getEventStream('foo-bar');
                         expect(stream).to.not.be(false);
                         expect(stream.events.length).to.be(1);
-                        readstore.close();
                         done();
                     });
 
@@ -1512,8 +1569,6 @@ describe('EventStore', function() {
             });
             readOnly.on('ready', () => {
                 expect(() => readOnly.preCommit(() => {})).to.throwError();
-                readOnly.close();
-                eventstore = null;
                 done();
             });
         });
@@ -1583,8 +1638,6 @@ describe('EventStore', function() {
             });
             readOnly.on('ready', () => {
                 expect(() => readOnly.on('preCommit', () => {})).to.throwError();
-                readOnly.close();
-                eventstore = null;
                 done();
             });
         });
@@ -1645,8 +1698,6 @@ describe('EventStore', function() {
                 const stream = readOnly.getEventStream('foo');
                 Array.from(stream);
                 expect(calls).to.have.length(1);
-                readOnly.close();
-                eventstore = null;
                 done();
             });
         });

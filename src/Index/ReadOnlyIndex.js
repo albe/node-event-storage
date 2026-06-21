@@ -13,6 +13,19 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
      */
     constructor(name, options) {
         super(name, options);
+        this.syncOnMissingWatchFilename = !!options?.syncOnMissingWatchFilename;
+    }
+
+    /**
+     * @private
+     * @param {string} filename
+     * @returns {boolean}
+     */
+    watchFileFilter(filename) {
+        if (!filename) {
+            return this.syncOnMissingWatchFilename && this.readFileLength() !== this.data.length;
+        }
+        return filename === this.name;
     }
 
     /**

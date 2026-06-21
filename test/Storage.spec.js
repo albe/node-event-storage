@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
 import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM } from '../src/Storage.js';
-import { matches } from '../src/Storage/ReadableStorage.js';
+import { matches } from '../src/utils/metadataUtil.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
 //import lz4 from 'lz4';
@@ -1271,6 +1271,47 @@ describe('Storage', function() {
             storage.flush();
         });
 
+        it('delivers runtime appends to many new partitions without crashing', function(done){
+            // on Windows a long write streak can lead to losing file watch events, so we check for robustness against that
+            const RACE_CONDITION_WRITES = 100;
+            const RACE_CONDITION_TIMEOUT_MS = 1800;
+            storage = createStorage({
+                syncOnFlush: true,
+                indexOptions: { flushDelay: 0 },
+                partitioner: (document) => document.type
+            });
+            storage.open();
+
+            let received = 0;
+            const timer = setTimeout(() => {
+                reader.close();
+                done(new Error(`Timeout while waiting for ${RACE_CONDITION_WRITES} appends, got ${received}`));
+            }, RACE_CONDITION_TIMEOUT_MS);
+
+            let reader = createReader();
+            reader.open();
+            reader.on('error', (error) => {
+                clearTimeout(timer);
+                reader.close();
+                done(error);
+            });
+            reader.on('wrote', (doc, entry) => {
+                received++;
+                expect(doc).to.eql({ foo: entry.number, type: `p-${entry.number}` });
+                expect(reader.partitions.has(entry.partition)).to.be(true);
+                if (received === RACE_CONDITION_WRITES) {
+                    clearTimeout(timer);
+                    reader.close();
+                    done();
+                }
+            });
+
+            for (let i = 1; i <= RACE_CONDITION_WRITES; i++) {
+                storage.write({ foo: i, type: `p-${i}` });
+            }
+            storage.flush();
+        });
+
         it('updates secondary indexes when writer appends', function(done){
             storage = createStorage({ syncOnFlush: true });
             storage.open();
@@ -1436,6 +1477,28 @@ describe('Storage', function() {
                 reader.close();
                 done();
             }, 5);
+        });
+
+        it('delivers a runtime append into a not-yet-registered partition without crashing', function(done){
+            // Reproduces the race where the index 'append' watch event arrives before the
+            // partition-creation watch event has registered the new partition. We simulate the
+            // pending partition-creation event by disabling the storage-file watch path, forcing
+            // the index-append path to register the partition on demand.
+            storage = createStorage({ syncOnFlush: true, partitioner: (document) => document.type });
+            storage.open();
+
+            let reader = createReader();
+            reader.onStorageFileChanged = () => {};
+            reader.open();
+            reader.on('wrote', (doc, entry, position) => {
+                expect(doc).to.eql({ foo: 1, type: 'one' });
+                expect(reader.partitions.has(entry.partition)).to.be(true);
+                reader.close();
+                done();
+            });
+
+            storage.write({ foo: 1, type: 'one' });
+            storage.flush();
         });
 
         it('can be opened and closed multiple times', function(){

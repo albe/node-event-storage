@@ -66,11 +66,12 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * @inheritDoc
      * Acquires the write lock synchronously.
      * For LOCK_RECLAIM, removes any orphaned lock before trying to acquire our own; torn-write
      * repair runs after the primary index is open, before `'opened'` is emitted.
      *
+     * @param {function(): void} [callback] Called after indexes open, before `'opened'` is emitted.
+     *   Can be used as a synchronous alternative to listening to the `'opened'` event.
      * @returns {boolean}
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
