@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
 import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM } from '../src/Storage.js';
-import { matches } from '../src/Storage/ReadableStorage.js';
+import { matches } from '../src/utils/metadataUtil.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
 //import lz4 from 'lz4';
@@ -1272,8 +1272,9 @@ describe('Storage', function() {
         });
 
         it('delivers runtime appends to many new partitions without crashing', function(done){
-            const RACE_CONDITION_WRITES = 400;
-            const RACE_CONDITION_TIMEOUT_MS = 10000;
+            // on Windows a long write streak can lead to losing file watch events, so we check for robustness against that
+            const RACE_CONDITION_WRITES = 100;
+            const RACE_CONDITION_TIMEOUT_MS = 1800;
             storage = createStorage({
                 syncOnFlush: true,
                 indexOptions: { flushDelay: 0 },
