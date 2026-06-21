@@ -92,6 +92,11 @@ class ReadOnlyStorage extends ReadableStorage {
      * @returns void
      */
     close() {
+        if (this.scanSchedule) {
+            clearTimeout(this.scanSchedule);
+            this.scanSchedule = null;
+        }
+        this.onScanFinished = [];
         if (this.watcher) {
             this.watcher.close();
             this.watcher = null;
