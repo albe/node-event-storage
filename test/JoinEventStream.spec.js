@@ -83,6 +83,11 @@ describe('JoinEventStream', function() {
         expect(fetchedEvents[1]).to.eql(events[1]);
     });
 
+    it('returns no events when a global revision window does not include any event from the joined stream', function() {
+        stream = new JoinEventStream('foo-only', ['foo'], eventstore, 2, 2);
+        expect(stream.events).to.eql([]);
+    });
+
     it('can fetch events from the end only', function(){
         stream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, -2, -1);
         const fetchedEvents = stream.events;
