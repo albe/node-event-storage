@@ -193,15 +193,15 @@ class EventStream extends stream.Readable {
      * @returns {Array<object>}
      */
     get events() {
-        if (this._events instanceof Array) {
-            return this._events;
+        if (this.cachedEvents instanceof Array) {
+            return this.cachedEvents;
         }
-        this._events = [];
+        this.cachedEvents = [];
         let next;
         while ((next = this.next()) !== false) {
-            this._events.push(next.payload);
+            this.cachedEvents.push(next.payload);
         }
-        return this._events;
+        return this.cachedEvents;
     }
 
     /**
@@ -242,7 +242,7 @@ class EventStream extends stream.Readable {
      */
     reset() {
         this._iterator = null;
-        this._events = null;
+        this.cachedEvents = null;
         return this;
     }
 
@@ -259,7 +259,7 @@ class EventStream extends stream.Readable {
         this.predicate = predicate || null;
         this.rawMatcher = null;
         this._iterator = null;
-        this._events = null;
+        this.cachedEvents = null;
         return this;
     }
 
