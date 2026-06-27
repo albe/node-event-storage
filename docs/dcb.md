@@ -40,6 +40,14 @@ That `matcher` can be either a predicate function or the same object-matcher syn
 
 `query()` also supports raw mode (`query(types, matcher, minRevision, true)`), but raw streaming itself is a general stream-reading feature, not DCB-specific. See [Event Streams -> Reading Streams](streams.md#reading-streams) for the full raw-mode semantics and matcher behavior.
 
+### Implementation detail: selector algebra when tags are indexed as streams
+
+The important DCB concept is `types` + `tags` selection semantics. How this is executed is an implementation detail.
+
+If tags are materialized as dedicated streams, DCB items naturally compile to `fromStreams` selector algebra (`OR` across items, `AND` across item tags, `OR` across item types).
+
+If tags are not materialized as streams, the same semantics can be expressed entirely through matcher logic.
+
 ### Step 2 — Build the decision model
 
 ```javascript
@@ -89,11 +97,15 @@ const store = new EventStore('my-store', {
 
 `typeAccessor` accepts a dot-notation path string (e.g. `'type'`, `'meta.kind'`) pointing to the event type field, which also enables faster index routing. For non-standard event layouts a function `(event) => string` can be used instead.
 
+Type stream names currently map directly to event types (for example `CourseCreated`), without a `type:` prefix.
+
 When configured, `query()` treats a missing type stream as empty rather than throwing — a type that has never been committed yet is simply an empty result.
 
 > **Without `typeAccessor`**, `query()` throws if a listed type stream does not exist. You must create it first with `createEventStream()`, or use type-named entity streams (e.g. `commit('OrderPlaced', ...)`).
 
 > **New stores only**: type indexes are built with `reindex=false` — they only cover events committed *after* the index was first created. Always configure `typeAccessor` from the beginning if you intend to use `query()`.
+
+Tag streams are optional. DCB queries can be implemented without any tag streams by using matcher logic only.
 
 ---
 
@@ -150,7 +162,20 @@ queryItems = [
 
 An event matches when **any** item matches it: the event's type must be in that item's `types` **and** the event must carry **all** of that item's tags.
 
-In node-event-storage this is expressed today using the `matcher` function. Pass the union of all types, and encode the per-item logic in the matcher:
+Equivalent selector intent (when tags are represented as streams):
+
+- query level (`items`): `OR`
+- per-item `tags`: `AND`
+- per-item `types`: `OR`
+
+```javascript
+anyOf(
+    allOf('course:jdsj4', anyOf('CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse')),
+    allOf('student:gfh3j', anyOf('StudentCreated', 'StudentSubscribedToCourse'))
+);
+```
+
+In node-event-storage, this can be expressed without tag streams by using the `matcher` function. Pass the union of all types, and encode per-item tag logic in the matcher:
 
 ```javascript
 const courseId  = 'course:jdsj4';
@@ -167,5 +192,20 @@ const { stream, condition } = store.query(
 );
 ```
 
-The type membership check in the matcher duplicates what is already expressed in the `types` array — this is a current limitation. Future versions may introduce tag-based secondary indexes and a native query-item format to remove this duplication.
+## Choosing Between Matcher-Only and Tag Streams
+
+Both approaches are valid and can coexist.
+
+- **Matcher-only**: no additional tag indexes to maintain; lower write amplification.
+- **Tag streams**: more index writes per commit (one extra index write per configured tag stream), but can reduce read-time misses and deserialization/evaluation overhead when tag cardinality is high.
+
+Rule of thumb:
+
+- higher write load / lower read selectivity pressure -> matcher-only is often better,
+- lower write load / high tag diversity with many matcher misses -> tag streams are often better.
+
+Future direction:
+
+- automatic tag-stream creation may become an optional config,
+- selective/manual creation for specific high-value tags should stay possible.
 

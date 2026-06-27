@@ -240,12 +240,21 @@ Remove a previously registered listener.
 eventstore.fromStreams(streamName, streamNames [, minRevision [, maxRevision [, predicate [, raw]]]]) → EventStream
 ```
 
-Create a virtual `EventStream` by joining the listed streams in sequence-number order.
+Create a virtual stream from selected streams.
+
+- Selector arrays are evaluated with alternating operators by depth:
+  - depth 0: `OR`
+  - depth 1: `AND`
+  - depth 2: `OR`
+  - ...
+- `['a', 'b']` means `a OR b`.
+- `[['a', 'b']]` means `a AND b`.
+- `[['tag1', 'tag2', ['typeA', 'typeB']], ['tag3', 'tag4']]` means `(tag1 AND tag2 AND (typeA OR typeB)) OR (tag3 AND tag4)`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `streamName` | `string` | Transient name for the joined stream. |
-| `streamNames` | `Array<string>` | Names of the streams to join. |
+| `streamName` | `string` | Transient name for the resulting virtual stream. |
+| `streamNames` | `Array<string\|Array>` | Stream selector tree (strings as leaves, arrays as nested groups). |
 
 Throws if any named stream does not exist.
 
