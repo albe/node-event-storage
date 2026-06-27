@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.0
+
+- Extended `JoinEventStream` with nested selector-algebra composition (`OR` at depth 0, `AND` at depth 1, then alternating), available through `fromStreams`.
+- Updated DCB documentation to describe `types`/`tags` semantics with optional tag-stream indexing and matcher-only execution trade-offs.
+
 ## 1.3.4
 
 - Fix edge case in JoinStream when range not inside selected streams

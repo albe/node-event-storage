@@ -226,6 +226,27 @@ for (const event of joined) {
 }
 ```
 
+`fromStreams` accepts a selector tree with alternating operators by depth:
+
+- depth 0: `OR`
+- depth 1: `AND`
+- depth 2: `OR`
+- ...
+
+```javascript
+// OR
+eventstore.fromStreams('or-stream', ['order-42', 'order-99']);
+
+// AND
+eventstore.fromStreams('and-stream', [['order-42', 'payment-42']]);
+
+// (tag-a AND tag-b AND (type-created OR type-updated)) OR (tag-c AND tag-d)
+eventstore.fromStreams('selector-stream', [
+    ['tag-a', 'tag-b', ['type-created', 'type-updated']],
+    ['tag-c', 'tag-d']
+]);
+```
+
 The result is not persisted and cannot be used with consumers. For frequently-needed joins, create a permanent derived stream with `createStream` instead.
 
 ## Stream Categories

@@ -10,7 +10,7 @@ This page describes the technical implementation and architecture of the `node-e
 |------------------|------|
 | `EventStore.js` | Public API facade — manages streams, commits, consumers, and concurrency |
 | `EventStream.js` | Iterable / Node.js Readable wrapper around a positional index |
-| `JoinEventStream.js` | Merges several `EventStream` instances into one globally-ordered stream |
+| `JoinEventStream.js` | Evaluates nested stream selectors (alternating OR/AND by depth) into one globally-ordered virtual stream |
 | `Consumer.js` | Durable event consumer with at-least-once / exactly-once delivery semantics |
 | `Watcher.js` | Reference-counting singleton that watches a directory for file-system changes |
 | `WatchesFile.js` | Mixin that wires a file to a `Watcher` instance and re-reads it on change |
@@ -106,7 +106,7 @@ graph TD
 
 ### JoinEventStream
 
-`JoinEventStream` merges several `EventStream` instances into a single globally-ordered stream by always yielding the event with the lowest sequence number across all inputs — a k-way merge. Used to build category streams and cross-aggregate projections.
+`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, then `OR`, ...), using index set operations (`union`/`intersect`) before reading documents. Used by `EventStore.fromStreams()` for cross-stream and DCB-compiled selector queries.
 
 ### Consumer
 

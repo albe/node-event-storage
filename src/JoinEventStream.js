@@ -1,97 +1,179 @@
 import EventStream from './EventStream.js';
-import { assert, kWayMerge } from './utils/util.js';
+import { assert, iterate } from './utils/util.js';
+import { union, intersect } from './utils/indexUtil.js';
 import { normalizeRevision } from './utils/apiHelpers.js';
 
-/** Reusable sentinel used for missing or empty per-stream iterators. */
-const emptyIterator = Object.freeze({ next() { return { done: true }; } });
-
 /**
- * An event stream is a simple wrapper around an iterator over storage documents.
- * It implements a node readable stream interface.
+ * JoinEventStream is a virtual stream over one or multiple physical stream indexes.
+ *
+ * It is the canonical implementation behind `EventStore.fromStreams(...)` and supports
+ * nested selector algebra with alternating operators by depth:
+ *
+ * - depth 0 (top-level array): OR
+ * - depth 1: AND
+ * - depth 2: OR
+ * - ... alternating by depth parity
+ *
+ * Flat arrays (e.g. `['a', 'b']`) therefore keep the legacy join semantics (OR).
+ *
+ * @extends EventStream
  */
 class JoinEventStream extends EventStream {
 
     /**
-     * @param {string} name The name of the stream.
-     * @param {Array<string>} streams The name of the streams to join together.
-     * @param {EventStore} eventStore The event store to get the stream from.
-     * @param {number} [minRevision] The 1-based minimum revision to include in the events (inclusive).
-     * @param {number} [maxRevision] The 1-based maximum revision to include in the events (inclusive).
-     * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
-     * @param {boolean} [raw=false] If true, emit NDJSON Buffers.
+     * @param {string} name The name of this virtual stream.
+     * @param {Array<string|Array>} selector Stream selector as flat or nested arrays.
+     * @param {EventStore} eventStore The event store instance.
+     * @param {number} [minRevision=1] Global minimum revision (inclusive).
+     * @param {number} [maxRevision=-1] Global maximum revision (inclusive).
+     * @param {function|object|null} [predicate] Optional matcher (same semantics as EventStream).
+     * @param {boolean} [raw=false] If true, emit NDJSON buffers.
      */
-    constructor(name, streams, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
+    constructor(name, selector, eventStore, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
         super(name, eventStore, minRevision, maxRevision, predicate, raw);
-        assert(streams instanceof Array && streams.length > 0, `Invalid list of streams supplied to JoinStream ${name}.`);
+        assert(Array.isArray(selector) && selector.length > 0, `Invalid selector supplied to JoinEventStream ${name}.`);
 
+        this.eventStore = eventStore;
+        this.selector = this.normalizeSelector(selector);
         this.streamIndex = eventStore.storage.index;
-        // Translate revisions to index numbers (1-based) and wrap around negatives
         this.minRevision = normalizeRevision(minRevision, eventStore.length);
         this.maxRevision = normalizeRevision(maxRevision, eventStore.length);
-        this.fetch = function() {
-            return streams.map(streamName => {
-                const streamIndex = eventStore.streams[streamName]?.index;
-                if (!streamIndex || streamIndex.length === 0) {
-                    return emptyIterator;
-                }
-                const ascending = this.minRevision <= this.maxRevision;
-                const from = streamIndex.find(this.minRevision, ascending);
-                const until = streamIndex.find(this.maxRevision, !ascending);
-                if (
-                    from === 0 ||
-                    until === 0 ||
-                    (ascending ? from > until : from < until)
-                ) {
-                    // find() returns 0 when the requested revision is outside the stream's range
-                    // (e.g. minRevision > all entries, or maxRevision < all entries).
-                    return emptyIterator;
-                }
-                // Raw mode: get { buffer, time64, sequenceNumber } for binary-header ordering.
-                // Object mode: storage deserializes for us and we order by metadata.commitId.
-                return eventStore.storage.readRange(from, until, streamIndex, this.raw);
-            });
-        }
+        this.version = this.streamIndex.length;
+
+        this._combinedRanges = null;
+
+        this.fetch = () => this.iterateDocuments();
         this._iterator = null;
     }
 
     /**
-     * @returns {Generator<object>}
+     * Normalize selector shape to nested arrays and validate leaf types.
+     * Missing streams are allowed here to keep direct JoinEventStream construction compatible;
+     * they are treated as empty ranges.
+     *
+     * @private
+     * @param {Array<string|Array>} selector
+     * @returns {Array<string|Array>}
      */
-    createMergedIterator() {
-        const ascending = this.minRevision <= this.maxRevision;
-        const raw = this.raw;
-        return kWayMerge(
-            this.fetch(),
-            entry => raw ? entry.sequenceNumber : entry.metadata.commitId,
-            ascending
-        );
+    normalizeSelector(selector) {
+        const normalized = [];
+        for (const node of selector) {
+            if (typeof node === 'string') {
+                assert(node.length > 0, 'Stream names must be non-empty strings.');
+                normalized.push(node);
+                continue;
+            }
+
+            assert(Array.isArray(node) && node.length > 0, 'Each selector node must be a non-empty stream name array or string.');
+            normalized.push(this.normalizeSelector(node));
+        }
+        return normalized;
     }
 
     /**
-     * Returns the next event in merge order.
+     * Resolve and cache the combined index-entry ranges for the full selector.
      *
-     * In raw mode: returns `{ buffer, time64, sequenceNumber }` from the binary header — no JSON
-     * deserialization. In object mode: returns a deserialized `{ stream, payload, metadata }` document
-     * produced by the storage layer.
-     * @returns {object|false} The next event, or `false` when the stream is exhausted.
+     * @private
+     * @returns {Array<Array<number>>}
      */
-    next() {
-        if (!this._iterator) {
-            this._iterator = this.createMergedIterator();
+    resolveCombinedRanges() {
+        if (this._combinedRanges) {
+            return this._combinedRanges;
         }
-        while (true) {
-            const step = this._iterator.next();
-            if (step.done) {
-                return false;
-            }
-            const next = step.value;
 
-            if (this.matchesPredicate(next)) {
-                return next;
+        this._combinedRanges = this.resolveSelectorRanges(this.selector);
+        return this._combinedRanges;
+    }
+
+    /**
+     * Resolve one selector node into a sorted index-entry range.
+     *
+     * @private
+     * @param {string|Array<string|Array>} selectorNode
+     * @param {number} [depth=0]
+     * @returns {Array<Array<number>>}
+     */
+    resolveSelectorRanges(selectorNode, depth = 0) {
+        if (typeof selectorNode === 'string') {
+            const index = this.eventStore.streams[selectorNode]?.index;
+            return this.resolveIndexRange(index);
+        }
+
+        const childRanges = selectorNode.map(node => this.resolveSelectorRanges(node, depth + 1));
+        return depth % 2 === 0 ? union(...childRanges) : intersect(...childRanges);
+    }
+
+    /**
+     * Resolve one stream index to the global revision-bounded entry range.
+     *
+     * @private
+     * @param {object|undefined} index
+     * @returns {Array<Array<number>>}
+     */
+    resolveIndexRange(index) {
+        if (!index || index.length === 0) {
+            return [];
+        }
+
+        const ascending = this.minRevision <= this.maxRevision;
+        const from = index.find(this.minRevision, ascending);
+        const until = index.find(this.maxRevision, !ascending);
+        if (
+            from === 0 ||
+            until === 0 ||
+            (ascending ? from > until : from < until)
+        ) {
+            return [];
+        }
+
+        const rangeFrom = ascending ? from : until;
+        const rangeUntil = ascending ? until : from;
+        return index.range(rangeFrom, rangeUntil) || [];
+    }
+
+    /**
+     * Iterate matching index entries in requested direction.
+     *
+     * @private
+     * @returns {Generator<Array<number>>}
+     */
+    *iterateEntries() {
+        const entries = this.resolveCombinedRanges();
+        const forwards = this.minRevision <= this.maxRevision;
+        yield* iterate(entries, forwards);
+    }
+
+    /**
+     * Iterate storage documents lazily from combined index entries.
+     *
+     * @private
+     * @returns {Generator<object|{ buffer: Buffer, time64: number, sequenceNumber: number }>}
+     */
+    *iterateDocuments() {
+        const forwards = this.minRevision <= this.maxRevision;
+        for (const entry of this.iterateEntries()) {
+            const event = this.eventStore.storage.readFrom(
+                entry.partition,
+                entry.position,
+                entry.size,
+                this.raw,
+                !forwards
+            );
+            if (event) {
+                yield event;
             }
         }
     }
 
+    /**
+     * Reset fetch state and cached selector ranges when stream boundaries changed.
+     *
+     * @returns {JoinEventStream}
+     */
+    reset() {
+        this._combinedRanges = null;
+        return super.reset();
+    }
 }
 
 export default JoinEventStream;

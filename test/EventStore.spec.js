@@ -906,6 +906,67 @@ describe('EventStore', function() {
 
     });
 
+    describe('fromStreams (combined selector fallback)', function() {
+
+        it('treats a flat array as OR across streams', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            eventstore.commit('a', [{ key: 1 }]);
+            eventstore.commit('x', [{ key: 2 }]);
+            eventstore.commit('a', [{ key: 3 }]);
+
+            const combined = eventstore.fromStreams('a-or-x', ['a', 'x']);
+            expect(combined.events.map(event => event.key)).to.eql([1, 2, 3]);
+        });
+
+        it('treats a nested single group as AND', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            eventstore.commit('a', [{ key: 1 }]);
+            eventstore.commit('x', [{ key: 2 }]);
+            eventstore.commit('a', [{ key: 3 }]);
+
+            const combined = eventstore.fromStreams('a-and-all', [['a', '_all']]);
+            expect(combined.events.map(event => event.key)).to.eql([1, 3]);
+        });
+
+        it('supports OR groups nested below one AND level', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            eventstore.commit('a', [{ key: 1 }]);
+            eventstore.commit('b', [{ key: 2 }]);
+            eventstore.commit('c', [{ key: 3 }]);
+
+            const combined = eventstore.fromStreams('a-or-b', [[['a', 'b']]]);
+            expect(combined.events.map(event => event.key)).to.eql([1, 2]);
+        });
+
+        it('applies global min/max revision window before combining index ranges', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            eventstore.commit('a', [{ key: 1 }]);
+            eventstore.commit('x', [{ key: 2 }]);
+            eventstore.commit('a', [{ key: 3 }]);
+            eventstore.commit('a', [{ key: 4 }]);
+
+            const limited = eventstore.fromStreams('a-and-all-limited', [['a', '_all']], 2, 3);
+            expect(limited.events.map(event => event.key)).to.eql([3]);
+        });
+
+        it('keeps OR ordering when iterating backwards', function() {
+            eventstore = new EventStore({ storageDirectory });
+
+            eventstore.commit('a', [{ key: 1 }]);
+            eventstore.commit('x', [{ key: 2 }]);
+            eventstore.commit('b', [{ key: 3 }]);
+            eventstore.commit('a', [{ key: 4 }]);
+
+            const combined = eventstore.fromStreams('combined-a-or-b-reverse', ['a', 'b'], -1, 1);
+            expect([...combined].map(event => event.key)).to.eql([4, 3, 1]);
+        });
+
+    });
+
     describe('getEventStreamForCategory', function() {
 
         it('throws when not specifying category without streams', function () {

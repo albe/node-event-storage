@@ -25,6 +25,17 @@ const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 class OptimisticConcurrencyError extends Error {}
 
+function assertSelectorStreamsExist(streams, streamMap) {
+    for (const node of streams) {
+        if (typeof node === 'string') {
+            assert(node in streamMap, `Stream "${node}" does not exist.`);
+            continue;
+        }
+        assert(Array.isArray(node) && node.length > 0, 'Each selector node must be a non-empty stream name array or string.');
+        assertSelectorStreamsExist(node, streamMap);
+    }
+}
+
 /**
  * An accept condition that captures the global event-log position at the time a {@link EventStore#query}
  * call was made.  Pass it as the `expectedVersion` argument to {@link EventStore#commit} to enforce
@@ -632,16 +643,18 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Create a virtual event stream from existing streams by joining them.
+     * Create a virtual event stream from existing streams.
+     *
+     * Uses selector algebra with alternating operator levels (depth 0 = OR, depth 1 = AND, ...).
      *
      * @param {string} streamName The (transient) name of the joined stream.
-     * @param {Array<string>} streamNames An array of the stream names to join.
+     * @param {Array<string|Array<string>>} streamNames Stream selector input.
      * @param {number} [minRevision=1] The 1-based minimum revision to include in the events (inclusive).
      * @param {number} [maxRevision=-1] The 1-based maximum revision to include in the events (inclusive).
      * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
      * @param {boolean} [raw=false] If true, return NDJSON buffers.
-     * @returns {EventStream} The joined event stream.
-     * @throws {Error} if any of the streams doesn't exist.
+     * @returns {EventStream|JoinEventStream}
+     * @throws {Error} if any selected stream doesn't exist.
      */
     fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
         ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
@@ -651,10 +664,7 @@ class EventStore extends events.EventEmitter {
             return new EventStream(streamName, this);
         }
 
-        for (let stream of streamNames) {
-            assert(stream in this.streams, `Stream "${stream}" does not exist.`);
-        }
-
+        assertSelectorStreamsExist(streamNames, this.streams);
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate, raw);
     }
 
