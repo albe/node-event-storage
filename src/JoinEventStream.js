@@ -86,6 +86,25 @@ class JoinEventStream extends EventStream {
     }
 
     /**
+     * Optimize a selector tree at the given depth.
+     * Currently, optimizes away occurrences of _all.
+     *
+     * @private
+     * @param {Array<string|Array>} selectorNode
+     * @param {number} depth
+     * @returns {Array<Array<number>>|string}
+     */
+    optimize(selectorNode, depth) {
+        if (depth % 2 !== 0) {
+            return selectorNode.filter(node => node !== '_all');
+        }
+        if (selectorNode.some(node => node === '_all')) {
+            return '_all';
+        }
+        return selectorNode;
+    }
+
+    /**
      * Resolve one selector node into a sorted index-entry range.
      *
      * @private
@@ -98,6 +117,7 @@ class JoinEventStream extends EventStream {
             const index = this.eventStore.streams[selectorNode]?.index;
             return this.resolveIndexRange(index);
         }
+        selectorNode = this.optimize(selectorNode, depth);
 
         const childRanges = selectorNode.map(node => this.resolveSelectorRanges(node, depth + 1));
         return depth % 2 === 0 ? union(...childRanges) : intersect(...childRanges);
