@@ -1,6 +1,10 @@
 import expect from 'expect.js';
 import Entry from '../src/IndexEntry.js';
-import { intersect, union } from '../src/utils/indexUtil.js';
+import {
+    intersect,
+    union,
+    normalizeSelector
+} from '../src/utils/indexUtil.js';
 
 function createEntry(number, position = number * 100, size = 10, partition = Math.floor(number / 10)) {
     return new Entry(number, position, size, partition);
@@ -8,13 +12,13 @@ function createEntry(number, position = number * 100, size = 10, partition = Mat
 
 describe('indexUtil', function() {
 
-    describe('union', function() {
+    describe('union', function () {
 
-        it('returns empty when called without ranges', function() {
+        it('returns empty when called without ranges', function () {
             expect(union()).to.eql([]);
         });
 
-        it('returns a shallow copy for a single range', function() {
+        it('returns a shallow copy for a single range', function () {
             const range = [createEntry(1), createEntry(2)];
             const result = union(range);
 
@@ -22,7 +26,7 @@ describe('indexUtil', function() {
             expect(result).not.to.be(range);
         });
 
-        it('returns the sorted union of multiple ranges without duplicates', function() {
+        it('returns the sorted union of multiple ranges without duplicates', function () {
             const merged = union(
                 [createEntry(1), createEntry(3), createEntry(5)],
                 [createEntry(2), createEntry(3), createEntry(6)],
@@ -32,7 +36,7 @@ describe('indexUtil', function() {
             expect(merged.map(entry => entry.number)).to.eql([1, 2, 3, 4, 5, 6, 7]);
         });
 
-        it('keeps the left entry when duplicate numbers exist in both ranges', function() {
+        it('keeps the left entry when duplicate numbers exist in both ranges', function () {
             const left = createEntry(4, 400, 10, 1);
             const right = createEntry(4, 999, 99, 9);
             const merged = union([left], [right]);
@@ -41,7 +45,7 @@ describe('indexUtil', function() {
             expect(merged[0]).to.be(left);
         });
 
-        it('supports chaining with returned arrays', function() {
+        it('supports chaining with returned arrays', function () {
             const merged = union(
                 union([createEntry(1), createEntry(3)], [createEntry(2), createEntry(3)]),
                 [createEntry(3), createEntry(4)]
@@ -50,7 +54,7 @@ describe('indexUtil', function() {
             expect(merged.map(entry => entry.number)).to.eql([1, 2, 3, 4]);
         });
 
-        it('handles empty ranges inside variadic input', function() {
+        it('handles empty ranges inside variadic input', function () {
             const merged = union(
                 [],
                 [createEntry(2), createEntry(4)],
@@ -62,13 +66,13 @@ describe('indexUtil', function() {
 
     });
 
-    describe('intersect', function() {
+    describe('intersect', function () {
 
-        it('returns empty when called without ranges', function() {
+        it('returns empty when called without ranges', function () {
             expect(intersect()).to.eql([]);
         });
 
-        it('returns empty when any range is empty', function() {
+        it('returns empty when any range is empty', function () {
             const selected = intersect(
                 [createEntry(1), createEntry(2)],
                 [],
@@ -78,7 +82,7 @@ describe('indexUtil', function() {
             expect(selected).to.eql([]);
         });
 
-        it('returns a shallow copy for a single range', function() {
+        it('returns a shallow copy for a single range', function () {
             const range = [createEntry(10), createEntry(20)];
             const result = intersect(range);
 
@@ -86,7 +90,7 @@ describe('indexUtil', function() {
             expect(result).not.to.be(range);
         });
 
-        it('returns only entries that occur in every range', function() {
+        it('returns only entries that occur in every range', function () {
             const selected = intersect(
                 [createEntry(1), createEntry(3), createEntry(5), createEntry(7)],
                 [createEntry(2), createEntry(3), createEntry(5), createEntry(8)],
@@ -96,7 +100,7 @@ describe('indexUtil', function() {
             expect(selected.map(entry => entry.number)).to.eql([3, 5]);
         });
 
-        it('works independent of input order and range sizes', function() {
+        it('works independent of input order and range sizes', function () {
             const selected = intersect(
                 [createEntry(1), createEntry(2), createEntry(3), createEntry(4), createEntry(5), createEntry(6)],
                 [createEntry(3), createEntry(4)],
@@ -106,7 +110,7 @@ describe('indexUtil', function() {
             expect(selected.map(entry => entry.number)).to.eql([3, 4]);
         });
 
-        it('returns empty when ranges are disjoint', function() {
+        it('returns empty when ranges are disjoint', function () {
             const selected = intersect(
                 [createEntry(1), createEntry(2)],
                 [createEntry(3), createEntry(4)],
@@ -116,7 +120,7 @@ describe('indexUtil', function() {
             expect(selected).to.eql([]);
         });
 
-        it('supports chaining merge and select operations', function() {
+        it('supports chaining merge and select operations', function () {
             const selected = intersect(
                 union([createEntry(1), createEntry(4)], [createEntry(2), createEntry(4)]),
                 union([createEntry(2), createEntry(4)], [createEntry(3), createEntry(4)]),
@@ -128,9 +132,9 @@ describe('indexUtil', function() {
 
     });
 
-    describe('immutability guarantees', function() {
+    describe('immutability guarantees', function () {
 
-        it('does not mutate source arrays when intersect sorts ranges by length', function() {
+        it('does not mutate source arrays when intersect sorts ranges by length', function () {
             const a = [createEntry(1), createEntry(2), createEntry(3)];
             const b = [createEntry(2)];
             const c = [createEntry(2), createEntry(3)];
@@ -144,4 +148,37 @@ describe('indexUtil', function() {
 
     });
 
+    describe('normalizeSelector', function () {
+
+        it('reduces OR branches with _all to _all', function () {
+            const normalized = normalizeSelector(['a', '_all', 'b']);
+            expect(normalized).to.eql('_all');
+        });
+
+        it('keeps single nested _all', function () {
+            const normalized = normalizeSelector([['_all']]);
+            expect(normalized).to.eql('_all');
+        });
+
+        it('keeps a single nested AND group intact', function () {
+            const normalized = normalizeSelector([['a', 'b']]);
+            expect(normalized).to.eql([['a', 'b']]);
+        });
+
+        it('flattens two single-child wrapper levels around a multi-element group', function () {
+            const normalized = normalizeSelector([[['a', 'b']]]);
+            expect(normalized).to.eql(['a', 'b']);
+        });
+
+        it('normalizes [a, [[[x]]], b] to [a, [x], b]', function () {
+            const normalized = normalizeSelector(['a', [[['x']]], 'b']);
+            expect(normalized).to.eql(['a', ['x'], 'b']);
+        });
+
+        it('normalizes [a, [[x]], b] to [a, x, b]', function () {
+            const normalized = normalizeSelector(['a', [['x']], 'b']);
+            expect(normalized).to.eql(['a', 'x', 'b']);
+        });
+
+    });
 });
