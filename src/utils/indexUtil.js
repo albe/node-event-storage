@@ -141,11 +141,59 @@ function intersect(...ranges) {
 }
 
 /**
- * Normalize selector shape for optimal evaluation.
+ * Compute the difference of two sorted index-entry ranges by global number,
+ * that is all entries in `source`, that are not also in `exclude`.
+ * R = S \ E
+ * Assumes each range is sorted and contains no duplicates (by entry number).
  *
- * @param {string|Array<string|Array>} selector
+ * @param {Array<Array<number>>} source
+ * @param {Array<Array<number>>} exclude
+ * @returns {Array<Array<number>>}
+ */
+function difference(source, exclude) {
+    if (source.length === 0) {
+        return [];
+    }
+    if (exclude.length === 0) {
+        return source.slice();
+    }
+
+    const selected = new Array(source.length);
+    let sourceIndex = 0;
+    let excludedIndex = 0;
+    let count = 0;
+
+    while (sourceIndex < source.length && excludedIndex < exclude.length) {
+        const sourceEntry = source[sourceIndex];
+        const excludedEntry = exclude[excludedIndex];
+        const sourceNumber = sourceEntry[0];
+        const excludedNumber = excludedEntry[0];
+
+        if (sourceNumber < excludedNumber) {
+            selected[count++] = sourceEntry;
+            sourceIndex++;
+        } else if (excludedNumber < sourceNumber) {
+            excludedIndex++;
+        } else {
+            sourceIndex++;
+            excludedIndex++;
+        }
+    }
+
+    while (sourceIndex < source.length) {
+        selected[count++] = source[sourceIndex++];
+    }
+
+    selected.length = count;
+    return selected;
+}
+
+/**
+ * Normalize selector shape and apply structural optimizations (_all and single-node flattening).
+ *
+ * @param {string|Array<string|Array>|object} selector
  * @param {number} [depth=0]
- * @returns {string|Array<string|Array>}
+ * @returns {string|Array<string|Array>|object}
  */
 function normalizeSelector(selector, depth = 0) {
     if (typeof selector === 'string') {
@@ -153,9 +201,64 @@ function normalizeSelector(selector, depth = 0) {
         return selector;
     }
 
-    assert(Array.isArray(selector), 'Selector must be a string or an array.');
+    if (selector && typeof selector === 'object' && !Array.isArray(selector) && selector.difference) {
+        assert(Array.isArray(selector.difference) && selector.difference.length === 2, 'difference must be an array [source, exclude].');
+        const [source, exclude] = selector.difference;
+        return optimizeSelectorDifference(
+            normalizeSelector(source, 0),
+            normalizeSelector(exclude, 0)
+        );
+    }
+
+    assert(Array.isArray(selector), 'Selector must be a string, an array, or a difference object.');
     const normalized = selector.map(node => normalizeSelector(node, depth + 1));
     return optimizeSelectorNode(normalized, depth);
+}
+
+function optimizeSelectorDifference(source, exclude) {
+    if (Array.isArray(source) && source.length === 0) {
+        return [];
+    }
+    if (Array.isArray(exclude) && exclude.length === 0) {
+        return source;
+    }
+    if (exclude === '_all' || source === exclude) {
+        return [];
+    }
+    if (typeof source === 'string' && Array.isArray(exclude) && exclude.includes(source)) {
+        return [];
+    }
+
+    return {
+        difference: [source, exclude]
+    };
+}
+
+function optimizeSelectorAndNode(selectorNode) {
+    const filtered = selectorNode.filter(node => node !== '_all');
+    if (filtered.length < 2) {
+        return filtered;
+    }
+
+    // ['a', 'b', NOT(X) = { difference: ['_all', X] }] -> { difference: [[['a','b']], X] }
+    const positives = [];
+    const excludes = [];
+    for (const node of filtered) {
+        const diff = !Array.isArray(node) && node.difference?.[0];
+        if (diff === '_all') {
+            excludes.push(node.difference[1]);
+        } else {
+            positives.push(node);
+        }
+    }
+
+    if (positives.length === 0 || excludes.length === 0) {
+        return filtered;
+    }
+
+    const source = positives.length === 1 ? positives[0] : [positives];
+    const exclude = excludes.length === 1 ? excludes[0] : excludes;
+    return optimizeSelectorDifference(source, exclude);
 }
 
 /**
@@ -187,7 +290,7 @@ function optimizeSelectorNode(selectorNode, depth) {
     }
 
     if (depth % 2 !== 0) {
-        return selectorNode.filter(node => node !== '_all');
+        return optimizeSelectorAndNode(selectorNode);
     }
     if (selectorNode.some(node => node === '_all')) {
         return '_all';
@@ -198,5 +301,6 @@ function optimizeSelectorNode(selectorNode, depth) {
 export {
     union,
     intersect,
+    difference,
     normalizeSelector
 };

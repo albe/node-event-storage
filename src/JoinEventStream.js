@@ -1,6 +1,6 @@
 import EventStream from './EventStream.js';
 import { assert, iterate } from './utils/util.js';
-import { union, intersect, normalizeSelector } from './utils/indexUtil.js';
+import {union, intersect, normalizeSelector, difference} from './utils/indexUtil.js';
 import { normalizeRevision } from './utils/apiHelpers.js';
 
 /**
@@ -76,8 +76,16 @@ class JoinEventStream extends EventStream {
             const index = this.eventStore.streams[selectorNode]?.index;
             return this.resolveIndexRange(index);
         }
-        selectorNode = this.optimize(selectorNode, depth);
 
+        if (selectorNode.difference) {
+            const [source, exclude] = selectorNode.difference;
+            return difference(
+                this.resolveSelectorRanges(source, depth),
+                this.resolveSelectorRanges(exclude, depth)
+            );
+        }
+
+        // selectorNode is an array; depth alternation determines operator
         const childRanges = selectorNode.map(node => this.resolveSelectorRanges(node, depth + 1));
         return depth % 2 === 0 ? union(...childRanges) : intersect(...childRanges);
     }

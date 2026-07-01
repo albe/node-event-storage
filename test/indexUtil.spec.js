@@ -185,5 +185,26 @@ describe('indexUtil', function() {
             expect(normalized).to.eql(['a', 'x', 'b']);
         });
 
+        it('optimizes difference when exclude is _all', function () {
+            const normalized = normalizeSelector({difference: ['foo', '_all']});
+            expect(normalized).to.eql([]);
+        });
+
+        it('reduces AND of a selector and difference(_all, x) to difference(a, x)', function () {
+            const normalized = normalizeSelector([['a', {difference: ['_all', 'b']}]]);
+            expect(normalized).to.eql({difference: ['a', 'b']});
+        });
+
+        it('reduces AND with multiple positive selectors and NOT to difference(AND(...), x)', function () {
+            const normalized = normalizeSelector([['a', 'b', {difference: ['_all', 'c']}]]);
+            expect(normalized).to.eql({difference: [[['a', 'b']], 'c']});
+        });
+
+        it('does not apply the same reduction on OR level', function () {
+            const normalized = normalizeSelector(['a', {difference: ['_all', 'b']}]);
+            expect(normalized).to.eql(['a', {difference: ['_all', 'b']}]);
+        });
+
     });
+
 });

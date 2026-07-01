@@ -133,6 +133,42 @@ describe('JoinEventStream', function() {
         expect(stream.events).to.be.eql([]);
     });
 
+    it('keeps a single _all inside one nested level', function() {
+        stream = new JoinEventStream('all-nested', [['_all']], eventstore);
+        expect(stream.events).to.eql(events);
+    });
+
+    it('evaluates { difference: [a, b] } as set difference A \\ B', function() {
+        stream = new JoinEventStream('foo-minus-bar', [{ difference: ['foo', 'bar'] }], eventstore);
+        const result = stream.events;
+        expect(result.length).to.be(2);
+        expect(result[0].type).to.be('foo');
+        expect(result[1].type).to.be('baz');
+    });
+
+    it('evaluates { difference: [a, b] } yielding empty when A ⊆ B', function() {
+        stream = new JoinEventStream('bar-minus-all', [{ difference: ['bar', ['foo', 'bar']] }], eventstore);
+        expect(stream.events.length).to.be(0);
+    });
+
+    it('reduces { difference: [\'_all\', \'_all\'] } to empty', function() {
+        stream = new JoinEventStream('all-minus-all', [{ difference: ['_all', '_all'] }], eventstore);
+        expect(stream.events.length).to.be(0);
+    });
+
+    it('reduces { difference: [\'_all\', [\'_all\', x]] } to empty', function() {
+        stream = new JoinEventStream('all-minus-all-or-foo', [{ difference: ['_all', ['_all', 'foo']] }], eventstore);
+        expect(stream.events.length).to.be(0);
+    });
+
+    it('reduces nested _all in difference exclude AND groups', function() {
+        stream = new JoinEventStream('all-minus-and-all-bar', [{ difference: ['_all', [['_all', 'bar']]] }], eventstore);
+        const result = stream.events;
+        expect(result.length).to.be(2);
+        expect(result[0].type).to.be('foo');
+        expect(result[1].type).to.be('baz');
+    });
+
     describe('forEach', function(){
 
         it('invokes a callback with payload, metadata and stream name', function(){
