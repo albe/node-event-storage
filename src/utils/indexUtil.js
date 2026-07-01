@@ -141,58 +141,82 @@ function intersect(...ranges) {
 }
 
 /**
- * Normalize selector shape for optimal evaluation.
+ * Normalize selector shape while carrying stream-length metadata for AND ordering.
+ * This keeps zero-length stream references in the selector tree.
  *
  * @param {string|Array<string|Array>} selector
- * @param {number} [depth=0]
+ * @param {function(string): number} [getStreamLength]
  * @returns {string|Array<string|Array>}
  */
-function normalizeSelector(selector, depth = 0) {
+function normalizeSelector(selector, getStreamLength) {
+    getStreamLength = typeof getStreamLength === 'function' ? getStreamLength : () => 1;
+    const normalized = normalizeSelectorRecursive(selector, getStreamLength, 0).selector;
+    if (Array.isArray(selector) && !Array.isArray(normalized)) {
+        return [normalized];
+    }
+    return normalized;
+}
+
+function normalizeSelectorRecursive(selector, getStreamLength, depth = 0) {
     if (typeof selector === 'string') {
         assert(selector.length > 0, 'Stream names must be non-empty strings.');
-        return selector;
+        return { selector, length: getStreamLength(selector) || 0 };
     }
 
     assert(Array.isArray(selector), 'Selector must be a string or an array.');
-    const normalized = selector.map(node => normalizeSelector(node, depth + 1));
-    return optimizeSelectorNode(normalized, depth);
+    const childWithLengths = selector.map(node => normalizeSelectorRecursive(node, getStreamLength, depth + 1));
+    return optimizeSelectorNode(childWithLengths, depth);
 }
 
 /**
  * Optimize one normalized selector node by depth-dependent rules.
  *
- * @param {Array<string|Array>} selectorNode
+ * @param {Array<{ selector: string|Array, length: number }>} selectorWithLength
  * @param {number} depth
- * @returns {string|Array<string|Array>}
+ * @returns {{ selector: string|Array, length: number }
  */
-function optimizeSelectorNode(selectorNode, depth) {
-    if (selectorNode.length === 0) {
-        return [];
+function optimizeSelectorNode(selectorWithLength, depth) {
+    if (selectorWithLength.length === 0) {
+        return { selector: [], length: 0 };
     }
-    if (selectorNode.length === 1) {
-        const child = selectorNode[0];
+    if (selectorWithLength.length === 1) {
+        const child = selectorWithLength[0];
         // ['a'] -> 'a', [{ ... }] -> { ... }
-        if (!Array.isArray(child)) {
-            return selectorNode[0];
+        if (!Array.isArray(child.selector)) {
+            return child;
         }
         // [['a']] -> 'a', but never [['a']] -> ['a']
-        else if (child.length === 1) {
-            return child[0];
+        if (child.selector.length === 1) {
+            return { selector: child.selector[0], length: child.length };
         }
-        return selectorNode;
+        return child;
     }
     // ['a', 'a'] -> 'a'
-    if (selectorNode.every(node => node === selectorNode[0])) {
-        return selectorNode[0];
+    if (selectorWithLength.length > 1 && selectorWithLength.every(withLength => withLength.selector === selectorWithLength[0].selector)) {
+        return selectorWithLength[0];
     }
 
     if (depth % 2 !== 0) {
-        return selectorNode.filter(node => node !== '_all');
+        const filtered = selectorWithLength.filter(withLength => withLength.selector !== '_all');
+        if (filtered.length === 0) {
+            return selectorWithLength[0];
+        }
+        filtered.sort((left, right) => left.length - right.length);
+        return {
+            selector: filtered.map(withLength => withLength.selector),
+            length: filtered.reduce((min, withLength) => Math.min(min, withLength.length), Infinity)
+        };
     }
-    if (selectorNode.some(node => node === '_all')) {
-        return '_all';
+
+    const allSelector = selectorWithLength.find(withLength => withLength.selector === '_all');
+    if (allSelector) {
+        return allSelector;
     }
-    return selectorNode;
+
+    return {
+        selector: selectorWithLength.map(withLength => withLength.selector),
+        length: selectorWithLength.reduce((sum, withLength) => sum + withLength.length, 0)
+    };
 }
 
 export {

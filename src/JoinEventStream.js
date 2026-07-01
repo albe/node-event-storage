@@ -34,7 +34,7 @@ class JoinEventStream extends EventStream {
         assert(Array.isArray(selector) && selector.length > 0, `Invalid selector supplied to JoinEventStream ${name}.`);
 
         this.eventStore = eventStore;
-        this.selector = normalizeSelector(selector);
+        this.selector = normalizeSelector(selector, (stream) => this.eventStore.streams[stream]?.index.length || 0);
         this.streamIndex = eventStore.storage.index;
         this.minRevision = normalizeRevision(minRevision, eventStore.length);
         this.maxRevision = normalizeRevision(maxRevision, eventStore.length);

@@ -185,5 +185,56 @@ describe('indexUtil', function() {
             expect(normalized).to.eql(['a', 'x', 'b']);
         });
 
+        function reducer(lengths) {
+            return (name) => lengths[name] || 0;
+        }
+
+        it('keeps zero-length selectors in the optimized selector', function() {
+            const lengths = reducer({ a: 10, b: 0 });
+            const normalized = normalizeSelector(['a', 'b'], lengths);
+
+            expect(normalized).to.eql(['a', 'b']);
+        });
+
+        it('keeps AND branches with missing streams (for commit-condition stability)', function() {
+            const normalized = normalizeSelector([['a', 'missing']], reducer({ a: 10, missing: 0 }));
+            expect(normalized).to.eql([['missing', 'a']]);
+        });
+
+        it('sorts AND branches by computed child length', function() {
+            const normalized = normalizeSelector([['slow', 'fast', 'mid']], reducer({ slow: 100, fast: 1, mid: 10 }));
+            expect(normalized).to.eql([['fast', 'mid', 'slow']]);
+        });
+
+        it('keeps a single nested AND group intact', function() {
+            const normalized = normalizeSelector([['a', 'b']], reducer({ a: 10, b: 3 }));
+            expect(normalized).to.eql([['b', 'a']]);
+        });
+
+        it('flattens two single-child wrapper levels around a multi-element group', function() {
+            const normalized = normalizeSelector([[['a', 'b']]], reducer({ a: 10, b: 3 }));
+            expect(normalized).to.eql(['a', 'b']);
+        });
+
+        it('does not flatten one-level wrapper around OR branch into AND branch', function() {
+            const normalized = normalizeSelector(['a', [['x', 'y']], 'b'], reducer({ a: 10, x: 5, y: 7, b: 3 }));
+            expect(normalized).to.eql(['a', [['x', 'y']], 'b']);
+        });
+
+        it('normalizes [a, [[[x]]], b] to [a, [x], b]', function() {
+            const normalized = normalizeSelector(['a', [[['x']]], 'b'], reducer({ a: 10, x: 5, b: 3 }));
+            expect(normalized).to.eql(['a', ['x'], 'b']);
+        });
+
+        it('normalizes [a, [[x]], b] to [a, x, b]', function() {
+            const normalized = normalizeSelector(['a', [['x']], 'b'], reducer({ a: 10, x: 5, b: 3 }));
+            expect(normalized).to.eql(['a', 'x', 'b']);
+        });
+
+        it('keeps _all when an AND branch only contains _all', function() {
+            const normalized = normalizeSelector([['_all']], reducer({ _all: 100 }));
+            expect(normalized).to.eql(['_all']);
+        });
+
     });
 });
