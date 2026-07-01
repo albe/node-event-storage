@@ -123,18 +123,14 @@ function intersect(...ranges) {
     if (ranges.length === 0) {
         return [];
     }
-
-    for (let i = 0; i < ranges.length; i++) {
-        if (ranges[i].length === 0) {
-            return [];
-        }
-    }
-
     if (ranges.length === 1) {
         return ranges[0].slice();
     }
 
     ranges.sort((a, b) => a.length - b.length);
+    if (ranges[0].length === 0) {
+        return [];
+    }
     let selected = intersectTwoIndexEntryRanges(ranges[0], ranges[1]);
     for (let i = 2; i < ranges.length && selected.length > 0; i++) {
         selected = intersectTwoIndexEntryRanges(selected, ranges[i]);
