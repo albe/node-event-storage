@@ -1,6 +1,6 @@
 import EventStream from './EventStream.js';
 import { assert, iterate } from './utils/util.js';
-import { union, intersect } from './utils/indexUtil.js';
+import { union, intersect, normalizeSelector } from './utils/indexUtil.js';
 import { normalizeRevision } from './utils/apiHelpers.js';
 
 /**
@@ -34,7 +34,7 @@ class JoinEventStream extends EventStream {
         assert(Array.isArray(selector) && selector.length > 0, `Invalid selector supplied to JoinEventStream ${name}.`);
 
         this.eventStore = eventStore;
-        this.selector = this.normalizeSelector(selector);
+        this.selector = normalizeSelector(selector);
         this.streamIndex = eventStore.storage.index;
         this.minRevision = normalizeRevision(minRevision, eventStore.length);
         this.maxRevision = normalizeRevision(maxRevision, eventStore.length);
@@ -46,29 +46,6 @@ class JoinEventStream extends EventStream {
         this._iterator = null;
     }
 
-    /**
-     * Normalize selector shape to nested arrays and validate leaf types.
-     * Missing streams are allowed here to keep direct JoinEventStream construction compatible;
-     * they are treated as empty ranges.
-     *
-     * @private
-     * @param {Array<string|Array>} selector
-     * @returns {Array<string|Array>}
-     */
-    normalizeSelector(selector) {
-        const normalized = [];
-        for (const node of selector) {
-            if (typeof node === 'string') {
-                assert(node.length > 0, 'Stream names must be non-empty strings.');
-                normalized.push(node);
-                continue;
-            }
-
-            assert(Array.isArray(node) && node.length > 0, 'Each selector node must be a non-empty stream name array or string.');
-            normalized.push(this.normalizeSelector(node));
-        }
-        return normalized;
-    }
 
     /**
      * Resolve and cache the combined index-entry ranges for the full selector.
@@ -86,26 +63,8 @@ class JoinEventStream extends EventStream {
     }
 
     /**
-     * Optimize a selector tree at the given depth.
-     * Currently, optimizes away occurrences of _all.
-     *
-     * @private
-     * @param {Array<string|Array>} selectorNode
-     * @param {number} depth
-     * @returns {Array<Array<number>>|string}
-     */
-    optimize(selectorNode, depth) {
-        if (depth % 2 !== 0) {
-            return selectorNode.filter(node => node !== '_all');
-        }
-        if (selectorNode.some(node => node === '_all')) {
-            return '_all';
-        }
-        return selectorNode;
-    }
-
-    /**
      * Resolve one selector node into a sorted index-entry range.
+     * Selector is already normalized and optimized from constructor, so we just traverse and collect ranges.
      *
      * @private
      * @param {string|Array<string|Array>} selectorNode
