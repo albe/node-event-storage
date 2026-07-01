@@ -1,3 +1,5 @@
+import { assert } from './util.js';
+
 /**
  * Merge two sorted index-entry ranges into one sorted union without duplicates.
  * Assumes each range is sorted and contains no duplicates (by entry number).
@@ -138,8 +140,63 @@ function intersect(...ranges) {
     return selected;
 }
 
+/**
+ * Normalize selector shape for optimal evaluation.
+ *
+ * @param {string|Array<string|Array>} selector
+ * @param {number} [depth=0]
+ * @returns {string|Array<string|Array>}
+ */
+function normalizeSelector(selector, depth = 0) {
+    if (typeof selector === 'string') {
+        assert(selector.length > 0, 'Stream names must be non-empty strings.');
+        return selector;
+    }
+
+    assert(Array.isArray(selector), 'Selector must be a string or an array.');
+    const normalized = selector.map(node => normalizeSelector(node, depth + 1));
+    return optimizeSelectorNode(normalized, depth);
+}
+
+/**
+ * Optimize one normalized selector node by depth-dependent rules.
+ *
+ * @param {Array<string|Array>} selectorNode
+ * @param {number} depth
+ * @returns {string|Array<string|Array>}
+ */
+function optimizeSelectorNode(selectorNode, depth) {
+    if (selectorNode.length === 0) {
+        return [];
+    }
+    if (selectorNode.length === 1) {
+        const child = selectorNode[0];
+        // ['a'] -> 'a', [{ ... }] -> { ... }
+        if (!Array.isArray(child)) {
+            return selectorNode[0];
+        }
+        // [['a']] -> 'a', but never [['a']] -> ['a']
+        else if (child.length === 1) {
+            return child[0];
+        }
+        return selectorNode;
+    }
+    // ['a', 'a'] -> 'a'
+    if (selectorNode.every(node => node === selectorNode[0])) {
+        return selectorNode[0];
+    }
+
+    if (depth % 2 !== 0) {
+        return selectorNode.filter(node => node !== '_all');
+    }
+    if (selectorNode.some(node => node === '_all')) {
+        return '_all';
+    }
+    return selectorNode;
+}
+
 export {
     union,
-    intersect
+    intersect,
+    normalizeSelector
 };
-
