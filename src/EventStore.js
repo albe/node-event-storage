@@ -10,6 +10,7 @@ import { assert, getPropertyAtPath } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { buildTypeMatcherFn } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
+import { normalizeSelector } from "./utils/indexUtil.js";
 
 const ExpectedVersion = {
     Any: -1,
@@ -25,38 +26,32 @@ const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 class OptimisticConcurrencyError extends Error {}
 
-function assertSelectorStreamsExist(streams, streamMap) {
-    for (const node of streams) {
-        if (typeof node === 'string') {
-            assert(node in streamMap, `Stream "${node}" does not exist.`);
-            continue;
-        }
-        assert(Array.isArray(node) && node.length > 0, 'Each selector node must be a non-empty stream name array or string.');
-        assertSelectorStreamsExist(node, streamMap);
-    }
-}
+/**
+ * @typedef {string | SelectorNode[]} SelectorNode
+ */
 
 /**
  * An accept condition that captures the global event-log position at the time a {@link EventStore#query}
  * call was made.  Pass it as the `expectedVersion` argument to {@link EventStore#commit} to enforce
  * DCB-style (Dynamic Consistency Boundary) optimistic concurrency: the commit is rejected only when
- * one or more events that match the original query (types + optional matcher) have been appended to
+ * one or more events that match the original query (selector + optional matcher) have been appended to
  * the store between the `query` call and the `commit` call.
  *
- * @property {string[]} types   The event types included in the query.
+ * @property {SelectorNode[]|string} selector The normalized stream selector used in the query.
+ * @property {string[]} types   Backwards-compatible alias for the leaf stream names of the selector.
  * @property {function(object, object): boolean|null} matcher An optional function `(payload, metadata) => boolean`
  *   used to narrow the conflict check.  When `null`, any new event of a listed type causes a conflict.
  * @property {number}   noneMatchAfter The global store length (total event count) at the time the query was made.
  */
 class CommitCondition {
     /**
-     * @param {string[]} types
+     * @param {SelectorNode[]|string} selector The (normalized) stream selector.
      * @param {(function(object, object): boolean)|object|null} [matcher]
-     * @param {number}   noneMatchAfter
-     * @param {boolean}  [raw=false]
+     * @param {number} noneMatchAfter
+     * @param {boolean} [raw=false]
      */
-    constructor(types, matcher = null, noneMatchAfter, raw = false) {
-        this.types = types;
+    constructor(selector, matcher = null, noneMatchAfter, raw = false) {
+        this.selector = selector;
         this.matcher = matcher;
         this.raw = raw;
         this.noneMatchAfter = noneMatchAfter;
@@ -409,14 +404,13 @@ class EventStore extends events.EventEmitter {
     checkCondition(condition) {
         if (this.storage.length <= condition.noneMatchAfter) return; // no new events since condition was obtained
 
-        const existingTypes = condition.types.filter(t => t in this.streams);
-        if (existingTypes.length === 0) return;
+        const selector = condition.selector || condition.types;
 
         // Only events after condition.noneMatchAfter can be conflicts.
         // Pass the original matcher and raw flag so the stream filters at the source.
         const stream = this.fromStreams(
-            '_check_' + condition.types.join('_'),
-            existingTypes,
+            '_check_' + Date.now(),
+            selector,
             condition.noneMatchAfter + 1,
             -1,
             condition.matcher,
@@ -459,25 +453,6 @@ class EventStore extends events.EventEmitter {
         assert(typeof type === 'string', 'typeAccessor must return a string.');
         assert(STREAM_NAME_PATTERN.test(type), `typeAccessor must return a valid stream name. Got: "${type}"`);
         return type;
-    }
-
-    /**
-     * @private
-     * @param {string[]} types
-     * @returns {string[]}
-     */
-    getExistingQueryTypes(types) {
-        const queryTypes = [];
-        for (const type of types) {
-            if (type in this.streams) {
-                queryTypes.push(type);
-                continue;
-            }
-            if (!this.typeAccessor) {
-                throw new Error(`Type stream "${type}" does not exist. Create it with createEventStream() first, or configure typeAccessor to have type streams created automatically on commit.`);
-            }
-        }
-        return queryTypes;
     }
 
     /**
@@ -580,15 +555,11 @@ class EventStore extends events.EventEmitter {
      * belongs to one of the listed types and (when `matcher` is provided) also satisfies
      * `matcher(payload, metadata)`.  Events written before the `query` call are never treated as conflicts.
      *
-     * **Behaviour when a type stream does not exist:**
-     * - Without `typeAccessor` configured: throws an error, because the store cannot guarantee that no
-     *   events of that type exist (the stream was never created).  Create the stream explicitly first,
-     *   or configure `typeAccessor` to have streams created automatically on commit.
-     * - With `typeAccessor` configured: treats the missing stream as empty (0-length).  The stream will
-     *   be created automatically the first time an event of that type is committed.
+     * Missing stream references are treated as empty sets. In OR groups they have no effect;
+     * in AND groups they collapse that branch to an empty result.
      *
      * @api
-     * @param {string[]} types A non-empty array of event-type names to query.
+     * @param {SelectorNode[]} selector A non-empty array of event types or a nested stream-selector algebra.
      * @param {function|object|null} [matcher] Optional matcher used for stream pre-filtering.
      *   In object mode, function predicates receive `(payload, metadata)`.
      * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned stream (inclusive).
@@ -596,14 +567,19 @@ class EventStore extends events.EventEmitter {
      * @returns {{ condition: CommitCondition, stream: EventStream }} An object with:
      *   - `condition` — the {@link CommitCondition} to pass to {@link EventStore#commit}.
      *   - `stream` — a read-only event stream containing all matching events.
-     * @throws {Error} if `types` is not a non-empty array.
-     * @throws {Error} if `typeAccessor` is not configured and any of the listed type streams do not exist.
+     *   Nested selector example (items=OR, per-item=AND, inner=OR):
+     *   `[[courseTag, ['CourseCreated', 'CourseCapacityChanged']], [studentTag, ['StudentCreated']]]`
+     * @throws {Error} if `selector` is not a non-empty array.
      */
-    query(types, matcher = null, minRevision = 1, raw = false) {
-        assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for query.');
-        const queryTypes = this.getExistingQueryTypes(types);
-        const condition = new CommitCondition(types, matcher, this.storage.length, raw);
-        const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher, raw);
+    query(selector, matcher = null, minRevision = 1, raw = false) {
+        assert(Array.isArray(selector) && selector.length > 0, 'Must specify a non-empty array of stream selectors for query.');
+        // Normalize the selector once here; both the condition and the stream use
+        // the normalized form.  Wrap a string result (single-stream reduction) in
+        // an array so fromStreams always receives an array.
+        const normalized = normalizeSelector(selector);
+        const querySelector = Array.isArray(normalized) ? normalized : [normalized];
+        const condition = new CommitCondition(querySelector, matcher, this.storage.length, raw);
+        const stream = this.fromStreams('_query_' + Date.now(), querySelector, minRevision, -1, matcher, raw);
         return { stream, condition };
     }
 
@@ -660,11 +636,6 @@ class EventStore extends events.EventEmitter {
         ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
-        if (streamNames.length === 0) {
-            return new EventStream(streamName, this);
-        }
-
-        assertSelectorStreamsExist(streamNames, this.streams);
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate, raw);
     }
 

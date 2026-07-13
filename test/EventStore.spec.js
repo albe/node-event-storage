@@ -826,14 +826,6 @@ describe('EventStore', function() {
             expect(() => eventstore.fromStreams('join-foo-bar')).to.throwError();
         });
 
-        it('throws when specifying a non-existing stream to join', function() {
-            eventstore = new EventStore({
-                storageDirectory
-            });
-
-            expect(() => eventstore.fromStreams('join-foo-bar', ['foo-bar', 'baz'])).to.throwError(/does not exist/);
-        });
-
         it('iterates events from multiple streams in correct order', function(done) {
             eventstore = new EventStore({
                 storageDirectory
@@ -1960,7 +1952,7 @@ describe('EventStore', function() {
             eventstore = new EventStore({ storageDirectory, typeAccessor: (event) => event.type });
             const { condition, stream } = eventstore.query(['OrderPlaced']);
             expect(condition).to.be.a(CommitCondition);
-            expect(condition.types).to.eql(['OrderPlaced']);
+            expect(condition.selector).to.eql(['OrderPlaced']);
             expect(condition.noneMatchAfter).to.be(0);
             expect(stream).not.to.be(false);
         });
@@ -2034,9 +2026,9 @@ describe('EventStore', function() {
             });
         });
 
-        it('throws when a type stream does not exist and typeAccessor is not configured', function() {
+        it('does not throw when a type stream does not exist and typeAccessor is not configured', function() {
             eventstore = new EventStore({ storageDirectory });
-            expect(() => eventstore.query(['OrderPlaced'])).to.throwError(/Type stream "OrderPlaced" does not exist/);
+            expect(() => eventstore.query(['OrderPlaced'])).to.not.throwError();
         });
 
         it('does not throw when a type stream does not exist and typeAccessor is configured', function() {
