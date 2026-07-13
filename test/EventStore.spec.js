@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import fsSync from 'fs';
 import path from 'path';
 import EventStoreBase, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
-import Consumer from '../src/Consumer.js';
+import LegacyConsumer from '../src/LegacyConsumer.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -826,12 +826,13 @@ describe('EventStore', function() {
             expect(() => eventstore.fromStreams('join-foo-bar')).to.throwError();
         });
 
-        it('throws when specifying a non-existing stream to join', function() {
+        it('returns an empty stream for non-existing streams (graceful — missing streams are iterated as empty)', function() {
             eventstore = new EventStore({
                 storageDirectory
             });
 
-            expect(() => eventstore.fromStreams('join-foo-bar', ['foo-bar', 'baz'])).to.throwError(/does not exist/);
+            const stream = eventstore.fromStreams('join-foo-bar', ['foo-bar', 'baz']);
+            expect(stream.next()).to.be(false);
         });
 
         it('iterates events from multiple streams in correct order', function(done) {
@@ -1460,7 +1461,7 @@ describe('EventStore', function() {
             eventstore.createEventStream('foo-bar', event => event.payload.foo === 'bar');
 
             const consumer = eventstore.getConsumer('foo-bar', 'consumer2');
-            expect(consumer instanceof Consumer).to.be(true);
+            expect(consumer instanceof LegacyConsumer).to.be(true);
         });
 
         it('returns a consumer for the given stream', function(done) {
@@ -1484,7 +1485,7 @@ describe('EventStore', function() {
             });
 
             const consumer = eventstore.getConsumer('_all', 'consumer1');
-            expect(consumer instanceof Consumer).to.be(true);
+            expect(consumer instanceof LegacyConsumer).to.be(true);
             let i = 0;
             consumer.on('data', event => {
                 expect(event.payload.id).to.be(++i);
@@ -2034,9 +2035,10 @@ describe('EventStore', function() {
             });
         });
 
-        it('throws when a type stream does not exist and typeAccessor is not configured', function() {
+        it('returns an empty stream when a type stream does not exist (graceful)', function() {
             eventstore = new EventStore({ storageDirectory });
-            expect(() => eventstore.query(['OrderPlaced'])).to.throwError(/Type stream "OrderPlaced" does not exist/);
+            const { stream } = eventstore.query(['OrderPlaced']);
+            expect(stream.next()).to.be(false);
         });
 
         it('does not throw when a type stream does not exist and typeAccessor is configured', function() {

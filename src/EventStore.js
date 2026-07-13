@@ -5,11 +5,14 @@ import path from 'path';
 import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
-import Consumer from './Consumer.js';
+import LegacyConsumer from './LegacyConsumer.js';
 import { assert, getPropertyAtPath } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { buildTypeMatcherFn } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
+import EventStreamQuery, { StreamQuery } from './api/EventStreamQuery.js';
+import Consumer from './api/Consumer.js';
+import { normalizeSelector } from "./utils/indexUtil.js";
 
 const ExpectedVersion = {
     Any: -1,
@@ -25,42 +28,73 @@ const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 class OptimisticConcurrencyError extends Error {}
 
-function assertSelectorStreamsExist(streams, streamMap) {
-    for (const node of streams) {
+/**
+ * @typedef {string | SelectorNode[]} SelectorNode
+ * @param {SelectorNode[]} selector
+ * @returns {string[]}
+ */
+function flattenSelector(selector) {
+    /** @type string[] */
+    const names = [];
+    for (const node of selector) {
         if (typeof node === 'string') {
-            assert(node in streamMap, `Stream "${node}" does not exist.`);
+            names.push(node);
             continue;
         }
         assert(Array.isArray(node) && node.length > 0, 'Each selector node must be a non-empty stream name array or string.');
-        assertSelectorStreamsExist(node, streamMap);
+        names.push(...flattenSelector(node));
     }
+    return names;
 }
 
 /**
  * An accept condition that captures the global event-log position at the time a {@link EventStore#query}
  * call was made.  Pass it as the `expectedVersion` argument to {@link EventStore#commit} to enforce
  * DCB-style (Dynamic Consistency Boundary) optimistic concurrency: the commit is rejected only when
- * one or more events that match the original query (types + optional matcher) have been appended to
+ * one or more events that match the original query (selector + optional matcher) have been appended to
  * the store between the `query` call and the `commit` call.
  *
- * @property {string[]} types   The event types included in the query.
+ * @property {SelectorNode[]|string} selector The normalized stream selector used in the query.
+ * @property {string[]} types   Backwards-compatible alias for the leaf stream names of the selector.
  * @property {function(object, object): boolean|null} matcher An optional function `(payload, metadata) => boolean`
  *   used to narrow the conflict check.  When `null`, any new event of a listed type causes a conflict.
  * @property {number}   noneMatchAfter The global store length (total event count) at the time the query was made.
  */
 class CommitCondition {
     /**
-     * @param {string[]} types
+     * @param {SelectorNode[]|string} selector The (normalized) stream selector.
      * @param {(function(object, object): boolean)|object|null} [matcher]
-     * @param {number}   noneMatchAfter
-     * @param {boolean}  [raw=false]
+     * @param {number} noneMatchAfter
+     * @param {boolean} [raw=false]
      */
-    constructor(types, matcher = null, noneMatchAfter, raw = false) {
-        this.types = types;
+    constructor(selector, matcher = null, noneMatchAfter, raw = false) {
+        this.selector = selector;
+        // b/c alias: flatten to the leaf stream names the old API exposed as `types`
+        this.types = Array.isArray(selector) ? flattenSelector(selector) : (typeof selector === 'string' ? [selector] : []);
         this.matcher = matcher;
         this.raw = raw;
         this.noneMatchAfter = noneMatchAfter;
     }
+}
+
+/**
+ * Detect the unified 2.0 commit form `commit(stream, events, options)` — a plain
+ * options object (not a CommitCondition, array or callback) in the third slot,
+ * with no further positional arguments. Distinguished from a legacy metadata
+ * object by carrying at least one recognized option key.
+ *
+ * @param {IArguments} args The `commit` call arguments.
+ * @returns {boolean}
+ */
+function isCommitOptions(args) {
+    if (args.length > 3) {
+        return false;
+    }
+    const candidate = args[2];
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) || candidate instanceof CommitCondition) {
+        return false;
+    }
+    return 'expectedVersion' in candidate || 'condition' in candidate || 'metadata' in candidate;
 }
 
 /**
@@ -84,6 +118,10 @@ class EventStore extends events.EventEmitter {
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
      *   `config.storageConfig.metadata` is not also set.
+     * @param {boolean} [config.useLegacyConsumer=true] When `true` (the default), `getConsumer()` creates
+     *   {@link LegacyConsumer} instances (the pre-2.0 Readable-based consumer). Set to `false` to opt in to
+     *   the 2.0 {@link Consumer} model for `getConsumer()` — note that the HTTP consumer routes still
+     *   depend on LegacyConsumer until they are migrated.
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
@@ -91,6 +129,8 @@ class EventStore extends events.EventEmitter {
             config = storeName;
             storeName = 'eventstore';
         }
+
+        this.useLegacyConsumer = config.useLegacyConsumer !== false;
 
         if (typeof config.typeAccessor === 'string' && config.typeAccessor) {
             const accessorPath = config.typeAccessor;
@@ -144,6 +184,7 @@ class EventStore extends events.EventEmitter {
         this.streamsDirectory = resolvePath(storageConfig.indexDirectory);
         this.storeName = storeName;
         this.consumers = new Map();
+        this.consumersV2 = new Map();
 
         const storage = storageConfig.readOnly === true
             ? new ReadOnlyStorage(storeName, storageConfig)
@@ -251,6 +292,10 @@ class EventStore extends events.EventEmitter {
             consumer.stop();
         }
         this.consumers.clear();
+        for (const consumer of this.consumersV2.values()) {
+            consumer.stop();
+        }
+        this.consumersV2.clear();
         this.storage.close();
     }
 
@@ -409,14 +454,18 @@ class EventStore extends events.EventEmitter {
     checkCondition(condition) {
         if (this.storage.length <= condition.noneMatchAfter) return; // no new events since condition was obtained
 
-        const existingTypes = condition.types.filter(t => t in this.streams);
-        if (existingTypes.length === 0) return;
+        const selector = condition.selector || condition.types;
+        const selectorLeaves = typeof selector === 'string' ? [selector] : (Array.isArray(selector) ? flattenSelector(selector) : []);
+        if (selectorLeaves.length === 0) return;
+        const existingLeaves = selectorLeaves.filter(name => name in this.streams);
+        if (existingLeaves.length === 0) return;
 
         // Only events after condition.noneMatchAfter can be conflicts.
         // Pass the original matcher and raw flag so the stream filters at the source.
+        const selectorArray = Array.isArray(selector) ? selector : [selector];
         const stream = this.fromStreams(
-            '_check_' + condition.types.join('_'),
-            existingTypes,
+            '_check_' + Date.now(),
+            selectorArray,
             condition.noneMatchAfter + 1,
             -1,
             condition.matcher,
@@ -462,25 +511,6 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * @private
-     * @param {string[]} types
-     * @returns {string[]}
-     */
-    getExistingQueryTypes(types) {
-        const queryTypes = [];
-        for (const type of types) {
-            if (type in this.streams) {
-                queryTypes.push(type);
-                continue;
-            }
-            if (!this.typeAccessor) {
-                throw new Error(`Type stream "${type}" does not exist. Create it with createEventStream() first, or configure typeAccessor to have type streams created automatically on commit.`);
-            }
-        }
-        return queryTypes;
-    }
-
-    /**
      * Commit a list of events for the given stream name, which is expected to be at the given version.
      * Note that the events committed may still appear in other streams too - the given stream name is only
      * relevant for optimistic concurrency checks with the given expected version.
@@ -496,9 +526,23 @@ class EventStore extends events.EventEmitter {
      *   {@link CommitCondition} was provided and conflicting events have been committed since it was obtained.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
+        // 2.0 unified form: commit(stream, events, { expectedVersion?, condition?, metadata? }) → Promise.
+        if (isCommitOptions(arguments)) {
+            const options = expectedVersion;
+            return this.commit(streamName, events, options.condition ?? options.expectedVersion ?? ExpectedVersion.Any, options.metadata ?? {});
+        }
+
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
         assert(typeof streamName === 'string' && streamName !== '', 'Must specify a stream name for commit.');
         assert(typeof events !== 'undefined' && events !== null, 'No events specified for commit.');
+
+        // Detect whether the caller supplied a completion callback in any of the
+        // overloaded argument slots. When none is given, return a Promise that
+        // resolves with the commit object (additive 2.0 behaviour; b/c preserved
+        // for all callback-based callers).
+        const callbackProvided = typeof expectedVersion === 'function'
+            || typeof metadata === 'function'
+            || typeof callback === 'function';
 
         ({ events, expectedVersion, metadata, callback } = fixCommitArgumentTypes(
             events,
@@ -508,6 +552,17 @@ class EventStore extends events.EventEmitter {
             ExpectedVersion.Any,
             CommitCondition
         ));
+
+        let resultPromise = null;
+        if (!callbackProvided) {
+            const userCallback = callback;
+            resultPromise = new Promise((resolve) => {
+                callback = (commit) => {
+                    userCallback(commit);
+                    resolve(commit);
+                };
+            });
+        }
 
         // Perform DCB-style concurrency check when a CommitCondition is provided.
         if (expectedVersion instanceof CommitCondition) {
@@ -557,6 +612,8 @@ class EventStore extends events.EventEmitter {
             commit.events.push(event);
             this.storage.write(storedEvent, commitVersion !== events.length ? undefined : commitCallback);
         }
+
+        return resultPromise;
     }
 
     /**
@@ -580,15 +637,11 @@ class EventStore extends events.EventEmitter {
      * belongs to one of the listed types and (when `matcher` is provided) also satisfies
      * `matcher(payload, metadata)`.  Events written before the `query` call are never treated as conflicts.
      *
-     * **Behaviour when a type stream does not exist:**
-     * - Without `typeAccessor` configured: throws an error, because the store cannot guarantee that no
-     *   events of that type exist (the stream was never created).  Create the stream explicitly first,
-     *   or configure `typeAccessor` to have streams created automatically on commit.
-     * - With `typeAccessor` configured: treats the missing stream as empty (0-length).  The stream will
-     *   be created automatically the first time an event of that type is committed.
+     * Missing stream references are treated as empty sets. In OR groups they have no effect;
+     * in AND groups they collapse that branch to an empty result.
      *
      * @api
-     * @param {string[]} types A non-empty array of event-type names to query.
+     * @param {SelectorNode[]} selector A non-empty array of event types or a nested stream-selector algebra.
      * @param {function|object|null} [matcher] Optional matcher used for stream pre-filtering.
      *   In object mode, function predicates receive `(payload, metadata)`.
      * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned stream (inclusive).
@@ -596,15 +649,80 @@ class EventStore extends events.EventEmitter {
      * @returns {{ condition: CommitCondition, stream: EventStream }} An object with:
      *   - `condition` — the {@link CommitCondition} to pass to {@link EventStore#commit}.
      *   - `stream` — a read-only event stream containing all matching events.
-     * @throws {Error} if `types` is not a non-empty array.
-     * @throws {Error} if `typeAccessor` is not configured and any of the listed type streams do not exist.
+     *   Nested selector example (items=OR, per-item=AND, inner=OR):
+     *   `[[courseTag, ['CourseCreated', 'CourseCapacityChanged']], [studentTag, ['StudentCreated']]]`
+     * @throws {Error} if `selector` is not a non-empty array.
      */
-    query(types, matcher = null, minRevision = 1, raw = false) {
-        assert(Array.isArray(types) && types.length > 0, 'Must specify a non-empty array of event types for query.');
-        const queryTypes = this.getExistingQueryTypes(types);
-        const condition = new CommitCondition(types, matcher, this.storage.length, raw);
-        const stream = this.fromStreams('_query_' + types.join('_'), queryTypes, minRevision, -1, matcher, raw);
+    query(selector, matcher = null, minRevision = 1, raw = false) {
+        assert(Array.isArray(selector) && selector.length > 0, 'Must specify a non-empty array of stream selectors for query.');
+        // Normalize the selector once here; both the condition and the stream use
+        // the normalized form.  Wrap a string result (single-stream reduction) in
+        // an array so fromStreams always receives an array.
+        const normalized = normalizeSelector(selector);
+        const querySelector = Array.isArray(normalized) ? normalized : [normalized];
+        const condition = new CommitCondition(querySelector, matcher, this.storage.length, raw);
+        const stream = this.fromStreams('_query_' + Date.now(), querySelector, minRevision, -1, matcher, raw);
         return { stream, condition };
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Fluent query API (2.0). Additive — the callback/positional methods above
+    // remain for backwards compatibility. See concepts/2026-06-25-event-stream-api-design.md.
+    // ───────────────────────────────────────────────────────────────────────
+
+    /**
+     * Fluent query over a single named stream, addressed by GLOBAL position.
+     * For stream-relative (version-addressed, faster) bounded reads use
+     * `.streamRange()`.
+     *
+     * @api
+     * @param {string} name The stream name.
+     * @returns {StreamQuery}
+     */
+    stream(name) {
+        assert(typeof name === 'string' && name !== '', 'Must specify a stream name.');
+        return new StreamQuery(this, { kind: 'stream', name });
+    }
+
+    /**
+     * Fluent query over the entire event log, addressed by global position.
+     *
+     * @api
+     * @returns {EventStreamQuery}
+     */
+    all() {
+        return new EventStreamQuery(this, { kind: 'all' });
+    }
+
+    /**
+     * Fluent query over a category (all streams whose name starts with
+     * `name-` or `name/`, or a physical category stream of that name).
+     * Addressed by global position.
+     *
+     * @api
+     * @param {string} name The category name (a stream-name prefix).
+     * @returns {EventStreamQuery}
+     */
+    category(name) {
+        assert(typeof name === 'string' && name !== '', 'Must specify a category name.');
+        return new EventStreamQuery(this, { kind: 'category', name });
+    }
+
+    /**
+     * Fluent query over an explicit join of streams, merged in global-position order.
+     * Streams that do not (yet) exist are gracefully excluded.
+     *
+     * Accepts the same nested selector algebra as `fromStreams`:
+     *   - flat `['a','b']` → OR (union of both streams)
+     *   - nested `[['a','b'],'c']` → alternating depth semantics (depth-0 = OR, depth-1 = AND, …)
+     *
+     * @api
+     * @param {SelectorNode[]} streams Stream selector (flat for simple joins, nested for algebra).
+     * @returns {EventStreamQuery}
+     */
+    join(streams) {
+        assert(Array.isArray(streams), 'Must specify an array of stream names.');
+        return new EventStreamQuery(this, { kind: 'join', streams });
     }
 
     /**
@@ -654,17 +772,11 @@ class EventStore extends events.EventEmitter {
      * @param {function|object|null} [predicate] Optional matcher (see {@link EventStream}).
      * @param {boolean} [raw=false] If true, return NDJSON buffers.
      * @returns {EventStream|JoinEventStream}
-     * @throws {Error} if any selected stream doesn't exist.
      */
     fromStreams(streamName, streamNames, minRevision = 1, maxRevision = -1, predicate = null, raw = false) {
         ({ predicate, raw } = normalizePredicateRaw(predicate, raw));
         assert(streamNames instanceof Array, 'Must specify an array of stream names.');
 
-        if (streamNames.length === 0) {
-            return new EventStream(streamName, this);
-        }
-
-        assertSelectorStreamsExist(streamNames, this.streams);
         return new JoinEventStream(streamName, streamNames, this, minRevision, maxRevision, predicate, raw);
     }
 
@@ -724,7 +836,6 @@ class EventStore extends events.EventEmitter {
         const index = this.storage.ensureIndex(streamIndexName, matcher, reindex);
         assert(index !== null, `Error creating stream index ${streamName}.`);
 
-        // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index, matcher };
         this.emit('stream-created', streamName);
         return new EventStream(streamName, this);
@@ -792,6 +903,34 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
+     * Create a fluent {@link Consumer} over a source query and register it under
+     * `name`. A single-`stream()` or `all()` source produces a consumer that is
+     * binary-compatible with — and recovers — a legacy consumer file for the same
+     * (stream, name); other sources persist a `global.<name>` checkpoint.
+     *
+     * @api
+     * @param {string} name The consumer/identifier name.
+     * @param {{ source: EventStreamQuery, apply?: function, initialState?: object }} options Projection description.
+     * @returns {Consumer}
+     */
+    createConsumer(name, options) {
+        const consumer = new Consumer(name, options);
+        this.consumersV2.set(name, consumer);
+        return consumer;
+    }
+
+    /**
+     * Look up a registered {@link Consumer} by name.
+     *
+     * @api
+     * @param {string} name The consumer name.
+     * @returns {Consumer|null} The registered consumer, or `null`.
+     */
+    findConsumer(name) {
+        return this.consumersV2.get(name) ?? null;
+    }
+
+    /**
      * Get a durable consumer for the given stream, or look up an existing consumer by identifier.
      *
      * When called with a single argument, returns the running consumer registered under that
@@ -821,7 +960,10 @@ class EventStore extends events.EventEmitter {
             // identifier already exists for another stream.
             existingConsumer.stop();
         }
-        const consumer = new Consumer(this.storage, streamName === '_all' ? '_all' : 'stream-' + streamName, identifier, initialState, since);
+        const indexName = streamName === '_all' ? '_all' : 'stream-' + streamName;
+        const consumer = this.useLegacyConsumer
+            ? new LegacyConsumer(this.storage, indexName, identifier, initialState, since)
+            : this.createConsumer(identifier, { source: this.stream(streamName), initialState });
         consumer.streamName = streamName;
         this.consumers.set(identifier, consumer);
         return consumer;

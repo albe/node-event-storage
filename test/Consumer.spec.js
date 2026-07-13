@@ -2,13 +2,13 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import fsNative from 'fs';
 import Storage from '../src/Storage.js';
-import Consumer from '../src/Consumer.js';
+import LegacyConsumer from '../src/LegacyConsumer.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const dataDirectory = __dirname + 'data';
 
-describe('Consumer', function() {
+describe('LegacyConsumer', function() {
 
     let consumer, storage;
 
@@ -28,32 +28,32 @@ describe('Consumer', function() {
     });
 
     it('throws when instanciated without a storage', function() {
-        expect(() => new Consumer('foobar', 'consumer1')).to.throwError(/storage/);
+        expect(() => new LegacyConsumer('foobar', 'consumer1')).to.throwError(/storage/);
     });
 
     it('throws when instanciated without an index name', function() {
-        expect(() => new Consumer(storage)).to.throwError(/index name/);
+        expect(() => new LegacyConsumer(storage)).to.throwError(/index name/);
     });
 
     it('throws when instanciated without an identifier', function() {
-        expect(() => new Consumer(storage, 'foobar')).to.throwError(/identifier/);
+        expect(() => new LegacyConsumer(storage, 'foobar')).to.throwError(/identifier/);
     });
 
     it('creates consumer directory if not existing', function() {
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         expect(fs.existsSync(dataDirectory + '/consumers')).to.be(true);
     });
 
     it('cleans up failed write left-overs', function() {
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         consumer.stop();
         fs.writeFileSync(consumer.fileName + '.1', 'failed write!');
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         expect(fs.existsSync(consumer.fileName + '.1')).to.be(false);
     });
 
     it('rethrows cleanup unlink errors other than ENOENT', function() {
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         consumer.stop();
         const failedWriteFile = consumer.fileName + '.1';
         fs.writeFileSync(failedWriteFile, 'failed write!');
@@ -76,7 +76,7 @@ describe('Consumer', function() {
     });
 
     it('emits event when catching up', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         consumer.stop();
         storage.write({ type: 'Foobar', id: 1 });
         consumer.on('caught-up', () => {
@@ -87,7 +87,7 @@ describe('Consumer', function() {
     });
 
     it('can start with some initial state', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1', { foos: 0, lastId: 0 });
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1', { foos: 0, lastId: 0 });
         expect(consumer.state.foos).to.be(0);
         expect(consumer.state.lastId).to.be(0);
         storage.write({ type: 'Foobar', id: 2 });
@@ -104,7 +104,7 @@ describe('Consumer', function() {
     });
 
     it('continues emitting data after catching up', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         consumer.stop();
         storage.write({ type: 'Foobar', id: 1 });
         consumer.on('caught-up', () => {
@@ -123,7 +123,7 @@ describe('Consumer', function() {
     });
 
     it('receives new documents as they are added', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         let expected = 0;
         consumer.on('data', document => {
             expect(document.id).to.be(++expected);
@@ -137,7 +137,7 @@ describe('Consumer', function() {
     });
 
     it('can start from arbitrary position', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1', 2);
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1', 2);
         let expected = 3;
         consumer.on('data', document => {
             expect(document.id).to.be(expected);
@@ -149,7 +149,7 @@ describe('Consumer', function() {
     });
 
     it('stops when pushing fails', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         consumer.on('caught-up', () => {
             storage.write({type: 'Foobar', id: 1});
             storage.write({type: 'Foobar', id: 2});
@@ -164,7 +164,7 @@ describe('Consumer', function() {
     });
 
     it('ignores events on other streams', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         consumer.on('caught-up', () => {
             storage.write({type: 'Foobar', id: 1});
             storage.write({type: 'Foobar', id: 2});
@@ -180,13 +180,13 @@ describe('Consumer', function() {
     });
 
     it('works with multiple consumers', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         consumer.on('caught-up', () => {
             storage.write({type: 'Foobar', id: 1});
             storage.write({type: 'Foobar', id: 2});
             storage.write({type: 'Bazinga', id: 3});
         });
-        const consumer2 = new Consumer(storage, 'bazinga', 'consumer2');
+        const consumer2 = new LegacyConsumer(storage, 'bazinga', 'consumer2');
         let expected = 0;
         consumer.on('data', document => {
             expect(document.id).to.be(++expected);
@@ -200,7 +200,7 @@ describe('Consumer', function() {
     });
 
     it('continues from last position after restart', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         let expected = 0;
         consumer.on('data', document => {
             expect(document.id).to.be(++expected);
@@ -222,7 +222,7 @@ describe('Consumer', function() {
     });
 
     it('will automatically start consuming when registering data listener', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         let expected = 0;
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
@@ -239,7 +239,7 @@ describe('Consumer', function() {
     });
 
     it('can stop during catching up', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 }, () => {
@@ -255,7 +255,7 @@ describe('Consumer', function() {
     });
 
     it('stops when push fails during catching up', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         const push = consumer.push.bind(consumer);
         consumer.push = (doc) => push(doc) && false;
         storage.write({ type: 'Foobar', id: 1 });
@@ -271,7 +271,7 @@ describe('Consumer', function() {
     });
 
     it('ignores index-add notifications with non-sequential positions', function(done) {
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         consumer.once('caught-up', () => {
             const initialPosition = consumer.position;
             let received = false;
@@ -292,7 +292,7 @@ describe('Consumer', function() {
     });
 
     it('starting manually is no-op after registering data listener', function(done){
-        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer1');
         let expected = 0;
         consumer.on('data', document => {
             expect(document.id).to.be(++expected);
@@ -307,12 +307,12 @@ describe('Consumer', function() {
     });
 
     it('throws when calling setState outside of document handler', function() {
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         expect(() => consumer.setState({ foo: 'bar' })).to.throwError();
     });
 
     it('will persist multiple setState calls only once', function(done) {
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.on('data', () => {
             consumer.setState({ foo: 1 });
             consumer.setState({ foo: 1, bar: 2 });
@@ -327,7 +327,7 @@ describe('Consumer', function() {
     });
 
     it('ignores concurrent persist calls while one write is scheduled', function(done) {
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.position = 1;
         consumer.state = Object.freeze({ foo: 1 });
 
@@ -346,7 +346,7 @@ describe('Consumer', function() {
     });
 
     it('swallows persistence write errors and removes temp files', function(done) {
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.position = 1;
         consumer.state = Object.freeze({ foo: 1 });
 
@@ -369,12 +369,12 @@ describe('Consumer', function() {
 
     it('restores state after reopening', function(done) {
         const state = { foo: 0, bar: 'baz' };
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.on('data', (document) => {
             const newState = {...state, foo: state.foo + 1, lastId: document.id};
             consumer.setState(newState);
             consumer.once('persisted', () => {
-                consumer = new Consumer(storage, 'foobar', 'consumer-1');
+                consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
                 expect(consumer.state.foo).to.be(1);
                 done();
             });
@@ -385,7 +385,7 @@ describe('Consumer', function() {
     });
 
     it('allows function argument in setState', function(done) {
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.on('data', (document) => {
             consumer.setState(state => ({...state, foo: (state.foo || 0) + 1, lastId: document.id}));
             consumer.once('persisted', () => {
@@ -401,7 +401,7 @@ describe('Consumer', function() {
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 });
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.once('caught-up', () => {
             consumer.once('caught-up', () => {
                 expect(consumer.position).to.be(3);
@@ -417,7 +417,7 @@ describe('Consumer', function() {
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 });
-        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1', { foo: 0 });
         consumer.once('caught-up', () => {
             consumer.once('caught-up', () => {
                 expect(consumer.state.foo).to.be(4);
@@ -433,7 +433,7 @@ describe('Consumer', function() {
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 });
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.once('caught-up', () => {
             consumer.once('caught-up', () => {
                 expect(consumer.position).to.be(3);
@@ -446,7 +446,7 @@ describe('Consumer', function() {
     });
 
     it('can be reset while running', function(done) {
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.once('caught-up', () => {
             storage.write({ type: 'Foobar', id: 1 });
             storage.write({ type: 'Foobar', id: 2 });
@@ -466,7 +466,7 @@ describe('Consumer', function() {
         storage.write({ type: 'Foobar', id: 1 });
         storage.write({ type: 'Foobar', id: 2 });
         storage.write({ type: 'Foobar', id: 3 });
-        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1');
         consumer.once('caught-up', () => {
             consumer.stop();
             expect(consumer.isPaused()).to.be(true);
@@ -478,7 +478,7 @@ describe('Consumer', function() {
     });
 
     it('persists state on every setState by default', function(done) {
-        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1', { foo: 0 });
         let expected = 0;
         consumer.on('data', document => {
             consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id }));
@@ -497,7 +497,7 @@ describe('Consumer', function() {
     });
 
     it('allows to skip state persistence', function(done) {
-        consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+        consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1', { foo: 0 });
         consumer.on('data', document => {
             consumer.setState(state => ({ foo: state.foo + 1, lastId: document.id }), false);
             if (document.id === 3) {
@@ -505,7 +505,7 @@ describe('Consumer', function() {
                 consumer.stop();
 
                 setTimeout(() => {
-                    const consumer = new Consumer(storage, 'foobar', 'consumer-1', { foo: 0 });
+                    const consumer = new LegacyConsumer(storage, 'foobar', 'consumer-1', { foo: 0 });
                     expect(consumer.state.foo).to.be(0);
                     done();
                 }, 1);
@@ -520,7 +520,7 @@ describe('Consumer', function() {
     });
 
     it('can build consistency guards (aggregates)', function(done) {
-        const guard = new Consumer(storage, 'foobar', 'unique-bar-guard');
+        const guard = new LegacyConsumer(storage, 'foobar', 'unique-bar-guard');
         guard.apply = function(event) {
             this.setState(state => ({ ...state, ...event }));
         };

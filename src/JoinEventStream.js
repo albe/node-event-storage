@@ -76,8 +76,6 @@ class JoinEventStream extends EventStream {
             const index = this.eventStore.streams[selectorNode]?.index;
             return this.resolveIndexRange(index);
         }
-        selectorNode = this.optimize(selectorNode, depth);
-
         const childRanges = selectorNode.map(node => this.resolveSelectorRanges(node, depth + 1));
         return depth % 2 === 0 ? union(...childRanges) : intersect(...childRanges);
     }

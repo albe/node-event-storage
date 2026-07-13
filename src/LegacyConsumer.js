@@ -25,7 +25,7 @@ const safeUnlink = (filename) => {
 /**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
  */
-class Consumer extends stream.Readable {
+class LegacyConsumer extends stream.Readable {
 
     /**
      * @param {Storage} storage The storage to create the consumer for.
@@ -295,4 +295,4 @@ class Consumer extends stream.Readable {
     }
 }
 
-export default Consumer;
+export default LegacyConsumer;
