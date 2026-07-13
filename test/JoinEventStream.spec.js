@@ -185,4 +185,56 @@ describe('JoinEventStream', function() {
 
     });
 
+    // Multiple joined type-streams over the same write stream all read from that one partition. The
+    // k-way merge holds the head of every stream at once, while raw reads return transient views into a
+    // shared read/write buffer. Advancing one stream must not clobber another stream's pending head.
+    describe('raw mode buffer aliasing across a shared partition', function() {
+
+        const raceDir = 'test/data/raw-join-race';
+
+        async function seedSharedPartition(config, flush) {
+            fs.emptyDirSync(raceDir);
+            const store = new EventStore('race', { storageDirectory: raceDir, typeAccessor: 'type', ...config });
+            await new Promise(resolve => store.on('ready', resolve));
+
+            const count = 40;
+            const events = [];
+            for (let i = 0; i < count; i++) {
+                events.push({ type: i % 2 === 0 ? 'A' : 'B', seq: i, pad: 'x'.repeat(40) });
+            }
+            // All events go to a single write stream, so both type streams read from the same partition.
+            if (flush) {
+                await new Promise(resolve => store.commit('entity/1', events, resolve));
+            } else {
+                store.commit('entity/1', events);
+            }
+            return { store, count };
+        }
+
+        function assertCompleteJoin(store, count) {
+            const rawStream = new JoinEventStream('A-B', ['A', 'B'], store, 1, -1, null, true);
+            const seqs = [...rawStream].map(chunk => JSON.parse(chunk.toString('utf8')).payload.seq);
+            expect(seqs.length).to.be(count);
+            expect(seqs.slice().sort((a, b) => a - b)).to.eql(seqs.map((_, i) => i));
+        }
+
+        it('yields every flushed record exactly once when the read buffer refills mid-merge', async function() {
+            // Tiny read buffer forces a refill on almost every read, invalidating stale head views.
+            const { store, count } = await seedSharedPartition({ storageConfig: { readBufferSize: 256 } }, true);
+            assertCompleteJoin(store, count);
+            store.close();
+        });
+
+        it('yields valid, complete NDJSON when queried right after a write', async function() {
+            // Small write buffer flushes partial batches to disk during the commit, so an immediate
+            // read mixes still-buffered and just-flushed documents through the shared read buffer.
+            const { store, count } = await seedSharedPartition({
+                storageConfig: { readBufferSize: 256, writeBufferSize: 512 }
+            }, false);
+            assertCompleteJoin(store, count);
+            store.close();
+        });
+
+    });
+
 });
