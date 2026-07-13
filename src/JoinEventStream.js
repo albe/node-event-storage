@@ -1,7 +1,7 @@
 import EventStream from './EventStream.js';
-import { assert, iterate } from './utils/util.js';
-import { union, intersect, normalizeSelector } from './utils/indexUtil.js';
-import { normalizeRevision } from './utils/apiHelpers.js';
+import {assert, iterate} from './utils/util.js';
+import {intersect, normalizeSelector, union} from './utils/indexUtil.js';
+import {normalizeRevision} from './utils/apiHelpers.js';
 
 /**
  * JoinEventStream is a virtual stream over one or multiple physical stream indexes.
@@ -76,7 +76,6 @@ class JoinEventStream extends EventStream {
             const index = this.eventStore.streams[selectorNode]?.index;
             return this.resolveIndexRange(index);
         }
-        selectorNode = this.optimize(selectorNode, depth);
 
         const childRanges = selectorNode.map(node => this.resolveSelectorRanges(node, depth + 1));
         return depth % 2 === 0 ? union(...childRanges) : intersect(...childRanges);
@@ -116,7 +115,7 @@ class JoinEventStream extends EventStream {
      * @private
      * @returns {Generator<Array<number>>}
      */
-    *iterateEntries() {
+    * iterateEntries() {
         const entries = this.resolveCombinedRanges();
         const forwards = this.minRevision <= this.maxRevision;
         yield* iterate(entries, forwards);
@@ -128,7 +127,7 @@ class JoinEventStream extends EventStream {
      * @private
      * @returns {Generator<object|{ buffer: Buffer, time64: number, sequenceNumber: number }>}
      */
-    *iterateDocuments() {
+    * iterateDocuments() {
         const forwards = this.minRevision <= this.maxRevision;
         for (const entry of this.iterateEntries()) {
             const event = this.eventStore.storage.readFrom(
