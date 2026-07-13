@@ -6,6 +6,7 @@ Do not repeat yourself. Be concise and precise in your internal thoughts, but es
 If you run into a decision point, maybe because the instructions given were contradictory or incomplete, try to identify the underlying principle or intent and unless that is absolutely clear, ask for clarification and/or a decision. Explain the issue you stumbled upon and the options you see, and ask for guidance on how to proceed.
 The code and documentation language is English, even if the user is communicating in another language.
 Read the Platform.md file if it exists to know which platform you are running on and what capabilities you have, instead of trying to run linux tools on a Windows machine.
+Always try to use available tools through the MCP servers, which should provide tools to directly interact with the IDE, instead of using cat and grep.
 **Keep this file up-to-date**: after any code review that surfaces new architectural insights or a new principle, compact this file and integrate what was learned.
 
 ## Principles (in priority order)
