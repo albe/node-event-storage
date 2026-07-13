@@ -61,7 +61,7 @@ eventstore.on('ready', () => {
 |---------|---------|
 | **Optimistic concurrency** | Pass `expectedVersion` to `commit()` to guarantee conflict-free writes. |
 | **Flexible stream reading** | Range queries, reverse iteration, and a fluent builder API. |
-| **Derived streams** | Filter or combine events into new read-only streams. |
+| **Joined and derived streams** | Combine any number of streams with a nested OR/AND selector tree into one globally-ordered virtual stream; filter events into reusable derived projection streams. |
 | **Object matchers** | Support nested equality, array values (OR semantics), and scalar operators like `$gt` / `$gte` / `$lt` / `$lte` / `$eq` / `$ne`, while still benefiting from O(1) discriminant routing on writes. |
 | **DCB** | Configure `typeAccessor` to have per-type stream indexes maintained automatically, and use `query()` / `Condition` for fine-grained, query-scoped optimistic concurrency (Dynamic Consistency Boundaries). |
 | **Stream categories** | Name streams `<category>-<id>` and query the whole category at once. |
@@ -72,6 +72,28 @@ eventstore.on('ready', () => {
 | **Custom serialization** | Plug in msgpack, protobuf, or any other codec. |
 | **Compression** | Apply LZ4, zstd, or any other compression via the `serializer` option. |
 | **Access control hooks** | `preCommit` / `preRead` hooks with per-stream metadata for authorization. |
+
+---
+
+## Joining Streams
+
+Merge events from multiple streams in global insertion order with `fromStreams`. The selector tree alternates: OR at even depths, AND at odd depths:
+
+```javascript
+// OR: all events from either stream, in insertion order
+const joined = eventstore.fromStreams('view', ['orders', 'payments']);
+
+// AND: only events indexed in both streams (intersection)
+const matched = eventstore.fromStreams('view', [['customer-42', 'OrderPlaced']]);
+
+// Nested — (stream-a AND stream-b) OR (stream-c AND stream-d)
+const complex = eventstore.fromStreams('view', [
+    ['stream-a', 'stream-b'],
+    ['stream-c', 'stream-d']
+]);
+```
+
+See [Event Streams](https://node-event-storage.readthedocs.io/en/latest/streams/) for the full selector algebra, categories, and derived projection streams.
 
 ---
 

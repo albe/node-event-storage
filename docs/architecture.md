@@ -16,7 +16,11 @@ This page describes the technical implementation and architecture of the `node-e
 | `WatchesFile.js` | Mixin that wires a file to a `Watcher` instance and re-reads it on change |
 | `Clock.js` | Monotonic microsecond clock for per-event timestamps |
 | `IndexEntry.js` | Binary layout of one index record (partition, position, size, sequence number) |
-| `util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
+| `utils/util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
+| `utils/indexUtil.js` | Set operations on index-entry ranges (`union`, `intersect`) and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
+| `utils/apiHelpers.js` | Argument normalization helpers shared across the public API (revision clamping, commit overloads, predicate/raw shorthand) |
+| `utils/metadataUtil.js` | Object matcher evaluation, raw-buffer matcher compilation, and HMAC metadata helpers |
+| `utils/fsUtil.js` | File-system utilities: path resolution, directory creation, recursive file scanning |
 | `Storage.js` | Facade — re-exports `WritableStorage` (default) and `ReadOnlyStorage` |
 | `Partition.js` | Facade — re-exports `WritablePartition` (default) and `ReadOnlyPartition` |
 | `Index.js` | Facade — re-exports `WritableIndex` (default) and `ReadOnlyIndex` |
@@ -106,7 +110,7 @@ graph TD
 
 ### JoinEventStream
 
-`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, then `OR`, ...), using index set operations (`union`/`intersect`) before reading documents. Used by `EventStore.fromStreams()` for cross-stream and DCB-compiled selector queries.
+`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved to sorted index-entry ranges using `union` and `intersect` before any document is read. Used by `EventStore.fromStreams()` for multi-stream queries and DCB context reads.
 
 ### Consumer
 

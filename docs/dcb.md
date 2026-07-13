@@ -38,13 +38,15 @@ The optional `matcher` narrows the boundary to exactly the events that would aff
 
 That `matcher` can be either a predicate function or the same object-matcher syntax used by streams: nested equality, array values with OR semantics, and scalar operators like `$gte` / `$lt`. See [Event Streams -> Object Matcher Syntax](streams.md#object-matcher-syntax).
 
-`query()` also supports raw mode (`query(types, matcher, minRevision, true)`), but raw streaming itself is a general stream-reading feature, not DCB-specific. See [Event Streams -> Reading Streams](streams.md#reading-streams) for the full raw-mode semantics and matcher behavior.
+The first argument to `query()` accepts the full selector algebra — the same nested array structure as `fromStreams()`. A flat `['TypeA', 'TypeB']` is equivalent to a top-level OR join over those streams. Nested arrays express AND (intersection) at odd depths and OR at even depths. See [The DCB Specification: Types and Tags](#the-dcb-specification-types-and-tags) for complete examples.
+
+`query()` also supports raw mode (`query(selector, matcher, minRevision, true)`), but raw streaming itself is a general stream-reading feature, not DCB-specific. See [Event Streams -> Reading Streams](streams.md#reading-streams) for the full raw-mode semantics and matcher behavior.
 
 ### Implementation detail: selector algebra when tags are indexed as streams
 
 The important DCB concept is `types` + `tags` selection semantics. How this is executed is an implementation detail.
 
-If tags are materialized as dedicated streams, DCB items naturally compile to `fromStreams` selector algebra (`OR` across items, `AND` across item tags, `OR` across item types).
+If tags are materialized as dedicated streams, DCB items naturally compile to nested selector algebra — which `query()` accepts directly, returning both the filtered stream and the concurrency condition in a single call.
 
 If tags are not materialized as streams, the same semantics can be expressed entirely through matcher logic.
 
@@ -97,7 +99,7 @@ const store = new EventStore('my-store', {
 
 `typeAccessor` accepts a dot-notation path string (e.g. `'type'`, `'meta.kind'`) pointing to the event type field, which also enables faster index routing. For non-standard event layouts a function `(event) => string` can be used instead.
 
-Type stream names currently map directly to event types (for example `CourseCreated`), without a `type:` prefix.
+Type stream names currently map directly to event types (for example `CourseCreated`).
 
 `query()` treats missing referenced streams as empty sets. This applies both to type-stream lists and nested selector algebra.
 
@@ -107,6 +109,8 @@ In selector terms:
 - missing stream in an `AND` group: that branch becomes empty.
 
 > **New stores only**: type indexes are built with `reindex=false` — they only cover events committed *after* the index was first created. Always configure `typeAccessor` from the beginning if you intend to use `query()`.
+
+> **CommitCondition timing**: the condition captures the global store length at the moment `query()` is called. At commit time, the conflict check includes all streams referenced by the selector that exist *at that point* — including streams created between the `query()` and `commit()` calls. This means a type stream or tag stream created by another writer during that window is automatically included in the conflict check, with no race gap.
 
 Tag streams are optional. DCB queries can be implemented without any tag streams by using matcher logic only.
 
@@ -171,10 +175,10 @@ Equivalent selector intent (when tags are represented as streams):
 - per-item `tags`: `AND`
 - per-item `types`: `OR`
 
-With tag streams materialized, the same DCB intent can now be passed directly to `query()` as nested selector algebra:
+When tags are materialized as dedicated streams, pass the nested selector directly to `query()` — it returns both the filtered stream and the concurrency condition in one call, using the same alternating OR/AND depth semantics described in [Joining Streams](streams.md#joining-streams):
 
 ```javascript
-const courseId = 'course:jdsj4';
+const courseId  = 'course:jdsj4';
 const studentId = 'student:gfh3j';
 
 const { stream, condition } = store.query([
@@ -183,23 +187,17 @@ const { stream, condition } = store.query([
 ]);
 ```
 
-This selector uses the same alternating semantics as `fromStreams(...)` / `JoinEventStream`:
+- depth 0 (top-level array): OR across query items
+- depth 1 (second-level arrays): AND — tag stream intersected with the type-group stream
+- depth 2 (third-level arrays): OR across event types
 
-- top level array: `OR` across query items,
-- second level arrays: `AND` (tag stream + type-group stream),
-- third level arrays: `OR` across event types.
+Selection happens at the index level: only events at the intersection of the tag stream and the relevant type streams are yielded, without deserializing unrelated documents. Missing streams are treated as empty — an `OR` branch with no matching stream is skipped; an `AND` branch containing a missing stream yields nothing.
 
-Alternative syntax for the same selector intent is:
 ```javascript
-anyOf(
-    allOf('course:jdsj4', anyOf('CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse')),
-    allOf('student:gfh3j', anyOf('StudentCreated', 'StudentSubscribedToCourse'))
-);
+store.commit('enrollment-...', [{ type: 'StudentSubscribedToCourse', ... }], condition);
 ```
 
-`anyOf`/`allOf` above describe selector intent and are not runtime helpers in this package.
-
-In node-event-storage, this can also be expressed without tag streams by using the `matcher` function. Pass the union of all types, and encode per-item tag logic in the matcher:
+Without tag streams, the same intent can be expressed using the `matcher` function. Pass the union of all types, and encode per-item tag logic in the matcher:
 
 ```javascript
 const courseId  = 'course:jdsj4';
@@ -208,10 +206,10 @@ const studentId = 'student:gfh3j';
 const { stream, condition } = store.query(
     ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
     (event, meta) =>
-        (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(meta.stream)
+        (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(event.type)
             && meta.tags?.includes(courseId))
         ||
-        (['StudentCreated', 'StudentSubscribedToCourse'].includes(meta.stream)
+        (['StudentCreated', 'StudentSubscribedToCourse'].includes(event.type)
             && meta.tags?.includes(studentId))
 );
 ```
@@ -250,7 +248,7 @@ Recent measurements with that setup produced the following excerpt:
 Mode definitions and how to apply them in practice:
 
 - **Matcher-only**: query by event types and evaluate tags only via matcher logic at read time. Practical setup: keep type streams, avoid tag streams, call `query(types, matcher)`.
-- **Tag-streams**: materialize tags as dedicated streams and build DCB context from stream selectors. Practical setup: create tag streams (manually or in pre-commit) and query through `fromStreams(...)` joins.
+- **Tag-streams**: materialize tags as dedicated streams and build DCB context from stream selectors. Practical setup: create tag streams (manually or in pre-commit) and query through `query()` with nested selector algebra.
 - **Semester-bounded stream**: write all decision-relevant events for a semester into `semesters/{id}` so the read context stays naturally bounded. Practical setup: choose business-bounded write streams first, then query only within that boundary.
 
 This demonstrates three important points:
@@ -265,9 +263,3 @@ For the semester case specifically, realistic systems typically need one more fi
 
 - keep one semester stream and intersect with enrollment-related event types during context read,
 - split into `semester/{id}/students`, `semester/{id}/courses`, and `semester/{id}/enrolments`, then build the DCB context from the join of those three streams.
-
-Future direction:
-
-- automatic tag-stream creation may become an optional config,
-- selective/manual creation for specific high-value tags should stay possible.
-
