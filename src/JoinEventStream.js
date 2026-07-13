@@ -6,6 +6,23 @@ import { normalizeRevision } from './utils/apiHelpers.js';
 const emptyIterator = Object.freeze({ next() { return { done: true }; } });
 
 /**
+ * In raw mode `storage.readFrom` returns a `buffer` that is a transient view into a shared read/write
+ * buffer, only valid until the next read on that partition. The k-way merge holds the head of every
+ * per-stream iterator at once, so advancing one stream would otherwise clobber another stream's pending
+ * head when they read from the same partition. Copy each raw buffer into its own memory as it is produced
+ * so every held head stays valid across reads.
+ *
+ * @param {Iterator<{ buffer: Buffer }>} iterator
+ * @returns {Generator<{ buffer: Buffer }>}
+ */
+function* detachRawBuffers(iterator) {
+    for (const entry of iterator) {
+        entry.buffer = Buffer.from(entry.buffer);
+        yield entry;
+    }
+}
+
+/**
  * An event stream is a simple wrapper around an iterator over storage documents.
  * It implements a node readable stream interface.
  */
@@ -48,7 +65,8 @@ class JoinEventStream extends EventStream {
                 }
                 // Raw mode: get { buffer, time64, sequenceNumber } for binary-header ordering.
                 // Object mode: storage deserializes for us and we order by metadata.commitId.
-                return eventStore.storage.readRange(from, until, streamIndex, this.raw);
+                const range = eventStore.storage.readRange(from, until, streamIndex, this.raw);
+                return this.raw ? detachRawBuffers(range) : range;
             });
         }
         this._iterator = null;
