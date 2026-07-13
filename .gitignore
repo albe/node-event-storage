@@ -18,3 +18,4 @@ node_modules
 /Platform.md
 /*/node_modules
 /.claude/settings.local.json
+/.mcp.json
