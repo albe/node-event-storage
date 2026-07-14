@@ -3,6 +3,56 @@ import IndexMatcher from '../src/IndexMatcher.js';
 
 describe('IndexMatcher', function() {
 
+    describe('forEachMatch with array document properties', function() {
+
+        it('matches an index when document array contains the discriminant value', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['course:1', 'student:9'] } }, n => hits.push(n));
+            expect(hits).to.eql(['stream-tags/course:1']);
+        });
+
+        it('does not match when the discriminant value is absent from the array', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['student:9'] } }, n => hits.push(n));
+            expect(hits).to.eql([]);
+        });
+
+        it('resolves multiple indexes from multiple array elements', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+            im.add('stream-tags/student:9', { payload: { tags: 'student:9' } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['course:1', 'student:9'] } }, n => hits.push(n));
+            expect(hits.sort()).to.eql(['stream-tags/course:1', 'stream-tags/student:9']);
+        });
+
+        it('deduplicates when duplicate array elements map to the same index', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['course:1', 'course:1'] } }, n => hits.push(n));
+            expect(hits).to.eql(['stream-tags/course:1']);
+        });
+
+        it('ignores non-scalar array elements (objects, nulls)', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: [null, {nested: true}, 'course:1'] } }, n => hits.push(n));
+            expect(hits).to.eql(['stream-tags/course:1']);
+        });
+
+    });
+
     describe('remove', function() {
 
         it('is a no-op for unknown index names', function() {

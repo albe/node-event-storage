@@ -54,6 +54,11 @@ function propertyMatchesValue(documentValue, matcherValue) {
         }
         return matches(documentValue, matcherValue);
     }
+    // Array document value with scalar matcher: treat as containment check.
+    // e.g. matches({ tags: ['a', 'b'] }, { tags: 'a' }) → true
+    if (Array.isArray(documentValue)) {
+        return documentValue.includes(matcherValue);
+    }
     return typeof matcherValue === 'undefined' || documentValue === matcherValue;
 }
 

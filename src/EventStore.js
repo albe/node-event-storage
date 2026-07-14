@@ -116,8 +116,10 @@ class EventStore extends events.EventEmitter {
         if (typeof config.tagsAccessor === 'string' && config.tagsAccessor) {
             const accessorPath = config.tagsAccessor;
             this.tagsAccessor = (event) => getPropertyAtPath(event, accessorPath) ?? [];
+            this.tagsMatcherFn = buildTypeMatcherFn(accessorPath);
         } else {
             this.tagsAccessor = typeof config.tagsAccessor === 'function' ? config.tagsAccessor : null;
+            this.tagsMatcherFn = null;
         }
 
         this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
@@ -129,11 +131,18 @@ class EventStore extends events.EventEmitter {
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
 
-        // When typeAccessor is a string path, ensure the corresponding full document path
-        // (payload.<path>) is present in matcherProperties so the IndexMatcher discriminant
-        // table can route type-stream lookups in O(1) on every write.
+        // When typeAccessor/tagsAccessor is a string path, ensure the corresponding full document
+        // path (payload.<path>) is in matcherProperties so the IndexMatcher discriminant table
+        // can route those stream lookups in O(1) on every write.
         if (this.typeMatcherFn) {
             const fullPath = `payload.${config.typeAccessor}`;
+            const currentProps = storageConfig.matcherProperties || DEFAULT_MATCHER_PROPERTIES;
+            if (!currentProps.includes(fullPath)) {
+                storageConfig.matcherProperties = [...currentProps, fullPath];
+            }
+        }
+        if (this.tagsMatcherFn) {
+            const fullPath = `payload.${config.tagsAccessor}`;
             const currentProps = storageConfig.matcherProperties || DEFAULT_MATCHER_PROPERTIES;
             if (!currentProps.includes(fullPath)) {
                 storageConfig.matcherProperties = [...currentProps, fullPath];
@@ -474,6 +483,7 @@ class EventStore extends events.EventEmitter {
     ensureTagStreams(events) {
         if (!this.tagsAccessor) return;
         const tagsAccessor = this.tagsAccessor;
+        const tagsMatcherFn = this.tagsMatcherFn;
         for (const event of events) {
             const tags = tagsAccessor(event);
             if (!Array.isArray(tags)) continue;
@@ -481,11 +491,15 @@ class EventStore extends events.EventEmitter {
                 if (typeof tag !== 'string' || !tag) continue;
                 const streamName = 'tags/' + tag;
                 if (!(streamName in this.streams)) {
-                    const tagValue = tag;
-                    const matcher = (doc) => {
-                        const docTags = tagsAccessor(doc.payload);
-                        return Array.isArray(docTags) && docTags.includes(tagValue);
-                    };
+                    // When tagsMatcherFn is set (string path form), build an object matcher so
+                    // IndexMatcher can classify it into the discriminant table for O(1) routing.
+                    // Fall back to a function matcher when tagsAccessor is a function.
+                    const matcher = tagsMatcherFn
+                        ? tagsMatcherFn(tag)
+                        : (doc) => {
+                            const docTags = tagsAccessor(doc.payload);
+                            return Array.isArray(docTags) && docTags.includes(tag);
+                        };
                     this.createEventStream(streamName, matcher, false);
                 }
             }

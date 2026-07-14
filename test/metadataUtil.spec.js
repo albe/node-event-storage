@@ -443,6 +443,13 @@ describe('metadataUtil', function () {
             expect(matches({status: 'completed'}, {status: ['active', 'pending']})).to.be(false);
         });
 
+        it('handles array document value with scalar matcher (containment check)', function () {
+            expect(matches({tags: ['a', 'b']}, {tags: 'a'})).to.be(true);
+            expect(matches({tags: ['a', 'b']}, {tags: 'b'})).to.be(true);
+            expect(matches({tags: ['a', 'b']}, {tags: 'c'})).to.be(false);
+            expect(matches({tags: []}, {tags: 'a'})).to.be(false);
+        });
+
         it('handles nested object matching without operators', function () {
             expect(matches({meta: {kind: 'A', version: 1}}, {meta: {kind: 'A'}})).to.be(true);
             expect(matches({meta: {kind: 'B'}}, {meta: {kind: 'A'}})).to.be(false);

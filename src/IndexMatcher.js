@@ -143,7 +143,30 @@ class IndexMatcher {
 
         for (const propPath of this.properties) {
             const docValue = getPropertyAtPath(document, propPath);
-            if (docValue === undefined || docValue === null || typeof docValue === 'object') {
+            if (docValue === undefined || docValue === null) {
+                continue;
+            }
+
+            if (Array.isArray(docValue)) {
+                // Multi-value document property: each array element is a potential discriminant.
+                // A dedup set prevents calling iterationHandler twice when two elements map to
+                // the same index (e.g. duplicate tags, or a single index registered for both).
+                const called = new Set();
+                for (const item of docValue) {
+                    if (item === null || item === undefined || typeof item === 'object') continue;
+                    const indexSet = this.table.get(propPath)?.get(String(item));
+                    if (!indexSet) continue;
+                    for (const indexName of indexSet) {
+                        if (!called.has(indexName) && matches(document, this.matchers.get(indexName))) {
+                            called.add(indexName);
+                            iterationHandler(indexName);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (typeof docValue === 'object') {
                 continue;
             }
 

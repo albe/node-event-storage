@@ -2396,6 +2396,48 @@ describe('EventStore', function() {
             });
         });
 
+        describe('fast path (string path form)', function() {
+
+            it('auto-adds payload.<path> to matcherProperties', function() {
+                eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+                const props = eventstore.storage.indexMatcher.properties;
+                expect(props).to.contain('payload.tags');
+            });
+
+            it('does not duplicate the path when it is already in matcherProperties', function() {
+                eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags',
+                    storageConfig: { matcherProperties: ['stream', 'payload.type', 'payload.tags'] }
+                });
+                const props = eventstore.storage.indexMatcher.properties;
+                const count = props.filter(p => p === 'payload.tags').length;
+                expect(count).to.be(1);
+            });
+
+            it('tag stream matcher is classified in the discriminant table (not functionMatchers)', function(done) {
+                eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+                eventstore.commit('s', [{ tags: ['course:1'] }], () => {
+                    const im = eventstore.storage.indexMatcher;
+                    expect(im.functionMatchers.has('stream-tags/course:1')).to.be(false);
+                    expect(im.table.get('payload.tags')?.has('course:1')).to.be(true);
+                    done();
+                });
+            });
+
+            it('tag stream still indexes the correct events via the fast path', function(done) {
+                eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+                eventstore.commit('s', [
+                    { n: 1, tags: ['course:1'] },
+                    { n: 2, tags: ['student:9'] },
+                    { n: 3, tags: ['course:1', 'student:9'] }
+                ], () => {
+                    expect(eventstore.getEventStream('tags/course:1').events.map(e => e.n)).to.eql([1, 3]);
+                    expect(eventstore.getEventStream('tags/student:9').events.map(e => e.n)).to.eql([2, 3]);
+                    done();
+                });
+            });
+
+        });
+
     });
 
     // -------------------------------------------------------------------------
