@@ -11,6 +11,7 @@ import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { buildTypeMatcherFn } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 import { normalizeSelector } from "./utils/indexUtil.js";
+import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
 const ExpectedVersion = {
     Any: -1,
@@ -28,6 +29,17 @@ class OptimisticConcurrencyError extends Error {}
 
 /**
  * @typedef {string | SelectorNode[]} SelectorNode
+ */
+
+/**
+ * @typedef {object} QueryItem
+ * @property {string[]} [types] Event type names to match (OR within the group).
+ * @property {string[]} [tags] Tag values to match (each tag is ANDed with the others and with types).
+ */
+
+/**
+ * @typedef {object} DcbQuery
+ * @property {QueryItem[]} items Non-empty array of query items combined with OR semantics at the top level.
  */
 
 /**
@@ -75,6 +87,11 @@ class EventStore extends events.EventEmitter {
      * @param {string|function(object): string} [config.typeAccessor] Dot-notation path (e.g. `'type'`) or
      *   function `(event) => string` identifying the event type. Enables type-based queries via
      *   {@link EventStore#query} and ensures proper index routing for those queries.
+     * @param {string|function(object): string[]} [config.tagsAccessor] Dot-notation path (e.g. `'tags'`) or
+     *   function `(event) => string[]` extracting tag values from an event payload on write. On each
+     *   {@link EventStore#commit}, one stream per tag is created under `tags/{tag}`. Enables tag-scoped
+     *   {@link DcbQuery} items via {@link EventStore#query}. Tag values are recommended to use `/` as a
+     *   hierarchy separator (e.g. `'course/jdsj4'` → stream `tags/course/jdsj4`).
      * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
@@ -94,6 +111,13 @@ class EventStore extends events.EventEmitter {
         } else {
             this.typeAccessor = typeof config.typeAccessor === 'function' ? config.typeAccessor : null;
             this.typeMatcherFn = null;
+        }
+
+        if (typeof config.tagsAccessor === 'string' && config.tagsAccessor) {
+            const accessorPath = config.tagsAccessor;
+            this.tagsAccessor = (event) => getPropertyAtPath(event, accessorPath) ?? [];
+        } else {
+            this.tagsAccessor = typeof config.tagsAccessor === 'function' ? config.tagsAccessor : null;
         }
 
         this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
@@ -441,6 +465,34 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
+     * Ensure a dedicated tag stream exists for each tag on each event, creating it if needed.
+     * Must be called before the entity stream is created (same ordering requirement as ensureTypeStreams).
+     *
+     * @private
+     * @param {Array<object>} events The events to process.
+     */
+    ensureTagStreams(events) {
+        if (!this.tagsAccessor) return;
+        const tagsAccessor = this.tagsAccessor;
+        for (const event of events) {
+            const tags = tagsAccessor(event);
+            if (!Array.isArray(tags)) continue;
+            for (const tag of tags) {
+                if (typeof tag !== 'string' || !tag) continue;
+                const streamName = 'tags/' + tag;
+                if (!(streamName in this.streams)) {
+                    const tagValue = tag;
+                    const matcher = (doc) => {
+                        const docTags = tagsAccessor(doc.payload);
+                        return Array.isArray(docTags) && docTags.includes(tagValue);
+                    };
+                    this.createEventStream(streamName, matcher, false);
+                }
+            }
+        }
+    }
+
+    /**
      * @private
      * @param {object} event
      * @returns {string|null}
@@ -490,9 +542,10 @@ class EventStore extends events.EventEmitter {
             expectedVersion = ExpectedVersion.Any;
         }
 
-        // When typeAccessor is configured, ensure a dedicated type stream exists for each event
-        // before the entity stream write so the type stream index is never incomplete.
+        // When typeAccessor/tagsAccessor is configured, ensure dedicated streams exist for each
+        // event before the entity stream write so those indexes are never incomplete.
         this.ensureTypeStreams(events);
+        this.ensureTagStreams(events);
 
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName }, false);
@@ -559,7 +612,8 @@ class EventStore extends events.EventEmitter {
      * in AND groups they collapse that branch to an empty result.
      *
      * @api
-     * @param {SelectorNode[]} selector A non-empty array of event types or a nested stream-selector algebra.
+     * @param {SelectorNode[]|object} selectorOrDcbQuery A non-empty selector array, or a {@link DcbQuery} object
+     *   with an `items` property (compiled automatically to selector algebra).
      * @param {function|object|null} [matcher] Optional matcher used for stream pre-filtering.
      *   In object mode, function predicates receive `(payload, metadata)`.
      * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned stream (inclusive).
@@ -571,7 +625,15 @@ class EventStore extends events.EventEmitter {
      *   `[[courseTag, ['CourseCreated', 'CourseCapacityChanged']], [studentTag, ['StudentCreated']]]`
      * @throws {Error} if `selector` is not a non-empty array.
      */
-    query(selector, matcher = null, minRevision = 1, raw = false) {
+    query(selectorOrDcbQuery, matcher = null, minRevision = 1, raw = false) {
+        let selector = selectorOrDcbQuery;
+        if (isDcbQuery(selectorOrDcbQuery)) {
+            selector = compileDcbQuery(
+                selectorOrDcbQuery,
+                (type) => this.resolveTypeStream(type),
+                (tag) => this.resolveTagStream(tag)
+            );
+        }
         assert(Array.isArray(selector) && selector.length > 0, 'Must specify a non-empty array of stream selectors for query.');
         // Normalize the selector once here; both the condition and the stream use
         // the normalized form.  Wrap a string result (single-stream reduction) in
@@ -581,6 +643,28 @@ class EventStore extends events.EventEmitter {
         const condition = new CommitCondition(querySelector, matcher, this.storage.length, raw);
         const stream = this.fromStreams('_query_' + Date.now(), querySelector, minRevision, -1, matcher, raw);
         return { stream, condition };
+    }
+
+    /**
+     * @private
+     * @param {string} type
+     * @returns {string} Stream name for the given event type.
+     * @throws {Error} When typeAccessor is not configured.
+     */
+    resolveTypeStream(type) {
+        assert(this.typeAccessor !== null, 'DcbQuery references "types" but typeAccessor not configured.');
+        return type;
+    }
+
+    /**
+     * @private
+     * @param {string} tag
+     * @returns {string} Stream name for the given tag value.
+     * @throws {Error} When tagsAccessor is not configured.
+     */
+    resolveTagStream(tag) {
+        assert(this.tagsAccessor !== null, 'DcbQuery references "tags" but tagsAccessor not configured.');
+        return 'tags/' + tag;
     }
 
     /**

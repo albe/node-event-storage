@@ -2314,6 +2314,181 @@ describe('EventStore', function() {
 
     });
 
+    // -------------------------------------------------------------------------
+    // tagsAccessor
+    // -------------------------------------------------------------------------
+    describe('tagsAccessor', function() {
+
+        it('creates a tags/ stream lazily on first commit (function form)', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: (e) => e.tags ?? [] });
+            expect(eventstore.getStreamVersion('tags/course:1')).to.be(-1);
+            eventstore.commit('s', [{ tags: ['course:1'] }], () => {
+                expect(eventstore.getStreamVersion('tags/course:1')).to.be(1);
+                done();
+            });
+        });
+
+        it('creates a tags/ stream lazily on first commit (string path form)', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+            eventstore.commit('s', [{ tags: ['course:1'] }], () => {
+                expect(eventstore.getStreamVersion('tags/course:1')).to.be(1);
+                done();
+            });
+        });
+
+        it('creates one stream per unique tag value', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+            eventstore.commit('s', [{ tags: ['course:1', 'student:2'] }], () => {
+                expect(eventstore.getStreamVersion('tags/course:1')).to.be(1);
+                expect(eventstore.getStreamVersion('tags/student:2')).to.be(1);
+                done();
+            });
+        });
+
+        it('creates tag streams for all events in a multi-event commit', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+            eventstore.commit('s', [
+                { tags: ['course:1'] },
+                { tags: ['course:2'] }
+            ], () => {
+                expect(eventstore.getStreamVersion('tags/course:1')).to.be(1);
+                expect(eventstore.getStreamVersion('tags/course:2')).to.be(1);
+                done();
+            });
+        });
+
+        it('skips tag stream creation when tags array is empty', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+            eventstore.commit('s', [{ tags: [] }], () => {
+                const tagStreams = Object.keys(eventstore.streams).filter(n => n.startsWith('tags/'));
+                expect(tagStreams).to.have.length(0);
+                done();
+            });
+        });
+
+        it('skips tag stream creation when tags field is absent', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+            eventstore.commit('s', [{ noTags: true }], () => {
+                const tagStreams = Object.keys(eventstore.streams).filter(n => n.startsWith('tags/'));
+                expect(tagStreams).to.have.length(0);
+                done();
+            });
+        });
+
+        it('tag stream contains only events that carry that tag', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+            eventstore.commit('s', [
+                { n: 1, tags: ['course:1'] },
+                { n: 2, tags: ['student:9'] },
+                { n: 3, tags: ['course:1', 'student:9'] }
+            ], () => {
+                const stream = eventstore.getEventStream('tags/course:1');
+                expect(stream.events.map(e => e.n)).to.eql([1, 3]);
+                done();
+            });
+        });
+
+        it('supports hierarchical tag values (slash-separated)', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+            eventstore.commit('s', [{ tags: ['course/jdsj4'] }], () => {
+                expect(eventstore.getStreamVersion('tags/course/jdsj4')).to.be(1);
+                done();
+            });
+        });
+
+    });
+
+    // -------------------------------------------------------------------------
+    // DcbQuery via query()
+    // -------------------------------------------------------------------------
+    describe('DcbQuery via query()', function() {
+
+        it('throws when types referenced but typeAccessor not configured', function() {
+            eventstore = new EventStore({ storageDirectory });
+            expect(() => eventstore.query({ items: [{ types: ['A'] }] }))
+                .to.throwError(/typeAccessor not configured/);
+        });
+
+        it('throws when tags referenced but tagsAccessor not configured', function() {
+            eventstore = new EventStore({ storageDirectory });
+            expect(() => eventstore.query({ items: [{ tags: ['t1'] }] }))
+                .to.throwError(/tagsAccessor not configured/);
+        });
+
+        it('throws when items is empty', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type', tagsAccessor: 'tags' });
+            expect(() => eventstore.query({ items: [] })).to.throwError(/items must be a non-empty array/);
+        });
+
+        it('returns events for a type-only DcbQuery', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+            eventstore.commit('s', [{ type: 'OrderPlaced', n: 1 }, { type: 'OrderShipped', n: 2 }], () => {
+                const { stream } = eventstore.query({ items: [{ types: ['OrderPlaced'] }] });
+                expect(stream.events.map(e => e.n)).to.eql([1]);
+                done();
+            });
+        });
+
+        it('returns events for a tag-only DcbQuery', function(done) {
+            eventstore = new EventStore({ storageDirectory, tagsAccessor: 'tags' });
+            eventstore.commit('s', [
+                { n: 1, tags: ['course:1'] },
+                { n: 2, tags: ['student:9'] }
+            ], () => {
+                const { stream } = eventstore.query({ items: [{ tags: ['course:1'] }] });
+                expect(stream.events.map(e => e.n)).to.eql([1]);
+                done();
+            });
+        });
+
+        it('returns only events matching both tag AND type', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type', tagsAccessor: 'tags' });
+            eventstore.commit('s', [
+                { type: 'CourseCreated',  n: 1, tags: ['course:1'] },
+                { type: 'OrderPlaced',    n: 2, tags: ['course:1'] },
+                { type: 'CourseCreated',  n: 3, tags: ['course:2'] }
+            ], () => {
+                const { stream } = eventstore.query({ items: [{ tags: ['course:1'], types: ['CourseCreated'] }] });
+                expect(stream.events.map(e => e.n)).to.eql([1]);
+                done();
+            });
+        });
+
+        it('returns events across multiple items (OR semantics)', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type', tagsAccessor: 'tags' });
+            eventstore.commit('s', [
+                { type: 'CourseCreated', n: 1, tags: ['course:1'] },
+                { type: 'StudentCreated', n: 2, tags: ['student:9'] },
+                { type: 'OrderPlaced',   n: 3, tags: [] }
+            ], () => {
+                const { stream } = eventstore.query({
+                    items: [
+                        { tags: ['course:1'], types: ['CourseCreated'] },
+                        { tags: ['student:9'], types: ['StudentCreated'] }
+                    ]
+                });
+                expect(stream.events.map(e => e.n)).to.eql([1, 2]);
+                done();
+            });
+        });
+
+        it('returns a CommitCondition that detects conflicts', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type', tagsAccessor: 'tags' });
+            eventstore.commit('s', [{ type: 'CourseCreated', n: 1, tags: ['course:1'] }], () => {
+                const { condition } = eventstore.query({
+                    items: [{ tags: ['course:1'], types: ['CourseCreated'] }]
+                });
+                // A new conflicting event committed after the query should fail the condition
+                eventstore.commit('s', [{ type: 'CourseCreated', n: 2, tags: ['course:1'] }], () => {
+                    expect(() => eventstore.commit('s', [{ n: 3 }], condition))
+                        .to.throwError(/Optimistic Concurrency/);
+                    done();
+                });
+            });
+        });
+
+    });
+
     describe('makeReadOnly()', function() {
 
         it('switches to read-only mode and calls the callback', function(done) {
