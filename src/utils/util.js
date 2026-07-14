@@ -192,6 +192,28 @@ function getPropertyAtPath(obj, dotPath) {
     return current;
 }
 
+/**
+ * Compiles a dot-notation path string into a reusable accessor function,
+ * avoiding repeated string splitting and iteration on every call.
+ *
+ * @param {string} dotPath
+ * @returns {function(object): *}
+ */
+function compileAccessor(dotPath) {
+    const parts = dotPath.split('.');
+    if (parts.length === 1) {
+        return (obj) => obj == null ? undefined : obj[dotPath];
+    }
+    return (obj) => {
+        let cur = obj;
+        for (const part of parts) {
+            if (cur == null || typeof cur !== 'object') return undefined;
+            cur = cur[part];
+        }
+        return cur;
+    };
+}
+
 export {
     assert,
     assertEqual,
@@ -201,5 +223,6 @@ export {
     binarySearch,
     alignTo,
     kWayMerge,
-    getPropertyAtPath
+    getPropertyAtPath,
+    compileAccessor
 };
