@@ -84,14 +84,20 @@ class EventStore extends events.EventEmitter {
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
-     * @param {string|function(object): string} [config.typeAccessor] Dot-notation path (e.g. `'type'`) or
-     *   function `(event) => string` identifying the event type. Enables type-based queries via
-     *   {@link EventStore#query} and ensures proper index routing for those queries.
-     * @param {string|function(object): string[]} [config.tagsAccessor] Dot-notation path (e.g. `'tags'`) or
-     *   function `(event) => string[]` extracting tag values from an event payload on write. On each
-     *   {@link EventStore#commit}, one stream per tag is created under `tags/{tag}`. Enables tag-scoped
-     *   {@link DcbQuery} items via {@link EventStore#query}. Tag values are recommended to use `/` as a
-     *   hierarchy separator (e.g. `'course/jdsj4'` → stream `tags/course/jdsj4`).
+     * @param {Array<{path: string, nameBuilder: function(string): string}>} [config.streamSources] Generic
+     *   stream-index definitions. Each entry specifies a dot-notation `path` into the event payload and a
+     *   `nameBuilder(value) => streamName` function. On every {@link EventStore#commit} each entry is
+     *   evaluated: scalar values are passed directly to `nameBuilder`; array values are iterated so each
+     *   element produces its own stream. Non-string and empty values are skipped silently. The resulting
+     *   stream names must satisfy the stream-name pattern. Each entry's `path` is automatically registered
+     *   in `matcherProperties` for O(1) IndexMatcher routing.
+     * @param {string} [config.typeAccessor] Shorthand for a `streamSources` entry with `nameBuilder = v => v`.
+     *   Dot-notation path to the event type field (e.g. `'type'`). Enables type-based
+     *   {@link EventStore#query} selectors and {@link DcbQuery} `types` items.
+     * @param {string} [config.tagsAccessor] Shorthand for a `streamSources` entry with
+     *   `nameBuilder = v => \`tags/${v}\``. Dot-notation path to an array field of tag values (e.g.
+     *   `'tags'`). Enables tag-scoped {@link DcbQuery} `tags` items. Values are recommended to use `/`
+     *   as a hierarchy separator (e.g. `'course/jdsj4'` → stream `tags/course/jdsj4`).
      * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
@@ -104,22 +110,26 @@ class EventStore extends events.EventEmitter {
             storeName = 'eventstore';
         }
 
-        if (typeof config.typeAccessor === 'string' && config.typeAccessor) {
-            const accessorPath = config.typeAccessor;
-            this.typeAccessor = (event) => getPropertyAtPath(event, accessorPath);
-            this.typeMatcherFn = buildTypeMatcherFn(accessorPath);
-        } else {
-            this.typeAccessor = typeof config.typeAccessor === 'function' ? config.typeAccessor : null;
-            this.typeMatcherFn = null;
+        this.streamSources = [];
+        this.typeSource = null;
+        this.tagsSource = null;
+
+        if (config.typeAccessor) {
+            assert(typeof config.typeAccessor === 'string', 'typeAccessor must be a dot-notation string path (e.g. \'type\').');
+            this.typeSource = { path: config.typeAccessor, nameBuilder: (v) => v, matcherFn: buildTypeMatcherFn(config.typeAccessor) };
+            this.streamSources.push(this.typeSource);
         }
 
-        if (typeof config.tagsAccessor === 'string' && config.tagsAccessor) {
-            const accessorPath = config.tagsAccessor;
-            this.tagsAccessor = (event) => getPropertyAtPath(event, accessorPath) ?? [];
-            this.tagsMatcherFn = buildTypeMatcherFn(accessorPath);
-        } else {
-            this.tagsAccessor = typeof config.tagsAccessor === 'function' ? config.tagsAccessor : null;
-            this.tagsMatcherFn = null;
+        if (config.tagsAccessor) {
+            assert(typeof config.tagsAccessor === 'string', 'tagsAccessor must be a dot-notation string path (e.g. \'tags\').');
+            this.tagsSource = { path: config.tagsAccessor, nameBuilder: (v) => `tags/${v}`, matcherFn: buildTypeMatcherFn(config.tagsAccessor) };
+            this.streamSources.push(this.tagsSource);
+        }
+
+        for (const { path, nameBuilder } of config.streamSources ?? []) {
+            assert(typeof path === 'string' && path, 'Each streamSources entry must have a non-empty string path.');
+            assert(typeof nameBuilder === 'function', 'Each streamSources entry must have a nameBuilder function.');
+            this.streamSources.push({ path, nameBuilder, matcherFn: buildTypeMatcherFn(path) });
         }
 
         this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
@@ -131,18 +141,10 @@ class EventStore extends events.EventEmitter {
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
 
-        // When typeAccessor/tagsAccessor is a string path, ensure the corresponding full document
-        // path (payload.<path>) is in matcherProperties so the IndexMatcher discriminant table
-        // can route those stream lookups in O(1) on every write.
-        if (this.typeMatcherFn) {
-            const fullPath = `payload.${config.typeAccessor}`;
-            const currentProps = storageConfig.matcherProperties || DEFAULT_MATCHER_PROPERTIES;
-            if (!currentProps.includes(fullPath)) {
-                storageConfig.matcherProperties = [...currentProps, fullPath];
-            }
-        }
-        if (this.tagsMatcherFn) {
-            const fullPath = `payload.${config.tagsAccessor}`;
+        // Register each source's payload path in matcherProperties so the IndexMatcher
+        // discriminant table can route stream lookups in O(1) on every write.
+        for (const source of this.streamSources) {
+            const fullPath = `payload.${source.path}`;
             const currentProps = storageConfig.matcherProperties || DEFAULT_MATCHER_PROPERTIES;
             if (!currentProps.includes(fullPath)) {
                 storageConfig.matcherProperties = [...currentProps, fullPath];
@@ -454,71 +456,28 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Ensure a dedicated type stream exists for each event's type, creating it if needed.
-     * Must be called before the entity stream is created to guarantee correct index routing.
+     * Ensure a dedicated stream exists for each indexed property value across all stream sources.
+     * Must be called before the entity stream write so those indexes are never incomplete.
      *
      * @private
-     * @param {Array<object>} events The events to process.
+     * @param {Array<object>} events
      */
-    ensureTypeStreams(events) {
-        if (!this.typeAccessor) return;
-        for (const event of events) {
-            const type = this.resolveValidatedTypeStreamName(event);
-            if (type && !(type in this.streams)) {
-                const matcher = this.typeMatcherFn
-                    ? this.typeMatcherFn(type)
-                    : (doc) => this.typeAccessor(doc.payload) === type;
-                this.createEventStream(type, matcher, false);
-            }
-        }
-    }
-
-    /**
-     * Ensure a dedicated tag stream exists for each tag on each event, creating it if needed.
-     * Must be called before the entity stream is created (same ordering requirement as ensureTypeStreams).
-     *
-     * @private
-     * @param {Array<object>} events The events to process.
-     */
-    ensureTagStreams(events) {
-        if (!this.tagsAccessor) return;
-        const tagsAccessor = this.tagsAccessor;
-        const tagsMatcherFn = this.tagsMatcherFn;
-        for (const event of events) {
-            const tags = tagsAccessor(event);
-            if (!Array.isArray(tags)) continue;
-            for (const tag of tags) {
-                if (typeof tag !== 'string' || !tag) continue;
-                const streamName = 'tags/' + tag;
-                if (!(streamName in this.streams)) {
-                    // When tagsMatcherFn is set (string path form), build an object matcher so
-                    // IndexMatcher can classify it into the discriminant table for O(1) routing.
-                    // Fall back to a function matcher when tagsAccessor is a function.
-                    const matcher = tagsMatcherFn
-                        ? tagsMatcherFn(tag)
-                        : (doc) => {
-                            const docTags = tagsAccessor(doc.payload);
-                            return Array.isArray(docTags) && docTags.includes(tag);
-                        };
-                    this.createEventStream(streamName, matcher, false);
+    ensureStreams(events) {
+        if (this.streamSources.length === 0) return;
+        for (const source of this.streamSources) {
+            for (const event of events) {
+                const raw = getPropertyAtPath(event, source.path);
+                const values = Array.isArray(raw) ? raw : (raw != null && raw !== '' ? [raw] : []);
+                for (const value of values) {
+                    if (typeof value !== 'string' || !value) continue;
+                    const streamName = source.nameBuilder(value);
+                    assert(STREAM_NAME_PATTERN.test(streamName), `Invalid stream name "${streamName}" derived from path "${source.path}".`);
+                    if (!(streamName in this.streams)) {
+                        this.createEventStream(streamName, source.matcherFn(value), false);
+                    }
                 }
             }
         }
-    }
-
-    /**
-     * @private
-     * @param {object} event
-     * @returns {string|null}
-     */
-    resolveValidatedTypeStreamName(event) {
-        const type = this.typeAccessor(event);
-        if (type === undefined || type === null || type === '') {
-            return null;
-        }
-        assert(typeof type === 'string', 'typeAccessor must return a string.');
-        assert(STREAM_NAME_PATTERN.test(type), `typeAccessor must return a valid stream name. Got: "${type}"`);
-        return type;
     }
 
     /**
@@ -556,10 +515,8 @@ class EventStore extends events.EventEmitter {
             expectedVersion = ExpectedVersion.Any;
         }
 
-        // When typeAccessor/tagsAccessor is configured, ensure dedicated streams exist for each
-        // event before the entity stream write so those indexes are never incomplete.
-        this.ensureTypeStreams(events);
-        this.ensureTagStreams(events);
+        // Ensure all indexed streams exist before the entity stream write so those indexes are never incomplete.
+        this.ensureStreams(events);
 
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName }, false);
@@ -666,8 +623,8 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} When typeAccessor is not configured.
      */
     resolveTypeStream(type) {
-        assert(this.typeAccessor !== null, 'DcbQuery references "types" but typeAccessor not configured.');
-        return type;
+        assert(this.typeSource !== null, 'DcbQuery references "types" but typeAccessor not configured.');
+        return this.typeSource.nameBuilder(type);
     }
 
     /**
@@ -677,8 +634,8 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} When tagsAccessor is not configured.
      */
     resolveTagStream(tag) {
-        assert(this.tagsAccessor !== null, 'DcbQuery references "tags" but tagsAccessor not configured.');
-        return 'tags/' + tag;
+        assert(this.tagsSource !== null, 'DcbQuery references "tags" but tagsAccessor not configured.');
+        return this.tagsSource.nameBuilder(tag);
     }
 
     /**
