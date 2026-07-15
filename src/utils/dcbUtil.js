@@ -24,7 +24,7 @@ function isDcbQuery(value) {
  */
 function compileDcbQuery(query, resolveType, resolveTag) {
     if (!Array.isArray(query.items) || query.items.length === 0) {
-        throw new Error("DcbQuery.items must be a non-empty array. Use getEventStream('_all') for an unconstrained read.");
+        throw new Error("DcbQuery.items must be a non-empty array. Use ['_all'] for an unconstrained read.");
     }
     return query.items.map(item => compileDcbItem(item, resolveType, resolveTag));
 }
@@ -63,7 +63,7 @@ function compileDcbItem(item, resolveType, resolveTag) {
     }
 
     if (terms.length === 0) return '_all';
-    if (terms.length === 1) return terms[0];
+    if (terms.length === 1 && typeof terms[0] === 'string') return terms[0];
     return terms; // inner array = AND level
 }
 

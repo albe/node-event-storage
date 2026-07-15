@@ -124,6 +124,17 @@ Supported forms:
   { payload: { type: ['OrderPlaced', 'OrderCancelled'] } }
   ```
 
+- **Array document values with scalar matcher (containment check)**
+
+  When the document field is an array and the matcher value is a scalar, the match
+  succeeds if the array contains that value.
+
+  ```javascript
+  // matches events whose payload.tags array includes 'featured'
+  { payload: { tags: 'featured' } }
+  // equivalent to: event.payload.tags.includes('featured')
+  ```
+
 - **Scalar comparison operators**
 
   ```javascript

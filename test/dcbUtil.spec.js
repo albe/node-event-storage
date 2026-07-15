@@ -106,8 +106,8 @@ describe('dcbUtil', function () {
                 expect(compileDcbQuery({items: [{types: ['A']}]}, resolveType, resolveTag)).to.eql(['A']);
             });
 
-            it('compiles multiple types to a flat array (OR group)', function () {
-                expect(compileDcbQuery({items: [{types: ['A', 'B']}]}, resolveType, resolveTag)).to.eql([['A', 'B']]);
+            it('compiles multiple types to a nested OR group', function () {
+                expect(compileDcbQuery({items: [{types: ['A', 'B']}]}, resolveType, resolveTag)).to.eql([[['A', 'B']]]);
             });
 
         });
