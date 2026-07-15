@@ -226,6 +226,28 @@ for (const event of joined) {
 }
 ```
 
+`fromStreams` accepts a selector tree with alternating operators by depth:
+
+- depth 0 (top-level array): `OR` — union of all listed streams
+- depth 1 (second-level arrays): `AND` — intersection of all listed streams
+- depth 2: `OR` again, and so on
+
+```javascript
+// OR: all events from either stream
+eventstore.fromStreams('or-stream', ['order-42', 'order-99']);
+
+// AND: only events indexed in both streams (intersection)
+eventstore.fromStreams('and-stream', [['order-42', 'payment-42']]);
+
+// (tag-a AND tag-b AND (type-x OR type-y)) OR (tag-c AND tag-d)
+eventstore.fromStreams('selector-stream', [
+    ['tag-a', 'tag-b', ['type-x', 'type-y']],
+    ['tag-c', 'tag-d']
+]);
+```
+
+The union and intersection are computed over index entry ranges before any document is read — no events are deserialized that do not belong to the result set.
+
 The result is not persisted and cannot be used with consumers. For frequently-needed joins, create a permanent derived stream with `createStream` instead.
 
 ## Stream Categories

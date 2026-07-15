@@ -10,13 +10,17 @@ This page describes the technical implementation and architecture of the `node-e
 |------------------|------|
 | `EventStore.js` | Public API facade — manages streams, commits, consumers, and concurrency |
 | `EventStream.js` | Iterable / Node.js Readable wrapper around a positional index |
-| `JoinEventStream.js` | Merges several `EventStream` instances into one globally-ordered stream |
+| `JoinEventStream.js` | Evaluates nested stream selectors (alternating OR/AND by depth) into one globally-ordered virtual stream |
 | `Consumer.js` | Durable event consumer with at-least-once / exactly-once delivery semantics |
 | `Watcher.js` | Reference-counting singleton that watches a directory for file-system changes |
 | `WatchesFile.js` | Mixin that wires a file to a `Watcher` instance and re-reads it on change |
 | `Clock.js` | Monotonic microsecond clock for per-event timestamps |
 | `IndexEntry.js` | Binary layout of one index record (partition, position, size, sequence number) |
-| `util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
+| `utils/util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
+| `utils/indexUtil.js` | Set operations on index-entry ranges (`union`, `intersect`) and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
+| `utils/apiHelpers.js` | Argument normalization helpers shared across the public API (revision clamping, commit overloads, predicate/raw shorthand) |
+| `utils/metadataUtil.js` | Object matcher evaluation, raw-buffer matcher compilation, and HMAC metadata helpers |
+| `utils/fsUtil.js` | File-system utilities: path resolution, directory creation, recursive file scanning |
 | `Storage.js` | Facade — re-exports `WritableStorage` (default) and `ReadOnlyStorage` |
 | `Partition.js` | Facade — re-exports `WritablePartition` (default) and `ReadOnlyPartition` |
 | `Index.js` | Facade — re-exports `WritableIndex` (default) and `ReadOnlyIndex` |
@@ -106,7 +110,7 @@ graph TD
 
 ### JoinEventStream
 
-`JoinEventStream` merges several `EventStream` instances into a single globally-ordered stream by always yielding the event with the lowest sequence number across all inputs — a k-way merge. Used to build category streams and cross-aggregate projections.
+`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved to sorted index-entry ranges using `union` and `intersect` before any document is read. Used by `EventStore.fromStreams()` and `EventStore.query()` for multi-stream queries and DCB context reads.
 
 ### Consumer
 

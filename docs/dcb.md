@@ -38,7 +38,17 @@ The optional `matcher` narrows the boundary to exactly the events that would aff
 
 That `matcher` can be either a predicate function or the same object-matcher syntax used by streams: nested equality, array values with OR semantics, and scalar operators like `$gte` / `$lt`. See [Event Streams -> Object Matcher Syntax](streams.md#object-matcher-syntax).
 
-`query()` also supports raw mode (`query(types, matcher, minRevision, true)`), but raw streaming itself is a general stream-reading feature, not DCB-specific. See [Event Streams -> Reading Streams](streams.md#reading-streams) for the full raw-mode semantics and matcher behavior.
+The first argument to `query()` accepts the full selector algebra — the same nested array structure as `fromStreams()`. A flat `['TypeA', 'TypeB']` is equivalent to a top-level OR join over those streams. Nested arrays express AND (intersection) at odd depths and OR at even depths. See [The DCB Specification: Types and Tags](#the-dcb-specification-types-and-tags) for complete examples.
+
+`query()` also supports raw mode (`query(selector, matcher, minRevision, true)`), but raw streaming itself is a general stream-reading feature, not DCB-specific. See [Event Streams -> Reading Streams](streams.md#reading-streams) for the full raw-mode semantics and matcher behavior.
+
+### Implementation detail: selector algebra when tags are indexed as streams
+
+The important DCB concept is `types` + `tags` selection semantics. How this is executed is an implementation detail.
+
+If tags are materialized as dedicated streams, DCB items naturally compile to nested selector algebra — which `query()` accepts directly, returning both the filtered stream and the concurrency condition in a single call.
+
+If tags are not materialized as streams, the same semantics can be expressed entirely through matcher logic.
 
 ### Step 2 — Build the decision model
 
@@ -89,11 +99,20 @@ const store = new EventStore('my-store', {
 
 `typeAccessor` accepts a dot-notation path string (e.g. `'type'`, `'meta.kind'`) pointing to the event type field, which also enables faster index routing. For non-standard event layouts a function `(event) => string` can be used instead.
 
-When configured, `query()` treats a missing type stream as empty rather than throwing — a type that has never been committed yet is simply an empty result.
+Type stream names currently map directly to event types (for example `CourseCreated`).
 
-> **Without `typeAccessor`**, `query()` throws if a listed type stream does not exist. You must create it first with `createEventStream()`, or use type-named entity streams (e.g. `commit('OrderPlaced', ...)`).
+`query()` treats missing referenced streams as empty sets. This applies both to type-stream lists and nested selector algebra.
+
+In selector terms:
+
+- missing stream in an `OR` group: no effect,
+- missing stream in an `AND` group: that branch becomes empty.
 
 > **New stores only**: type indexes are built with `reindex=false` — they only cover events committed *after* the index was first created. Always configure `typeAccessor` from the beginning if you intend to use `query()`.
+
+> **CommitCondition timing**: the condition captures the global store length at the moment `query()` is called. At commit time, the conflict check includes all streams referenced by the selector that exist *at that point* — including streams created between the `query()` and `commit()` calls. This means a type stream or tag stream created by another writer during that window is automatically included in the conflict check, with no race gap.
+
+Tag streams are optional. DCB queries can be implemented without any tag streams by using matcher logic only.
 
 ---
 
@@ -150,7 +169,35 @@ queryItems = [
 
 An event matches when **any** item matches it: the event's type must be in that item's `types` **and** the event must carry **all** of that item's tags.
 
-In node-event-storage this is expressed today using the `matcher` function. Pass the union of all types, and encode the per-item logic in the matcher:
+Equivalent selector intent (when tags are represented as streams):
+
+- query level (`items`): `OR`
+- per-item `tags`: `AND`
+- per-item `types`: `OR`
+
+When tags are materialized as dedicated streams, pass the nested selector directly to `query()` — it returns both the filtered stream and the concurrency condition in one call, using the same alternating OR/AND depth semantics described in [Joining Streams](streams.md#joining-streams):
+
+```javascript
+const courseId  = 'course:jdsj4';
+const studentId = 'student:gfh3j';
+
+const { stream, condition } = store.query([
+    [courseId, ['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse']],
+    [studentId, ['StudentCreated', 'StudentSubscribedToCourse']]
+]);
+```
+
+- depth 0 (top-level array): OR across query items
+- depth 1 (second-level arrays): AND — tag stream intersected with the type-group stream
+- depth 2 (third-level arrays): OR across event types
+
+Selection happens at the index level: only events at the intersection of the tag stream and the relevant type streams are yielded, without deserializing unrelated documents. Missing streams are treated as empty — an `OR` branch with no matching stream is skipped; an `AND` branch containing a missing stream yields nothing.
+
+```javascript
+store.commit('enrollment-...', [{ type: 'StudentSubscribedToCourse', ... }], condition);
+```
+
+Without tag streams, the same intent can be expressed using the `matcher` function. Pass the union of all types, and encode per-item tag logic in the matcher:
 
 ```javascript
 const courseId  = 'course:jdsj4';
@@ -159,13 +206,60 @@ const studentId = 'student:gfh3j';
 const { stream, condition } = store.query(
     ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
     (event, meta) =>
-        (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(meta.stream)
+        (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(event.type)
             && meta.tags?.includes(courseId))
         ||
-        (['StudentCreated', 'StudentSubscribedToCourse'].includes(meta.stream)
+        (['StudentCreated', 'StudentSubscribedToCourse'].includes(event.type)
             && meta.tags?.includes(studentId))
 );
 ```
 
-The type membership check in the matcher duplicates what is already expressed in the `types` array — this is a current limitation. Future versions may introduce tag-based secondary indexes and a native query-item format to remove this duplication.
+## Choosing Between Matcher-Only and Tag Streams
 
+Both approaches are valid and can coexist.
+
+- **Matcher-only**: no additional tag indexes to maintain; lower write amplification.
+- **Tag streams**: more index writes per commit (one extra index write per configured tag stream), but can reduce read-time misses and deserialization/evaluation overhead when tag cardinality is high.
+
+Rule of thumb:
+
+- higher write load / lower read selectivity pressure -> matcher-only is often better,
+- lower write load / high tag diversity with many matcher misses -> tag streams are often better.
+
+### Benchmark findings and practical recommendation
+
+This benchmark section is inspired by the excellent pyeventsourcing speedrun style: a compact scenario that makes architectural trade-offs visible under sustained write-then-read pressure.
+
+Benchmark setup in this repository:
+
+- scenario: course subscriptions with DCB read model rebuilding,
+- runtime: 3 seconds per mode,
+- per iteration: 10 student registrations, 10 course registrations, 100 enrollments (120 operations total),
+- each mode runs against a fresh data directory.
+
+Recent measurements with that setup produced the following excerpt:
+
+| Mode                    | Ops/s | us/op | Relative vs matcher-only |
+|-------------------------|------:|------:|-------------------------:|
+| Matcher-only            |   372 |  2690 |                    1.00x |
+| Tag-streams             |  1241 |   806 |                    3.34x |
+| Semester-bounded stream |  3606 |   277 |                    9.69x |
+
+Mode definitions and how to apply them in practice:
+
+- **Matcher-only**: query by event types and evaluate tags only via matcher logic at read time. Practical setup: keep type streams, avoid tag streams, call `query(types, matcher)`.
+- **Tag-streams**: materialize tags as dedicated streams and build DCB context from stream selectors. Practical setup: create tag streams (manually or in pre-commit) and query through `query()` with nested selector algebra.
+- **Semester-bounded stream**: write all decision-relevant events for a semester into `semesters/{id}` so the read context stays naturally bounded. Practical setup: choose business-bounded write streams first, then query only within that boundary.
+
+This demonstrates three important points:
+
+- pure matcher-only DCB can degrade when the scanned context grows without a hard domain boundary,
+- DCB according to the full types+tags specification is usually fast enough with tag streams, but this can create many streams and extra index writes,
+- the best long-term approach is often domain partitioning (bounded write streams), so reads are naturally selective even without additional tag/type streams.
+
+Compared to generic SQL-backed event-store speedruns (including the pyeventsourcing benchmark context), this indicates that event-storage can outperform when stream boundaries reflect real domain limits, not only technical entity ownership.
+
+For the semester case specifically, realistic systems typically need one more filter/intersection for enrollment-relevant types because a semester stream may contain many unrelated events. Two common options are:
+
+- keep one semester stream and intersect with enrollment-related event types during context read,
+- split into `semester/{id}/students`, `semester/{id}/courses`, and `semester/{id}/enrolments`, then build the DCB context from the join of those three streams.

@@ -17,3 +17,5 @@ node_modules
 /event-storage-http
 /Platform.md
 /*/node_modules
+/.claude/settings.local.json
+/.mcp.json
