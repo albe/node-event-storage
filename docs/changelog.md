@@ -5,6 +5,10 @@
 - Extended `JoinEventStream` with nested selector-algebra composition (`OR` at depth 0, `AND` at depth 1, then alternating), available through `fromStreams`.
 - Updated DCB documentation to describe `types`/`tags` semantics with optional tag-stream indexing and matcher-only execution trade-offs.
 
+## 1.3.5
+
+- Fix edge case in JoinStream when reading interleaved streams that lead to read buffer backtracking
+
 ## 1.3.4
 
 - Fix edge case in JoinStream when range not inside selected streams
