@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.5
+
+- Fix edge case in JoinStream when reading interleaved streams that lead to read buffer backtracking
+
 ## 1.3.4
 
 - Fix edge case in JoinStream when range not inside selected streams
