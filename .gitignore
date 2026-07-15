@@ -19,3 +19,5 @@ node_modules
 /*/node_modules
 /.claude/settings.local.json
 /.mcp.json
+/*/data
+/.agentbridge/
