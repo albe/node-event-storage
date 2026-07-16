@@ -2,6 +2,18 @@ import { getPropertyAtPath } from './utils/util.js';
 import { matches } from './utils/metadataUtil.js';
 
 /**
+ * @param {any} value Candidate matcher value at a discriminant path.
+ * @returns {boolean} True when `value` is `{ $has: scalar }` (lone $has with a non-object value).
+ */
+function isLoneHasScalar(value) {
+    if (Array.isArray(value)) return false;
+    const keys = Object.keys(value);
+    if (keys.length !== 1 || keys[0] !== '$has') return false;
+    const has = value.$has;
+    return has !== null && has !== undefined && typeof has !== 'object';
+}
+
+/**
  * @typedef {object|function(object):boolean} Matcher
  */
 
@@ -217,6 +229,11 @@ class IndexMatcher {
                 if (Array.isArray(value) && value.length > 0 &&
                     value.every(v => v !== null && v !== undefined && typeof v !== 'object')) {
                     return { propPath, values: value.map(String) };
+                }
+                // Lone $has operator: array-containment matcher (e.g. tag streams). Treat the
+                // has-value as the discriminant so array-valued documents route in O(1).
+                if (isLoneHasScalar(value)) {
+                    return { propPath, values: [String(value.$has)] };
                 }
             }
         }

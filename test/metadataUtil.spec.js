@@ -349,6 +349,32 @@ describe('metadataUtil', function () {
             expect(matcher(Buffer.from('{"amount":150,"type":"Foo"}', 'utf8'))).to.be(false);
         });
 
+        it('matches with lone $has for tag arrays', function () {
+            const matcher = buildRawBufferMatcher({tags: {$has: 'featured'}});
+            expect(matcher(Buffer.from('{"tags":["featured","new"]}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"tags":["new","featured"]}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"tags":["archived"]}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"tags":[]}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"other":["featured"]}', 'utf8'))).to.be(false);
+        });
+
+        it('$has ignores matches inside nested objects/arrays at wrong depth', function () {
+            const matcher = buildRawBufferMatcher({tags: {$has: 'x'}});
+            // "x" appears only inside a nested object, not as an element of tags itself
+            expect(matcher(Buffer.from('{"tags":[{"inner":"x"}]}', 'utf8'))).to.be(false);
+            // "x" appears inside a nested array element, not as an element of tags itself
+            expect(matcher(Buffer.from('{"tags":[["x"]]}', 'utf8'))).to.be(false);
+            // "x" appears as an actual element
+            expect(matcher(Buffer.from('{"tags":[{"inner":"y"},"x"]}', 'utf8'))).to.be(true);
+        });
+
+        it('$has combines with other property matchers', function () {
+            const matcher = buildRawBufferMatcher({type: 'OrderPlaced', tags: {$has: 'vip'}});
+            expect(matcher(Buffer.from('{"type":"OrderPlaced","tags":["vip"]}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"type":"OrderPlaced","tags":["regular"]}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"type":"OrderCancelled","tags":["vip"]}', 'utf8'))).to.be(false);
+        });
+
     });
 
     describe('matches with operators ($gt, $gte, $lt, $lte, $eq, $ne)', function () {
@@ -443,11 +469,22 @@ describe('metadataUtil', function () {
             expect(matches({status: 'completed'}, {status: ['active', 'pending']})).to.be(false);
         });
 
-        it('handles array document value with scalar matcher (containment check)', function () {
-            expect(matches({tags: ['a', 'b']}, {tags: 'a'})).to.be(true);
-            expect(matches({tags: ['a', 'b']}, {tags: 'b'})).to.be(true);
-            expect(matches({tags: ['a', 'b']}, {tags: 'c'})).to.be(false);
-            expect(matches({tags: []}, {tags: 'a'})).to.be(false);
+        it('handles array document value with $has operator (containment check)', function () {
+            expect(matches({tags: ['a', 'b']}, {tags: {$has: 'a'}})).to.be(true);
+            expect(matches({tags: ['a', 'b']}, {tags: {$has: 'b'}})).to.be(true);
+            expect(matches({tags: ['a', 'b']}, {tags: {$has: 'c'}})).to.be(false);
+            expect(matches({tags: []}, {tags: {$has: 'a'}})).to.be(false);
+            expect(matches({}, {tags: {$has: 'a'}})).to.be(false);
+        });
+
+        it('$has returns false when the document value is not an array', function () {
+            expect(matches({tags: 'a'}, {tags: {$has: 'a'}})).to.be(false);
+            expect(matches({tags: {a: 1}}, {tags: {$has: 'a'}})).to.be(false);
+        });
+
+        it('scalar matcher against array document value no longer performs containment', function () {
+            // Historical auto-containment removed in favor of the explicit $has operator.
+            expect(matches({tags: ['a', 'b']}, {tags: 'a'})).to.be(false);
         });
 
         it('handles nested object matching without operators', function () {

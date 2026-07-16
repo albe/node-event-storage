@@ -54,11 +54,6 @@ function propertyMatchesValue(documentValue, matcherValue) {
         }
         return matches(documentValue, matcherValue);
     }
-    // Array document value with scalar matcher: treat as containment check.
-    // e.g. matches({ tags: ['a', 'b'] }, { tags: 'a' }) → true
-    if (Array.isArray(documentValue)) {
-        return documentValue.includes(matcherValue);
-    }
     return typeof matcherValue === 'undefined' || documentValue === matcherValue;
 }
 
@@ -90,6 +85,9 @@ function buildOperatorChecks(operatorObj) {
                 break;
             case '$ne':
                 checks.push(value => value !== expectedValue);
+                break;
+            case '$has':
+                checks.push(value => Array.isArray(value) && value.includes(expectedValue));
                 break;
             default:
                 throw new TypeError(`Unknown operator: ${operator}`);
@@ -241,6 +239,25 @@ function buildTypeMatcherFn(payloadPath) {
 }
 
 /**
+ * Like {@link buildTypeMatcherFn} but wraps the leaf value in a `$has` operator so the resulting
+ * object matcher performs an array-containment check. Use this for stream sources whose payload
+ * field is an array of tag values (each element identifies a stream).
+ *
+ * @param {string} payloadPath Dot-notation path relative to the event payload (e.g. `'tags'`).
+ * @returns {function(string): object} A function `(tagValue) => objectMatcher` producing `{payload: {…: {$has: tagValue}}}`.
+ */
+function buildTagMatcherFn(payloadPath) {
+    const parts = payloadPath.split('.');
+    return function (tagValue) {
+        let obj = {$has: tagValue};
+        for (let i = parts.length - 1; i >= 0; i--) {
+            obj = {[parts[i]]: obj};
+        }
+        return {payload: obj};
+    };
+}
+
+/**
  * Compile an object matcher into a raw-buffer predicate so raw-mode reads can filter compact
  * JSON without parsing every document first.
  *
@@ -330,6 +347,14 @@ function buildMatcherTreeChild(key, value) {
             child.pattern = keyPrefix;
             const nePattern = [Buffer.from(JSON.stringify(value['$ne']), 'utf8')];
             child.matches = (buffer, valueStart) => !matchesAnyValuePattern(buffer, valueStart, nePattern);
+        } else if ('$has' in value && Object.keys(value).length === 1) {
+            // A lone $has is a same-level array-containment check. The pattern locates the array
+            // opener (`"key":[`) and the follow-up scans array elements for the serialized scalar
+            // at the array's element level (skipping nested objects/arrays).
+            child.isKeyPattern = true;
+            child.pattern = Buffer.concat([keyPrefix, Buffer.from('[', 'utf8')]);
+            const hasPattern = Buffer.from(JSON.stringify(value['$has']), 'utf8');
+            child.matches = (buffer, valueStart) => indexOfSameLevel(buffer, hasPattern, valueStart) !== -1;
         } else if (isOperatorObject(value)) {
             child.isKeyPattern = true;
             child.pattern = keyPrefix;
@@ -518,5 +543,6 @@ export {
     buildMetadataForMatcher,
     buildMatcherFromMetadata,
     buildTypeMatcherFn,
+    buildTagMatcherFn,
     buildRawBufferMatcher
 };

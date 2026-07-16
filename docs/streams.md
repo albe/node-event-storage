@@ -124,16 +124,22 @@ Supported forms:
   { payload: { type: ['OrderPlaced', 'OrderCancelled'] } }
   ```
 
-- **Array document values with scalar matcher (containment check)**
+- **Array containment with `$has`**
 
-  When the document field is an array and the matcher value is a scalar, the match
-  succeeds if the array contains that value.
+  When the document field is an array and you want to match documents that contain a
+  specific scalar element, use the `$has` operator. A plain scalar matcher against an
+  array-valued field is always exact-equality (i.e. never matches an array).
 
   ```javascript
   // matches events whose payload.tags array includes 'featured'
-  { payload: { tags: 'featured' } }
-  // equivalent to: event.payload.tags.includes('featured')
+  { payload: { tags: { $has: 'featured' } } }
+  // equivalent to: Array.isArray(event.payload.tags) && event.payload.tags.includes('featured')
   ```
+
+  `$has` compiles to a fast byte-level check in raw mode: the compiled matcher locates
+  the `"tags":[` opener and scans the array's element level for the serialized scalar
+  without parsing nested objects. Use `$has` instead of a function matcher wherever
+  possible for tag-membership predicates.
 
 - **Scalar comparison operators**
 
@@ -141,8 +147,9 @@ Supported forms:
   { payload: { amount: { $gte: 100, $lt: 1000 } } }
   ```
 
-Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, and `$ne`.
-Multiple operators on the same field are combined with AND semantics.
+Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, and `$has`.
+Multiple operators on the same field are combined with AND semantics, except `$has`
+which must be used on its own for a given field.
 
 `$eq` is equivalent to plain equality, so prefer the simpler form when possible:
 

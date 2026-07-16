@@ -178,24 +178,40 @@ store.on('ready', () => {
 
 ## Without Tag Streams — Matcher-Only Queries
 
-Tag streams are optional. When tag cardinality is low or write throughput is the primary concern, encode the per-item tag logic in the `matcher` instead. Pass the union of all relevant types and evaluate tag membership at read time:
+Tag streams are optional. When tag cardinality is low or write throughput is the primary concern, encode the per-item tag logic in the `matcher` instead. Pass the union of all relevant types and evaluate tag membership at read time.
+
+**Prefer the object-matcher `$has` operator** over a function matcher for tag containment — `$has` compiles to a fast byte-level check in raw mode and is significantly cheaper than deserialising and invoking a JS function per event.
 
 ```javascript
 const courseId  = 'course/jdsj4';
 const studentId = 'student/gfh3j';
 
+// $has performs an array-containment check on payload.tags without a function matcher.
+const { stream, condition } = store.query(
+    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    {
+        payload: { tags: { $has: courseId } }
+        // For an OR across multiple tags, either widen the type list and post-filter,
+        // or issue two queries and merge — a single matcher only expresses one $has value.
+    }
+);
+```
+
+If the per-item logic really needs cross-field OR/AND semantics that the object matcher cannot express, fall back to a function matcher:
+
+```javascript
 const { stream, condition } = store.query(
     ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
     (event, meta) =>
         (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(event.type)
-            && meta.tags?.includes(courseId))
+            && event.tags?.includes(courseId))
         ||
         (['StudentCreated', 'StudentSubscribedToCourse'].includes(event.type)
-            && meta.tags?.includes(studentId))
+            && event.tags?.includes(studentId))
 );
 ```
 
-This requires no `tagsAccessor` configuration and no tag-stream writes. The trade-off is that more events must be deserialized at read time to evaluate the matcher.
+Both variants require no `tagsAccessor` configuration and no tag-stream writes. The trade-off is that more events must be deserialised at read time to evaluate the matcher; `$has` keeps that overhead close to a raw byte scan, while function matchers force full JSON parsing per event.
 
 ---
 

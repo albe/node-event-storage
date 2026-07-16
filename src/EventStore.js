@@ -8,7 +8,7 @@ import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert, compileAccessor } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
-import { buildTypeMatcherFn } from './utils/metadataUtil.js';
+import { buildTypeMatcherFn, buildTagMatcherFn } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 import { normalizeSelector } from "./utils/indexUtil.js";
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
@@ -116,20 +116,20 @@ class EventStore extends events.EventEmitter {
 
         if (config.typeAccessor) {
             assert(typeof config.typeAccessor === 'string', 'typeAccessor must be a dot-notation string path (e.g. \'type\').');
-            this.typeSource = { path: config.typeAccessor, accessor: compileAccessor(config.typeAccessor), nameBuilder: (v) => v, matcherFn: buildTypeMatcherFn(config.typeAccessor) };
+            this.typeSource = { path: config.typeAccessor, accessor: compileAccessor(config.typeAccessor), nameBuilder: (v) => v, matcherFn: buildTypeMatcherFn(config.typeAccessor), tagMatcherFn: buildTagMatcherFn(config.typeAccessor) };
             this.streamSources.push(this.typeSource);
         }
 
         if (config.tagsAccessor) {
             assert(typeof config.tagsAccessor === 'string', 'tagsAccessor must be a dot-notation string path (e.g. \'tags\').');
-            this.tagsSource = { path: config.tagsAccessor, accessor: compileAccessor(config.tagsAccessor), nameBuilder: (v) => `tags/${v}`, matcherFn: buildTypeMatcherFn(config.tagsAccessor) };
+            this.tagsSource = { path: config.tagsAccessor, accessor: compileAccessor(config.tagsAccessor), nameBuilder: (v) => `tags/${v}`, matcherFn: buildTypeMatcherFn(config.tagsAccessor), tagMatcherFn: buildTagMatcherFn(config.tagsAccessor) };
             this.streamSources.push(this.tagsSource);
         }
 
         for (const { path, nameBuilder } of config.streamSources ?? []) {
             assert(typeof path === 'string' && path, 'Each streamSources entry must have a non-empty string path.');
             assert(typeof nameBuilder === 'function', 'Each streamSources entry must have a nameBuilder function.');
-            this.streamSources.push({ path, nameBuilder, accessor: compileAccessor(path), matcherFn: buildTypeMatcherFn(path) });
+            this.streamSources.push({ path, nameBuilder, accessor: compileAccessor(path), matcherFn: buildTypeMatcherFn(path), tagMatcherFn: buildTagMatcherFn(path) });
         }
 
         this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
@@ -464,16 +464,18 @@ class EventStore extends events.EventEmitter {
      */
     ensureStreams(events) {
         if (this.streamSources.length === 0) return;
-        for (const { accessor, nameBuilder, matcherFn, path } of this.streamSources) {
+        for (const { accessor, nameBuilder, matcherFn, tagMatcherFn, path } of this.streamSources) {
             for (const event of events) {
                 const raw = accessor(event);
-                const values = Array.isArray(raw) ? raw : (raw != null && raw !== '' ? [raw] : []);
+                const isArrayValue = Array.isArray(raw);
+                const values = isArrayValue ? raw : (raw != null && raw !== '' ? [raw] : []);
                 for (const value of values) {
                     if (typeof value !== 'string' || !value) continue;
                     const streamName = nameBuilder(value);
                     assert(STREAM_NAME_PATTERN.test(streamName), `Invalid stream name "${streamName}" derived from path "${path}".`);
                     if (!(streamName in this.streams)) {
-                        this.createEventStream(streamName, matcherFn(value), false);
+                        const buildMatcher = isArrayValue ? tagMatcherFn : matcherFn;
+                        this.createEventStream(streamName, buildMatcher(value), false);
                     }
                 }
             }

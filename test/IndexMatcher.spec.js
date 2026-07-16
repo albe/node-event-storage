@@ -7,7 +7,7 @@ describe('IndexMatcher', function() {
 
         it('matches an index when document array contains the discriminant value', function() {
             const im = new IndexMatcher(['payload.tags']);
-            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+            im.add('stream-tags/course:1', { payload: { tags: { $has: 'course:1' } } });
 
             const hits = [];
             im.forEachMatch({ payload: { tags: ['course:1', 'student:9'] } }, n => hits.push(n));
@@ -16,7 +16,7 @@ describe('IndexMatcher', function() {
 
         it('does not match when the discriminant value is absent from the array', function() {
             const im = new IndexMatcher(['payload.tags']);
-            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+            im.add('stream-tags/course:1', { payload: { tags: { $has: 'course:1' } } });
 
             const hits = [];
             im.forEachMatch({ payload: { tags: ['student:9'] } }, n => hits.push(n));
@@ -25,8 +25,8 @@ describe('IndexMatcher', function() {
 
         it('resolves multiple indexes from multiple array elements', function() {
             const im = new IndexMatcher(['payload.tags']);
-            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
-            im.add('stream-tags/student:9', { payload: { tags: 'student:9' } });
+            im.add('stream-tags/course:1', { payload: { tags: { $has: 'course:1' } } });
+            im.add('stream-tags/student:9', { payload: { tags: { $has: 'student:9' } } });
 
             const hits = [];
             im.forEachMatch({ payload: { tags: ['course:1', 'student:9'] } }, n => hits.push(n));
@@ -35,7 +35,7 @@ describe('IndexMatcher', function() {
 
         it('deduplicates when duplicate array elements map to the same index', function() {
             const im = new IndexMatcher(['payload.tags']);
-            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+            im.add('stream-tags/course:1', { payload: { tags: { $has: 'course:1' } } });
 
             const hits = [];
             im.forEachMatch({ payload: { tags: ['course:1', 'course:1'] } }, n => hits.push(n));
@@ -44,7 +44,7 @@ describe('IndexMatcher', function() {
 
         it('ignores non-scalar array elements (objects, nulls)', function() {
             const im = new IndexMatcher(['payload.tags']);
-            im.add('stream-tags/course:1', { payload: { tags: 'course:1' } });
+            im.add('stream-tags/course:1', { payload: { tags: { $has: 'course:1' } } });
 
             const hits = [];
             im.forEachMatch({ payload: { tags: [null, {nested: true}, 'course:1'] } }, n => hits.push(n));
