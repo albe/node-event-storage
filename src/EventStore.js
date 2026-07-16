@@ -33,7 +33,7 @@ const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
  *
  * @param {string} sourcePath Dot-notation payload path (e.g. `'type'`, `'tags'`).
  * @param {function(string): string} nameBuilder Maps each source value to a stream name.
- * @returns {{path: string, accessor: function, nameBuilder: function, matcherFn: function(string): (function(any): object)}}
+ * @returns {{path: string, accessor: function, nameBuilder: function, matcherFn: function(string|undefined): (function(any): object)}}
  */
 function buildStreamSource(sourcePath, nameBuilder) {
     const scalarMatcher = buildMatcherFn(sourcePath);
