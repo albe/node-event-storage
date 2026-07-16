@@ -148,8 +148,14 @@ Supported forms:
   ```
 
 Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, and `$has`.
-Multiple operators on the same field are combined with AND semantics, except `$has`
-which must be used on its own for a given field.
+Multiple operators on the same field are combined with AND semantics, but only when
+they operate on the same value shape. `$gt`/`$gte`/`$lt`/`$lte`/`$eq`/`$ne` are scalar
+operators and can be freely combined (e.g. `{ $gte: 100, $lt: 1000 }`). `$has` is a
+non-scalar (array-containment) operator and cannot be combined with scalar operators —
+`{ $has: 'tag', $gt: 10 }` is nonsensical because a value cannot simultaneously be an
+array (for `$has`) and a scalar comparable to `10`. Future non-scalar operators (e.g. a
+hypothetical `$length`) may be combinable with `$has` but likewise not with scalar
+operators.
 
 `$eq` is equivalent to plain equality, so prefer the simpler form when possible:
 

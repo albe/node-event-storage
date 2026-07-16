@@ -4,7 +4,7 @@ import {
     buildRawBufferMatcher,
     buildMetadataForMatcher,
     buildMatcherFromMetadata,
-    buildTypeMatcherFn,
+    buildMatcherFn,
     buildMetadataHeader,
     createHmac
 } from '../src/utils/metadataUtil.js';
@@ -523,20 +523,30 @@ describe('metadataUtil', function () {
         });
 
         it('builds type matcher functions for single-level paths', function () {
-            const typeMatcher = buildTypeMatcherFn('type');
+            const typeMatcher = buildMatcherFn('type');
             expect(typeMatcher('OrderPlaced')).to.eql({payload: {type: 'OrderPlaced'}});
         });
 
         it('builds type matcher functions for nested paths', function () {
-            const typeMatcher = buildTypeMatcherFn('meta.kind');
+            const typeMatcher = buildMatcherFn('meta.kind');
             expect(typeMatcher('OrderPlaced')).to.eql({payload: {meta: {kind: 'OrderPlaced'}}});
         });
 
         it('builds type matcher functions for deeply nested paths', function () {
-            const typeMatcher = buildTypeMatcherFn('deeply.nested.type');
+            const typeMatcher = buildMatcherFn('deeply.nested.type');
             expect(typeMatcher('MyEvent')).to.eql({
                 payload: {deeply: {nested: {type: 'MyEvent'}}}
             });
+        });
+
+        it('folds a $eq operator into a scalar matcher', function () {
+            const scalar = buildMatcherFn('type', '$eq');
+            expect(scalar('OrderPlaced')).to.eql({payload: {type: 'OrderPlaced'}});
+        });
+
+        it('wraps the leaf in the given operator for non-scalar operators', function () {
+            const tagMatcher = buildMatcherFn('tags', '$has');
+            expect(tagMatcher('featured')).to.eql({payload: {tags: {$has: 'featured'}}});
         });
 
         it('builds a padded metadata header', function () {

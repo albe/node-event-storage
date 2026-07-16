@@ -8,7 +8,7 @@ import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert, compileAccessor } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
-import { buildTypeMatcherFn, buildTagMatcherFn } from './utils/metadataUtil.js';
+import { buildMatcherFn } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 import { normalizeSelector } from "./utils/indexUtil.js";
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
@@ -24,6 +24,27 @@ const ExpectedVersion = {
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
 const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
 const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
+
+/**
+ * Pre-compile a stream source descriptor with a single curried matcher factory:
+ * `matcherFn(operator)(value) => objectMatcher`. The scalar and `$has` shapes are compiled
+ * once per source so `ensureStreams` can pick the correct one based on the event property
+ * type (scalar → no operator, array → `$has`) without rebuilding the closure per event.
+ *
+ * @param {string} sourcePath Dot-notation payload path (e.g. `'type'`, `'tags'`).
+ * @param {function(string): string} nameBuilder Maps each source value to a stream name.
+ * @returns {{path: string, accessor: function, nameBuilder: function, matcherFn: function(string): (function(any): object)}}
+ */
+function buildStreamSource(sourcePath, nameBuilder) {
+    const scalarMatcher = buildMatcherFn(sourcePath);
+    const hasMatcher = buildMatcherFn(sourcePath, '$has');
+    return {
+        path: sourcePath,
+        accessor: compileAccessor(sourcePath),
+        nameBuilder,
+        matcherFn: (operator) => operator === '$has' ? hasMatcher : scalarMatcher
+    };
+}
 
 class OptimisticConcurrencyError extends Error {}
 
@@ -116,20 +137,20 @@ class EventStore extends events.EventEmitter {
 
         if (config.typeAccessor) {
             assert(typeof config.typeAccessor === 'string', 'typeAccessor must be a dot-notation string path (e.g. \'type\').');
-            this.typeSource = { path: config.typeAccessor, accessor: compileAccessor(config.typeAccessor), nameBuilder: (v) => v, matcherFn: buildTypeMatcherFn(config.typeAccessor), tagMatcherFn: buildTagMatcherFn(config.typeAccessor) };
+            this.typeSource = buildStreamSource(config.typeAccessor, (v) => v);
             this.streamSources.push(this.typeSource);
         }
 
         if (config.tagsAccessor) {
             assert(typeof config.tagsAccessor === 'string', 'tagsAccessor must be a dot-notation string path (e.g. \'tags\').');
-            this.tagsSource = { path: config.tagsAccessor, accessor: compileAccessor(config.tagsAccessor), nameBuilder: (v) => `tags/${v}`, matcherFn: buildTypeMatcherFn(config.tagsAccessor), tagMatcherFn: buildTagMatcherFn(config.tagsAccessor) };
+            this.tagsSource = buildStreamSource(config.tagsAccessor, (v) => `tags/${v}`);
             this.streamSources.push(this.tagsSource);
         }
 
         for (const { path, nameBuilder } of config.streamSources ?? []) {
             assert(typeof path === 'string' && path, 'Each streamSources entry must have a non-empty string path.');
             assert(typeof nameBuilder === 'function', 'Each streamSources entry must have a nameBuilder function.');
-            this.streamSources.push({ path, nameBuilder, accessor: compileAccessor(path), matcherFn: buildTypeMatcherFn(path), tagMatcherFn: buildTagMatcherFn(path) });
+            this.streamSources.push(buildStreamSource(path, nameBuilder));
         }
 
         this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
@@ -464,17 +485,17 @@ class EventStore extends events.EventEmitter {
      */
     ensureStreams(events) {
         if (this.streamSources.length === 0) return;
-        for (const { accessor, nameBuilder, matcherFn, tagMatcherFn, path } of this.streamSources) {
+        for (const { accessor, nameBuilder, matcherFn, path } of this.streamSources) {
             for (const event of events) {
                 const raw = accessor(event);
                 const isArrayValue = Array.isArray(raw);
                 const values = isArrayValue ? raw : (raw != null && raw !== '' ? [raw] : []);
+                const buildMatcher = matcherFn(isArrayValue ? '$has' : undefined);
                 for (const value of values) {
                     if (typeof value !== 'string' || !value) continue;
                     const streamName = nameBuilder(value);
                     assert(STREAM_NAME_PATTERN.test(streamName), `Invalid stream name "${streamName}" derived from path "${path}".`);
                     if (!(streamName in this.streams)) {
-                        const buildMatcher = isArrayValue ? tagMatcherFn : matcherFn;
                         this.createEventStream(streamName, buildMatcher(value), false);
                     }
                 }
