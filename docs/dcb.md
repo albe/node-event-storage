@@ -211,7 +211,7 @@ const { stream, condition } = store.query(
 );
 ```
 
-Both variants require no `tagsAccessor` configuration and no tag-stream writes. The trade-off is that more events must be deserialised at read time to evaluate the matcher; `$has` keeps that overhead close to a raw byte scan, while function matchers force full JSON parsing per event.
+Both variants require no `tagsAccessor` configuration and no tag-stream writes. The trade-off is that more events must be deserialized at read time to evaluate the matcher; `$has` keeps that overhead close to a raw byte scan, while function matchers force full JSON parsing per event.
 
 ---
 
