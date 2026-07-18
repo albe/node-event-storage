@@ -9,7 +9,6 @@ import {
     compareNumeric
 } from './jsonUtil.js';
 
-const compiledOperatorMatcherCache = new WeakMap();
 const compiledMatcherCache = new WeakMap();
 const rawBufferMatcherCache = new WeakMap();
 
@@ -57,7 +56,7 @@ function compileMatcher(matcher) {
             if (Array.isArray(matcherValue)) {
                 checks.push(doc => matcherValue.includes(doc[prop]));
             } else if (isOperatorObject(matcherValue)) {
-                const operatorChecks = getCompiledOperatorChecks(matcherValue);
+                const operatorChecks = buildOperatorChecks(matcherValue);
                 checks.push(doc => matchesCompiledOperators(doc[prop], operatorChecks));
             } else {
                 const nestedCheck = getCompiledMatcher(matcherValue);
@@ -139,23 +138,6 @@ function buildOperatorChecks(operatorObj) {
                 throw new TypeError(`Unknown operator: ${operator}`);
         }
     }
-    return checks;
-}
-
-/**
- * Return cached compiled checks for `operatorObj`, compiling and caching on first access.
- * Using WeakMap keeps operator objects GC-eligible and avoids mutating user-supplied objects.
- *
- * @param {object} operatorObj Object containing operator/value pairs.
- * @returns {Array<function(any): boolean>} Cached or newly compiled operator checks.
- */
-function getCompiledOperatorChecks(operatorObj) {
-    const cachedChecks = compiledOperatorMatcherCache.get(operatorObj);
-    if (cachedChecks) {
-        return cachedChecks;
-    }
-    const checks = buildOperatorChecks(operatorObj);
-    compiledOperatorMatcherCache.set(operatorObj, checks);
     return checks;
 }
 
@@ -536,7 +518,7 @@ function buildOperatorBufferMatcher(operatorObj) {
     }
 
     // Non-numeric expected value: use generic operator checks.
-    const operatorChecks = getCompiledOperatorChecks(operatorObj);
+    const operatorChecks = buildOperatorChecks(operatorObj);
     return (buffer, startOffset) => matchesOperatorInBuffer(buffer, startOffset, operatorChecks);
 }
 
