@@ -461,6 +461,21 @@ describe('metadataUtil', function () {
             expect(matches({meta: {kind: 'B'}}, {meta: {kind: 'A'}})).to.be(false);
         });
 
+        it('returns the same compiled predicate for the same matcher object reference', function () {
+            const matcherObj = {type: 'Foo'};
+            expect(matches({type: 'Foo'}, matcherObj)).to.be(true);
+            expect(matches({type: 'Bar'}, matcherObj)).to.be(false);
+            expect(matches({type: 'Foo'}, matcherObj)).to.be(true);
+        });
+
+        it('independently compiles distinct matcher object references with identical shape', function () {
+            const a = {type: 'Foo'};
+            const b = {type: 'Foo'};
+            expect(matches({type: 'Foo'}, a)).to.be(true);
+            expect(matches({type: 'Foo'}, b)).to.be(true);
+            expect(matches({type: 'Bar'}, a)).to.be(false);
+        });
+
     });
 
     describe('matcher metadata helpers', function () {
