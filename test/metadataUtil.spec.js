@@ -375,6 +375,31 @@ describe('metadataUtil', function () {
             expect(matcher(Buffer.from('{"type":"OrderCancelled","tags":["vip"]}', 'utf8'))).to.be(false);
         });
 
+        it('matches with $hasAny for tag arrays', function () {
+            const matcher = buildRawBufferMatcher({tags: {$hasAny: ['featured', 'new']}});
+            expect(matcher(Buffer.from('{"tags":["featured","archived"]}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"tags":["new","archived"]}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"tags":["featured","new"]}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"tags":["archived"]}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"tags":[]}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"other":["featured"]}', 'utf8'))).to.be(false);
+        });
+
+        it('$hasAny ignores matches inside nested objects/arrays at wrong depth', function () {
+            const matcher = buildRawBufferMatcher({tags: {$hasAny: ['x', 'y']}});
+            expect(matcher(Buffer.from('{"tags":[{"inner":"x"}]}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"tags":[["x"]]}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"tags":[{"inner":"y"},"x"]}', 'utf8'))).to.be(true);
+        });
+
+        it('$hasAny combines with other property matchers', function () {
+            const matcher = buildRawBufferMatcher({type: 'OrderPlaced', tags: {$hasAny: ['vip', 'premium']}});
+            expect(matcher(Buffer.from('{"type":"OrderPlaced","tags":["vip"]}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"type":"OrderPlaced","tags":["premium"]}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"type":"OrderPlaced","tags":["regular"]}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"type":"OrderCancelled","tags":["vip"]}', 'utf8'))).to.be(false);
+        });
+
     });
 
     describe('matches with operators ($gt, $gte, $lt, $lte, $eq, $ne)', function () {
@@ -480,6 +505,19 @@ describe('metadataUtil', function () {
         it('$has returns false when the document value is not an array', function () {
             expect(matches({tags: 'a'}, {tags: {$has: 'a'}})).to.be(false);
             expect(matches({tags: {a: 1}}, {tags: {$has: 'a'}})).to.be(false);
+        });
+
+        it('handles array document value with $hasAny operator (any-of containment)', function () {
+            expect(matches({tags: ['a', 'b']}, {tags: {$hasAny: ['a', 'c']}})).to.be(true);
+            expect(matches({tags: ['a', 'b']}, {tags: {$hasAny: ['b', 'c']}})).to.be(true);
+            expect(matches({tags: ['a', 'b']}, {tags: {$hasAny: ['c', 'd']}})).to.be(false);
+            expect(matches({tags: []}, {tags: {$hasAny: ['a']}})).to.be(false);
+            expect(matches({}, {tags: {$hasAny: ['a']}})).to.be(false);
+        });
+
+        it('$hasAny returns false when the document value is not an array', function () {
+            expect(matches({tags: 'a'}, {tags: {$hasAny: ['a']}})).to.be(false);
+            expect(matches({tags: {a: 1}}, {tags: {$hasAny: ['a']}})).to.be(false);
         });
 
         it('scalar matcher against array document value no longer performs containment', function () {

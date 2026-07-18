@@ -89,6 +89,9 @@ function buildOperatorChecks(operatorObj) {
             case '$has':
                 checks.push(value => Array.isArray(value) && value.includes(expectedValue));
                 break;
+            case '$hasAny':
+                checks.push(value => Array.isArray(value) && expectedValue.some(v => value.includes(v)));
+                break;
             default:
                 throw new TypeError(`Unknown operator: ${operator}`);
         }
@@ -342,6 +345,14 @@ function buildMatcherTreeChild(key, value) {
             child.pattern = Buffer.concat([keyPrefix, Buffer.from('[', 'utf8')]);
             const valuePattern = Buffer.from(JSON.stringify(value['$has']), 'utf8');
             child.matches = (buffer, valueStart) => indexOfSameLevel(buffer, valuePattern, valueStart) !== -1;
+        } else if ('$hasAny' in value && Object.keys(value).length === 1) {
+            // A lone $hasAny is an any-of array-containment check: matches when the document
+            // array contains at least one of the expected values.
+            child.isKeyPattern = true;
+            child.pattern = Buffer.concat([keyPrefix, Buffer.from('[', 'utf8')]);
+            const hasAnyPatterns = value['$hasAny'].map(v => Buffer.from(JSON.stringify(v), 'utf8'));
+            child.matches = (buffer, valueStart) =>
+                hasAnyPatterns.some(vp => indexOfSameLevel(buffer, vp, valueStart) !== -1);
         } else if (isOperatorObject(value)) {
             child.isKeyPattern = true;
             child.pattern = keyPrefix;

@@ -14,6 +14,19 @@ function isLoneHasScalar(value) {
 }
 
 /**
+ * @param {any} value Candidate matcher value at a discriminant path.
+ * @returns {boolean} True when `value` is `{ $hasAny: [scalar, ...] }` (lone $hasAny with a non-empty scalar array).
+ */
+function isLoneHasAnyArray(value) {
+    if (Array.isArray(value)) return false;
+    const keys = Object.keys(value);
+    if (keys.length !== 1 || keys[0] !== '$hasAny') return false;
+    const hasAny = value.$hasAny;
+    return Array.isArray(hasAny) && hasAny.length > 0 &&
+        hasAny.every(v => v !== null && v !== undefined && typeof v !== 'object');
+}
+
+/**
  * @typedef {object|function(object):boolean} Matcher
  */
 
@@ -234,6 +247,11 @@ class IndexMatcher {
                 // has-value as the discriminant so array-valued documents route in O(1).
                 if (isLoneHasScalar(value)) {
                     return { propPath, values: [String(value.$has)] };
+                }
+                // Lone $hasAny: register one matcher under each expected value so any of them
+                // can trigger O(1) routing when the document array contains that value.
+                if (isLoneHasAnyArray(value)) {
+                    return { propPath, values: value.$hasAny.map(String) };
                 }
             }
         }

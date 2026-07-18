@@ -53,6 +53,56 @@ describe('IndexMatcher', function() {
 
     });
 
+    describe('forEachMatch with $hasAny matchers', function() {
+
+        it('matches when document array contains any of the expected values', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-multi', { payload: { tags: { $hasAny: ['course:1', 'student:9'] } } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['course:1'] } }, n => hits.push(n));
+            expect(hits).to.eql(['stream-multi']);
+        });
+
+        it('matches on second expected value when first is absent', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-multi', { payload: { tags: { $hasAny: ['course:1', 'student:9'] } } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['student:9'] } }, n => hits.push(n));
+            expect(hits).to.eql(['stream-multi']);
+        });
+
+        it('deduplicates when document array contains multiple matching values', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-multi', { payload: { tags: { $hasAny: ['course:1', 'student:9'] } } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['course:1', 'student:9'] } }, n => hits.push(n));
+            expect(hits).to.eql(['stream-multi']);
+        });
+
+        it('does not match when none of the expected values are present', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-multi', { payload: { tags: { $hasAny: ['course:1', 'student:9'] } } });
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['other'] } }, n => hits.push(n));
+            expect(hits).to.eql([]);
+        });
+
+        it('removes $hasAny matchers from all discriminant keys', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('stream-multi', { payload: { tags: { $hasAny: ['course:1', 'student:9'] } } });
+            im.remove('stream-multi');
+
+            const hits = [];
+            im.forEachMatch({ payload: { tags: ['course:1', 'student:9'] } }, n => hits.push(n));
+            expect(hits).to.eql([]);
+        });
+
+    });
+
     describe('remove', function() {
 
         it('is a no-op for unknown index names', function() {
