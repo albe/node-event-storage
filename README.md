@@ -35,6 +35,7 @@ npm install event-storage
 > **CommonJS / `require()` users:** version 1.0 is ESM-only. If your project uses `require()` and migrating to ESM is not an option, install the 0.x series (`npm install event-storage@0`) which is functionally equivalent and retains full CJS support.
 
 
+## Quick Start
 
 ```javascript
 import { EventStore } from 'event-storage';
@@ -55,6 +56,14 @@ eventstore.on('ready', () => {
 });
 ```
 
+## Common Usage at a Glance
+
+- **Append events** with optimistic concurrency via `commit(stream, events, expectedVersion, cb)`.
+- **Read streams** with `getEventStream()` and fluent options for revision/range/direction.
+- **Run cross-stream queries** with `query(types, matcher)` and commit with its returned `condition` for DCB.
+- **Build projections** with `fromStreams()` (joined streams) and derived stream registration.
+- **Consume reliably** with `createConsumer()` for durable at-least-once (or exactly-once with state) processing.
+
 ## Key Features
 
 | Feature | Summary |
@@ -62,7 +71,7 @@ eventstore.on('ready', () => {
 | **Optimistic concurrency** | Pass `expectedVersion` to `commit()` to guarantee conflict-free writes. |
 | **Flexible stream reading** | Range queries, reverse iteration, and a fluent builder API. |
 | **Joined and derived streams** | Combine any number of streams with a nested OR/AND selector tree into one globally-ordered virtual stream; filter events into reusable derived projection streams. |
-| **Object matchers** | Support nested equality, array values (OR semantics), and scalar operators like `$gt` / `$gte` / `$lt` / `$lte` / `$eq` / `$ne`, while still benefiting from O(1) discriminant routing on writes. |
+| **Object matchers** | Support nested equality, array values (OR semantics), scalar operators (`$gt` / `$gte` / `$lt` / `$lte` / `$eq` / `$ne`), plus array-containment operators (`$has` / `$hasAny`), while still benefiting from O(1) discriminant routing on writes. |
 | **DCB** | Configure `typeAccessor` to have per-type stream indexes maintained automatically, and use `query()` / `Condition` for fine-grained, query-scoped optimistic concurrency (Dynamic Consistency Boundaries). |
 | **Stream categories** | Name streams `<category>-<id>` and query the whole category at once. |
 | **Durable consumers** | At-least-once (and exactly-once with `setState`) event delivery with automatic position tracking. |
@@ -112,13 +121,18 @@ if (!hasOpenOrder) {
 
 ## Object Matcher Syntax
 
-Object matchers support nested equality, array values, and scalar operators like `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, and `$ne`.
+Object matchers support nested equality, array values, scalar operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), and array-containment operators (`$has`, `$hasAny`).
+
+- Scalar operators can be combined on one field (AND semantics), e.g. `{ $gte: 100, $lt: 1000 }`.
+- `$has` / `$hasAny` target array-valued fields and must be used on their own for that field.
 
 For hot paths, reuse the same matcher object reference across calls when possible (instead of recreating equivalent objects each time) so matcher compilation and cache-based optimization paths can be reused.
 
 ```javascript
 { payload: { type: ['OrderPlaced', 'OrderCancelled'] } }
 { payload: { amount: { $gte: 100, $lt: 1000 } } }
+{ payload: { tags: { $has: 'featured' } } }
+{ payload: { tags: { $hasAny: ['featured', 'priority'] } } }
 ```
 
 ---
