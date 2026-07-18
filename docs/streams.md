@@ -108,21 +108,21 @@ Supported forms:
 
 - **Scalar equality**
 
-  ```javascript
+```javascript
   { payload: { type: 'OrderPlaced' } }
-  ```
+```
 
 - **Nested object matching**
 
-  ```javascript
+```javascript
   { metadata: { tenantId: 'acme' } }
-  ```
+```
 
 - **Array values with OR semantics**
 
-  ```javascript
+```javascript
   { payload: { type: ['OrderPlaced', 'OrderCancelled'] } }
-  ```
+```
 
 - **Array containment with `$has` and `$hasAny`**
 
@@ -131,7 +131,7 @@ Supported forms:
   use `$hasAny`. A plain scalar matcher against an array-valued field is always
   exact-equality (i.e. never matches an array).
 
-  ```javascript
+```javascript
   // matches events whose payload.tags array includes 'featured'
   { payload: { tags: { $has: 'featured' } } }
   // equivalent to: Array.isArray(event.payload.tags) && event.payload.tags.includes('featured')
@@ -139,7 +139,7 @@ Supported forms:
   // matches events whose payload.tags array includes 'featured' OR 'new'
   { payload: { tags: { $hasAny: ['featured', 'new'] } } }
   // equivalent to: Array.isArray(event.payload.tags) && ['featured','new'].some(v => event.payload.tags.includes(v))
-  ```
+```
 
   Both operators compile to fast byte-level checks in raw mode: the compiled matcher
   locates the `"tags":[` opener and scans the array's element level for the serialized
@@ -148,9 +148,9 @@ Supported forms:
 
 - **Scalar comparison operators**
 
-  ```javascript
+```javascript
   { payload: { amount: { $gte: 100, $lt: 1000 } } }
-  ```
+```
 
 Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$has`, and `$hasAny`.
 Multiple operators on the same field are combined with AND semantics, but only when
