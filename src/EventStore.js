@@ -8,9 +8,8 @@ import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert, compileAccessor } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
-import { buildMatcherFn } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
-import { normalizeSelector } from "./utils/indexUtil.js";
+import { normalizeSelector, buildStreamSource } from "./utils/indexUtil.js";
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
 const ExpectedVersion = {
@@ -25,26 +24,6 @@ const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
 const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
 const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
-/**
- * Pre-compile a stream source descriptor with a single curried matcher factory:
- * `matcherFn(operator)(value) => objectMatcher`. The scalar and `$has` shapes are compiled
- * once per source so `ensureStreams` can pick the correct one based on the event property
- * type (scalar → no operator, array → `$has`) without rebuilding the closure per event.
- *
- * @param {string} sourcePath Dot-notation payload path (e.g. `'type'`, `'tags'`).
- * @param {function(string): string} nameBuilder Maps each source value to a stream name.
- * @returns {{path: string, accessor: function, nameBuilder: function, matcherFn: function(string|undefined): (function(any): object)}}
- */
-function buildStreamSource(sourcePath, nameBuilder) {
-    const scalarMatcher = buildMatcherFn(sourcePath);
-    const hasMatcher = buildMatcherFn(sourcePath, '$has');
-    return {
-        path: sourcePath,
-        accessor: compileAccessor(sourcePath),
-        nameBuilder,
-        matcherFn: (operator) => operator === '$has' ? hasMatcher : scalarMatcher
-    };
-}
 
 class OptimisticConcurrencyError extends Error {}
 

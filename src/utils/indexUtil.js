@@ -1,4 +1,5 @@
-import { assert } from './util.js';
+import { assert, compileAccessor } from './util.js';
+import { buildMatcherFn } from './metadataUtil.js';
 
 /**
  * Merge two sorted index-entry ranges into one sorted union without duplicates.
@@ -198,5 +199,27 @@ function optimizeSelectorNode(selectorNode, depth) {
 export {
     union,
     intersect,
-    normalizeSelector
+    normalizeSelector,
+    buildStreamSource
 };
+
+/**
+ * Pre-compile a stream source descriptor with a single curried matcher factory:
+ * `matcherFn(operator)(value) => objectMatcher`. The scalar and `$has` shapes are compiled
+ * once per source so callers can pick the correct one based on the event property type
+ * (scalar → no operator, array → `$has`) without rebuilding the closure per event.
+ *
+ * @param {string} sourcePath Dot-notation payload path (e.g. `'type'`, `'tags'`).
+ * @param {function(string): string} nameBuilder Maps each source value to a stream name.
+ * @returns {{path: string, accessor: function, nameBuilder: function, matcherFn: function(string|undefined): (function(any): object)}}
+ */
+function buildStreamSource(sourcePath, nameBuilder) {
+    const scalarMatcher = buildMatcherFn(sourcePath);
+    const hasMatcher = buildMatcherFn(sourcePath, '$has');
+    return {
+        path: sourcePath,
+        accessor: compileAccessor(sourcePath),
+        nameBuilder,
+        matcherFn: (operator) => operator === '$has' ? hasMatcher : scalarMatcher
+    };
+}
