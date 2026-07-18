@@ -546,6 +546,8 @@ Matcher behavior differs by mode:
 
 Object matchers support nested equality, array values with OR semantics, and scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`). Multiple operators on the same field are combined with AND semantics.
 
+For repeated queries on hot paths, prefer reusing the same matcher object reference instead of recreating equivalent objects so compiled matcher/cache optimization paths can be reused.
+
 Prefer plain equality over `$eq` when possible (`{ type: 'Foo' }` instead of `{ type: { $eq: 'Foo' } }`).
 
 Operator matching is intended for scalar values. For arrays, objects, or custom raw encodings, use plain equality or a function matcher.

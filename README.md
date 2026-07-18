@@ -114,6 +114,8 @@ if (!hasOpenOrder) {
 
 Object matchers support nested equality, array values, and scalar operators like `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, and `$ne`.
 
+For hot paths, reuse the same matcher object reference across calls when possible (instead of recreating equivalent objects each time) so matcher compilation and cache-based optimization paths can be reused.
+
 ```javascript
 { payload: { type: ['OrderPlaced', 'OrderCancelled'] } }
 { payload: { amount: { $gte: 100, $lt: 1000 } } }
