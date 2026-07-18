@@ -110,7 +110,7 @@ graph TD
 
 ### JoinEventStream
 
-`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved to sorted index-entry ranges using `union` and `intersect` before any document is read. Used by `EventStore.fromStreams()` for multi-stream queries and DCB context reads.
+`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved to sorted index-entry ranges using `union` and `intersect` before any document is read. Used by `EventStore.fromStreams()` and `EventStore.query()` for multi-stream queries and DCB context reads.
 
 ### Consumer
 

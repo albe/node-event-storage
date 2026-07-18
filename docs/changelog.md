@@ -2,6 +2,7 @@
 
 ## 1.4.0
 
+- **Breaking:** `fromStreams`/`query` no longer throws on non-existing streams; considers them empty.
 - Extended `JoinEventStream` with nested selector-algebra composition, available through `fromStreams`.
 - Added `DcbQuery` shorthand syntax for `query()`: pass `{ items: [{ types, tags }] }` directly. Requires `typeAccessor` and/or `tagsAccessor` to be configured.
 - Added `tagsAccessor` option: dot-notation path to a tag-string array in the event payload; auto-indexes one stream per distinct tag value with O(1) discriminant routing.

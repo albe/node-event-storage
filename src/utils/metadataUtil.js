@@ -9,7 +9,8 @@ import {
     compareNumeric
 } from './jsonUtil.js';
 
-const compiledOperatorMatcherCache = new WeakMap();
+const compiledMatcherCache = new WeakMap();
+const rawBufferMatcherCache = new WeakMap();
 
 /**
  * @param {any} value Value to classify.
@@ -37,24 +38,71 @@ function isOperatorObject(obj) {
 }
 
 /**
- * Dispatch between array (OR), operator object, nested object, and scalar equality matching
- * so callers don't need to know the shape of `matcherValue`.
- *
- * @param {any} documentValue Value from the document.
- * @param {any} matcherValue Value from the matcher definition.
- * @returns {boolean} True when both values match under matcher semantics.
+ * @typedef {object|function(object):boolean} Matcher
  */
-function propertyMatchesValue(documentValue, matcherValue) {
-    if (isObject(matcherValue)) {
-        if (Array.isArray(matcherValue)) {
-            return matcherValue.includes(documentValue);
-        } else if (isOperatorObject(matcherValue)) {
-            const operatorChecks = getCompiledOperatorChecks(matcherValue);
-            return matchesCompiledOperators(documentValue, operatorChecks);
+
+/**
+ * Pre-compile an object matcher into an array of per-property closure checks so the hot path
+ * avoids repeated `Object.getOwnPropertyNames` allocation and per-property type dispatch.
+ *
+ * @param {object} matcher Plain object matcher to compile.
+ * @returns {function(any): boolean} Compiled predicate over documents.
+ */
+function compileMatcher(matcher) {
+    const checks = [];
+    for (const prop of Object.getOwnPropertyNames(matcher)) {
+        const matcherValue = matcher[prop];
+        if (isObject(matcherValue)) {
+            if (Array.isArray(matcherValue)) {
+                checks.push(doc => matcherValue.includes(doc[prop]));
+            } else if (isOperatorObject(matcherValue)) {
+                const operatorChecks = buildOperatorChecks(matcherValue);
+                checks.push(doc => matchesCompiledOperators(doc[prop], operatorChecks));
+            } else {
+                const nestedCheck = getCompiledMatcher(matcherValue);
+                checks.push(doc => nestedCheck(doc[prop]));
+            }
+        } else if (typeof matcherValue !== 'undefined') {
+            checks.push(doc => doc[prop] === matcherValue);
         }
-        return matches(documentValue, matcherValue);
     }
-    return typeof matcherValue === 'undefined' || documentValue === matcherValue;
+    if (checks.length === 0) {
+        return () => true;
+    }
+    return function matchesCompiled(doc) {
+        // The undefined guard is needed for nested matchers where doc[prop] may be undefined.
+        if (typeof doc === 'undefined') return false;
+        for (const check of checks) {
+            if (!check(doc)) return false;
+        }
+        return true;
+    };
+}
+
+/**
+ * Return a cached compiled predicate for `matcher`, compiling and caching on first access.
+ *
+ * @param {object} matcher Plain object matcher.
+ * @returns {function(any): boolean} Cached or freshly compiled predicate.
+ */
+function getCompiledMatcher(matcher) {
+    const cached = compiledMatcherCache.get(matcher);
+    if (cached) return cached;
+    const compiled = compileMatcher(matcher);
+    compiledMatcherCache.set(matcher, compiled);
+    return compiled;
+}
+
+/**
+ * @param {object} document The document to check against the matcher.
+ * @param {Matcher} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
+ * @returns {boolean} True if the document matches the matcher or false otherwise.
+ */
+function matches(document, matcher) {
+    if (typeof document === 'undefined') return false;
+    if (typeof matcher === 'undefined') return true;
+    if (typeof matcher === 'function') return matcher(document);
+    return getCompiledMatcher(matcher)(document);
 }
 
 /**
@@ -96,23 +144,6 @@ function buildOperatorChecks(operatorObj) {
                 throw new TypeError(`Unknown operator: ${operator}`);
         }
     }
-    return checks;
-}
-
-/**
- * Return cached compiled checks for `operatorObj`, compiling and caching on first access.
- * Using WeakMap keeps operator objects GC-eligible and avoids mutating user-supplied objects.
- *
- * @param {object} operatorObj Object containing operator/value pairs.
- * @returns {Array<function(any): boolean>} Cached or newly compiled operator checks.
- */
-function getCompiledOperatorChecks(operatorObj) {
-    const cachedChecks = compiledOperatorMatcherCache.get(operatorObj);
-    if (cachedChecks) {
-        return cachedChecks;
-    }
-    const checks = buildOperatorChecks(operatorObj);
-    compiledOperatorMatcherCache.set(operatorObj, checks);
     return checks;
 }
 
@@ -164,29 +195,6 @@ const createHmac = secret => string => {
     hmac.update(string);
     return hmac.digest('hex');
 };
-
-/**
- * @typedef {object|function(object):boolean} Matcher
- */
-
-/**
- * @param {object} document The document to check against the matcher.
- * @param {Matcher} matcher An object of properties and their values that need to match in the object or a function that checks if the document matches.
- * @returns {boolean} True if the document matches the matcher or false otherwise.
- */
-function matches(document, matcher) {
-    if (typeof document === 'undefined') return false;
-    if (typeof matcher === 'undefined') return true;
-
-    if (typeof matcher === 'function') return matcher(document);
-
-    for (let prop of Object.getOwnPropertyNames(matcher)) {
-        if (!propertyMatchesValue(document[prop], matcher[prop])) {
-            return false;
-        }
-    }
-    return true;
-}
 
 /**
  * @param {Matcher} matcher The matcher object or function that should be serialized.
@@ -257,6 +265,12 @@ function buildMatcherFn(payloadPath, operator) {
  */
 function buildRawBufferMatcher(matcher = {}, options = {}) {
     assert(isPlainObject(matcher), 'Matcher must be an object.', TypeError);
+
+    const cached = rawBufferMatcherCache.get(matcher);
+    if (cached) {
+        return cached;
+    }
+
     const enableOperatorBufferMatcher = options.enableOperatorBufferMatcher !== false;
 
     const root = buildMatcherTree(matcher, enableOperatorBufferMatcher);
@@ -265,7 +279,7 @@ function buildRawBufferMatcher(matcher = {}, options = {}) {
         return () => true;
     }
 
-    return function matchesRawBuffer(buffer) {
+    const matchesRawBuffer = function (buffer) {
         if (!isOpeningObject(buffer[0])) {
             return false;
         }
@@ -274,6 +288,8 @@ function buildRawBufferMatcher(matcher = {}, options = {}) {
         }
         return matchesNode(buffer, 1, root);
     };
+    rawBufferMatcherCache.set(matcher, matchesRawBuffer);
+    return matchesRawBuffer;
 }
 
 /**
@@ -530,7 +546,7 @@ function buildOperatorBufferMatcher(operatorObj) {
     }
 
     // Non-numeric expected value: use generic operator checks.
-    const operatorChecks = getCompiledOperatorChecks(operatorObj);
+    const operatorChecks = buildOperatorChecks(operatorObj);
     return (buffer, startOffset) => matchesOperatorInBuffer(buffer, startOffset, operatorChecks);
 }
 

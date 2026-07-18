@@ -546,6 +546,8 @@ Matcher behavior differs by mode:
 
 Object matchers support nested equality, array values with OR semantics, scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), array-containment via `$has`, and any-of array-containment via `$hasAny`. Multiple operators on the same field are combined with AND semantics; `$has` and `$hasAny` must each be used on their own.
 
+For repeated queries on hot paths, prefer reusing the same matcher object reference instead of recreating equivalent objects so compiled matcher/cache optimization paths can be reused.
+
 Prefer plain equality over `$eq` when possible (`{ type: 'Foo' }` instead of `{ type: { $eq: 'Foo' } }`).
 
 Operator matching (comparison operators) is intended for scalar values. For array containment use `$has` (e.g. `{ tags: { $has: 'featured' } }`) or `$hasAny` to match any of several values (e.g. `{ tags: { $hasAny: ['featured', 'new'] } }`); for other array/object shapes or custom raw encodings, use a function matcher.
