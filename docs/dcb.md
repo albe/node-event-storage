@@ -180,7 +180,7 @@ store.on('ready', () => {
 
 Tag streams are optional. When tag cardinality is low or write throughput is the primary concern, encode the per-item tag logic in the `matcher` instead. Pass the union of all relevant types and evaluate tag membership at read time.
 
-**Prefer the object-matcher `$has` operator** over a function matcher for tag containment — `$has` compiles to a fast byte-level check in raw mode and is significantly cheaper than deserialising and invoking a JS function per event.
+**Prefer the object-matcher `$has` or `$hasAny` operator** over a function matcher for tag containment — both compile to a fast byte-level check in raw mode and are significantly cheaper than deserialising and invoking a JS function per event.
 
 ```javascript
 const courseId  = 'course/jdsj4';
@@ -191,8 +191,14 @@ const { stream, condition } = store.query(
     ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
     {
         payload: { tags: { $has: courseId } }
-        // For an OR across multiple tags, either widen the type list and post-filter,
-        // or issue two queries and merge — a single matcher only expresses one $has value.
+    }
+);
+
+// $hasAny matches events whose tags contain any of the listed values.
+const { stream, condition } = store.query(
+    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    {
+        payload: { tags: { $hasAny: [courseId, studentId] } }
     }
 );
 ```

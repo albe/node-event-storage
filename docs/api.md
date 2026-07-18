@@ -544,13 +544,13 @@ Matcher behavior differs by mode:
   - Function matcher: `(buffer) => boolean` where `buffer` is one compact JSON document
   - Object matcher: byte-level raw matcher over compact JSON bytes (lazy-built at first stream consumption)
 
-Object matchers support nested equality, array values with OR semantics, scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), and array-containment via `$has`. Multiple operators on the same field are combined with AND semantics; `$has` must be used on its own.
+Object matchers support nested equality, array values with OR semantics, scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), array-containment via `$has`, and any-of array-containment via `$hasAny`. Multiple operators on the same field are combined with AND semantics; `$has` and `$hasAny` must each be used on their own.
 
 For repeated queries on hot paths, prefer reusing the same matcher object reference instead of recreating equivalent objects so compiled matcher/cache optimization paths can be reused.
 
 Prefer plain equality over `$eq` when possible (`{ type: 'Foo' }` instead of `{ type: { $eq: 'Foo' } }`).
 
-Operator matching (comparison operators) is intended for scalar values. For array containment use `$has` (e.g. `{ tags: { $has: 'featured' } }`); for other array/object shapes or custom raw encodings, use a function matcher.
+Operator matching (comparison operators) is intended for scalar values. For array containment use `$has` (e.g. `{ tags: { $has: 'featured' } }`) or `$hasAny` to match any of several values (e.g. `{ tags: { $hasAny: ['featured', 'new'] } }`); for other array/object shapes or custom raw encodings, use a function matcher.
 
 The raw object matcher requires the default compact JSON serializer format. If you use a custom serializer (including pretty-printed or transformed JSON), object matchers in raw mode are not guaranteed to work; use a function matcher in that case.
 

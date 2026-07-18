@@ -124,22 +124,27 @@ Supported forms:
   { payload: { type: ['OrderPlaced', 'OrderCancelled'] } }
   ```
 
-- **Array containment with `$has`**
+- **Array containment with `$has` and `$hasAny`**
 
   When the document field is an array and you want to match documents that contain a
-  specific scalar element, use the `$has` operator. A plain scalar matcher against an
-  array-valued field is always exact-equality (i.e. never matches an array).
+  specific scalar element, use the `$has` operator. For matching any of several values
+  use `$hasAny`. A plain scalar matcher against an array-valued field is always
+  exact-equality (i.e. never matches an array).
 
   ```javascript
   // matches events whose payload.tags array includes 'featured'
   { payload: { tags: { $has: 'featured' } } }
   // equivalent to: Array.isArray(event.payload.tags) && event.payload.tags.includes('featured')
+
+  // matches events whose payload.tags array includes 'featured' OR 'new'
+  { payload: { tags: { $hasAny: ['featured', 'new'] } } }
+  // equivalent to: Array.isArray(event.payload.tags) && ['featured','new'].some(v => event.payload.tags.includes(v))
   ```
 
-  `$has` compiles to a fast byte-level check in raw mode: the compiled matcher locates
-  the `"tags":[` opener and scans the array's element level for the serialized scalar
-  without parsing nested objects. Use `$has` instead of a function matcher wherever
-  possible for tag-membership predicates.
+  Both operators compile to fast byte-level checks in raw mode: the compiled matcher
+  locates the `"tags":[` opener and scans the array's element level for the serialized
+  scalar(s) without parsing nested objects. Use `$has`/`$hasAny` instead of a function
+  matcher wherever possible for tag-membership predicates.
 
 - **Scalar comparison operators**
 
@@ -147,15 +152,13 @@ Supported forms:
   { payload: { amount: { $gte: 100, $lt: 1000 } } }
   ```
 
-Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, and `$has`.
+Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$has`, and `$hasAny`.
 Multiple operators on the same field are combined with AND semantics, but only when
 they operate on the same value shape. `$gt`/`$gte`/`$lt`/`$lte`/`$eq`/`$ne` are scalar
-operators and can be freely combined (e.g. `{ $gte: 100, $lt: 1000 }`). `$has` is a
-non-scalar (array-containment) operator and cannot be combined with scalar operators —
-`{ $has: 'tag', $gt: 10 }` is nonsensical because a value cannot simultaneously be an
-array (for `$has`) and a scalar comparable to `10`. Future non-scalar operators (e.g. a
-hypothetical `$length`) may be combinable with `$has` but likewise not with scalar
-operators.
+operators and can be freely combined (e.g. `{ $gte: 100, $lt: 1000 }`). `$has` and
+`$hasAny` are non-scalar (array-containment) operators and cannot be combined with scalar
+operators — `{ $has: 'tag', $gt: 10 }` is nonsensical because a value cannot
+simultaneously be an array (for `$has`) and a scalar comparable to `10`.
 
 `$eq` is equivalent to plain equality, so prefer the simpler form when possible:
 
