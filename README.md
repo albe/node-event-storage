@@ -61,7 +61,7 @@ eventstore.on('ready', () => {
 - **Append events** with optimistic concurrency via `commit(stream, events, expectedVersion, cb)`.
 - **Read streams** with `getEventStream()` and fluent options for revision/range/direction.
 - **Run cross-stream queries** with `query(types, matcher)` and commit with its returned `condition` for DCB.
-- **Build projections** with `fromStreams()` (joined streams) and derived stream registration.
+- **Build projections** with `fromStreams()` (joined streams) and `createStream()` for persistent filtered streams.
 - **Consume reliably** with `createConsumer()` for durable at-least-once (or exactly-once with state) processing.
 
 ## Key Features
