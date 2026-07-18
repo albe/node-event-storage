@@ -66,7 +66,6 @@ class ReadOnlyStorage extends ReadableStorage {
         this.scanSchedule = this.scanSchedule || setTimeout(() =>
             this.scanFiles(() => {
                 this.scanSchedule = null;
-                this.persistStartupState();
                 const callbacks = this.onScanFinished || [];
                 this.onScanFinished = [];
                 callbacks.forEach(callback => callback());
@@ -83,15 +82,13 @@ class ReadOnlyStorage extends ReadableStorage {
         }
         if (filename.endsWith('.index')) {
             const indexName = filename.substring(this.storageFile.length + 1, filename.length - 6);
-            this.discoveredIndexFiles.add(filename);
+            this.registerSecondaryIndexDescriptor(indexName);
             // New indexes are not automatically opened in the reader
             this.emit('index-created', indexName);
-            this.persistStartupState();
             return;
         }
 
         this.registerPartitionFile(filename);
-        this.persistStartupState();
     }
 
     /**

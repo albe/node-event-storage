@@ -8,7 +8,7 @@ import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
-import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
+import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw, createLazyPropertyHolder } from './utils/apiHelpers.js';
 import { normalizeSelector, buildStreamSource } from "./utils/indexUtil.js";
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
@@ -211,21 +211,13 @@ class EventStore extends events.EventEmitter {
      * @returns {{ closed: boolean, _index: object|null, index: object }}
      */
     createLazyStreamEntry(streamName, isClosed) {
-        const entry = { closed: isClosed, _index: null };
-        Object.defineProperty(entry, 'index', {
-            enumerable: true,
-            configurable: true,
-            get: () => {
-                if (entry._index) {
-                    return entry._index;
-                }
-                entry._index = isClosed
-                    ? this.storage.openReadonlyIndex('stream-' + streamName + '.closed')
-                    : this.storage.openIndex('stream-' + streamName);
-                return entry._index;
-            }
-        });
-        return entry;
+        return createLazyPropertyHolder(
+            { closed: isClosed, _index: null },
+            'index',
+            () => isClosed
+                ? this.storage.openReadonlyIndex('stream-' + streamName + '.closed')
+                : this.storage.openIndex('stream-' + streamName)
+        );
     }
 
     /**
@@ -793,19 +785,7 @@ class EventStore extends events.EventEmitter {
         if (!(streamName in this.streams)) {
             return;
         }
-        this.storage.markStartupStateDirty();
-        const streamEntry = this.streams[streamName];
-        const index = streamEntry._index || null;
-        this.storage.removeSecondaryIndex('stream-' + streamName);
-        if (index) {
-            index.destroy();
-        } else {
-            const fileName = path.join(this.storage.indexDirectory, `${this.storeName}.stream-${streamName}.index`);
-            if (fs.existsSync(fileName)) {
-                fs.unlinkSync(fileName);
-            }
-        }
-        this.storage.persistStartupState();
+        this.storage.deleteSecondaryIndex('stream-' + streamName);
         delete this.streams[streamName];
         this.emit('stream-deleted', streamName);
     }

@@ -1390,7 +1390,7 @@ describe('Storage', function() {
             reader.open();
             reader.once('index-created', (name) => {
                 expect(name).to.be('one');
-                expect(reader.secondaryIndexes[name]).to.be(undefined);
+                expect(reader.secondaryIndexes[name]).to.eql({ index: null, matcher: undefined, closed: false });
                 reader.close();
                 done();
             });
@@ -1407,7 +1407,7 @@ describe('Storage', function() {
             reader.open();
             reader.once('index-created', (name) => {
                 expect(name).to.be('one');
-                expect(reader.secondaryIndexes[name]).to.be(undefined);
+                expect(reader.secondaryIndexes[name]).to.eql({ index: null, matcher: undefined, closed: false });
                 reader.close();
                 done();
             });
@@ -1849,7 +1849,7 @@ describe('Storage', function() {
         describe('startupState', function() {
 
             it('uses a clean manifest fast-path without calling scanFiles on open', function() {
-                const startupState = { enabled: true, fileName: 'startup-state-test.json' };
+                const startupState = { enabled: true };
 
                 storage = createStorage({ startupState });
                 storage.open();
@@ -1858,7 +1858,6 @@ describe('Storage', function() {
                 storage.close();
 
                 storage = createStorage({ startupState });
-                storage.scheduleReconciliationScan = () => null;
                 storage.scanFiles = () => {
                     throw new Error('scanFiles should not be called for clean startup-state fast-path');
                 };
@@ -1868,7 +1867,7 @@ describe('Storage', function() {
             });
 
             it('falls back to scan when manifest is dirty', function(done) {
-                const startupState = { enabled: true, fileName: 'startup-state-test.json' };
+                const startupState = { enabled: true };
 
                 storage = createStorage({ startupState });
                 storage.open();

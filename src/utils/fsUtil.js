@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from "os";
 import path from 'path';
+import crypto from 'crypto';
 import { mkdirpSync } from 'mkdirp';
 
 /**
@@ -134,6 +135,28 @@ function scanForFiles(directory, regexPattern, onEach, onDone) {
 }
 
 /**
+ * Atomically replace a file by writing to a unique temp file in the same
+ * directory and then renaming it over the target path.
+ *
+ * @param {string} fileName Target file path.
+ * @param {string|Buffer} data File contents.
+ */
+function writeFileAtomic(fileName, data) {
+    const tmpFile = `${fileName}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    try {
+        fs.writeFileSync(tmpFile, data);
+        fs.renameSync(tmpFile, fileName);
+    } catch (e) {
+        /* c8 ignore next 7 */
+        try {
+            fs.unlinkSync(tmpFile);
+        } catch {
+        }
+        throw e;
+    }
+}
+
+/**
  * Return true when both paths are equal or `child` is nested inside `parent`.
  *
  * @private
@@ -150,5 +173,6 @@ export {
     resolvePath,
     ensureDirectory,
     scanForFiles,
+    writeFileAtomic,
     isSameOrParentDirectory
 };

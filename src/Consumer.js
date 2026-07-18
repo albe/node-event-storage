@@ -2,7 +2,7 @@ import stream from 'stream';
 import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
-import { ensureDirectory } from './utils/fsUtil.js';
+import { ensureDirectory, writeFileAtomic } from './utils/fsUtil.js';
 import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
@@ -166,20 +166,13 @@ class Consumer extends stream.Readable {
             const consumerData = Buffer.allocUnsafe(4 + consumerState.length);
             consumerData.writeInt32LE(this.position, 0);
             consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
-            const tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
-            /* c8 ignore next 3 */
-            if (fs.existsSync(tmpFile)) {
-                throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
-            }
             try {
-                fs.writeFileSync(tmpFile, consumerData);
                 // If the write fails (half-way), the consumer state file will not be corrupted
-                fs.renameSync(tmpFile, this.fileName);
+                writeFileAtomic(this.fileName, consumerData);
                 this.emit('persisted', consumerState);
             } catch (e) {
                 /* c8 ignore next */
-                safeUnlink(tmpFile);
             }
         });
     }

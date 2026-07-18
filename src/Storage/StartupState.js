@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { hash } from '../utils/util.js';
+import { writeFileAtomic } from '../utils/fsUtil.js';
 
 const STATE_VERSION = 1;
 
@@ -14,12 +15,11 @@ class StartupState {
      * @param {string} directory
      * @param {object} [config]
      * @param {boolean} [config.enabled=false]
-     * @param {string} [config.fileName]
      */
     constructor(storageFile, directory, config = {}) {
         this.enabled = !!config.enabled;
         this.storageFile = storageFile;
-        this.fileName = path.resolve(directory, config.fileName || `${storageFile}.startup-state.json`);
+        this.fileName = path.resolve(directory, `${storageFile}.startup-state.json`);
         this.lastState = null;
     }
 
@@ -75,9 +75,7 @@ class StartupState {
             payload,
             checksum: this.checksum(payload)
         };
-        const tmpFile = `${this.fileName}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-        fs.writeFileSync(tmpFile, JSON.stringify(envelope));
-        fs.renameSync(tmpFile, this.fileName);
+        writeFileAtomic(this.fileName, JSON.stringify(envelope));
         this.lastState = payload;
     }
 
@@ -90,7 +88,6 @@ class StartupState {
         }
         const base = this.lastState || {
             clean: true,
-            primaryLength: 0,
             partitions: [],
             indexes: []
         };

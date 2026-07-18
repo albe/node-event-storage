@@ -109,6 +109,36 @@ function normalizeConsumerStateArgs(initialState, startFrom) {
     return { initialState, startFrom };
 }
 
+/**
+ * Create an object with a lazily-resolved property.
+ *
+ * @param {object} initialValues Eager properties to copy to the object.
+ * @param {string} propertyName Property to resolve lazily.
+ * @param {function(): *} resolver Function returning the property value on first access.
+ * @returns {object}
+ */
+function createLazyPropertyHolder(initialValues, propertyName, resolver) {
+    const holder = { ...initialValues };
+    let resolved = false;
+    let value = null;
+    Object.defineProperty(holder, propertyName, {
+        enumerable: true,
+        configurable: true,
+        get: () => {
+            if (!resolved) {
+                value = resolver();
+                resolved = true;
+            }
+            return value;
+        },
+        set: (newValue) => {
+            value = newValue;
+            resolved = true;
+        }
+    });
+    return holder;
+}
+
 export {
     fixCommitArgumentTypes,
     parseStreamFromIndexName,
@@ -116,8 +146,8 @@ export {
     normalizeNamedCtorArgs,
     normalizeRevision,
     normalizeMaxRevision,
-    normalizeConsumerStateArgs
+    normalizeConsumerStateArgs,
+    createLazyPropertyHolder
 };
-
 
 
