@@ -53,6 +53,39 @@ describe('IndexMatcher', function() {
 
     });
 
+    describe('findDiscriminant $has handling', function() {
+
+        it('does not treat a matcher with a non-$has operator as a $has discriminant', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            // Non-$has operator falls through: no discriminant, stays unclassified.
+            im.add('tag-ne', { payload: { tags: { $ne: 'x' } } });
+            expect(im.unclassifiedMatchers.has('tag-ne')).to.be(true);
+        });
+
+        it('does not treat an object with multiple keys as a $has discriminant', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            im.add('tag-mixed', { payload: { tags: { $has: 'x', $ne: 'y' } } });
+            expect(im.unclassifiedMatchers.has('tag-mixed')).to.be(true);
+        });
+
+        it('does not treat an empty array discriminant value as a $has scalar', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            // Empty array: not a valid array discriminant (length 0) and Array.isArray is
+            // guarded inside isLoneHasScalar, so this falls through to unclassified.
+            im.add('tag-empty', { payload: { tags: [] } });
+            expect(im.unclassifiedMatchers.has('tag-empty')).to.be(true);
+        });
+
+        it('does not treat an array with non-scalar elements as a $has scalar', function() {
+            const im = new IndexMatcher(['payload.tags']);
+            // Array containing an object: fails the "all scalars" branch, then falls into
+            // isLoneHasScalar which rejects arrays outright.
+            im.add('tag-mixed-arr', { payload: { tags: [{ nested: true }] } });
+            expect(im.unclassifiedMatchers.has('tag-mixed-arr')).to.be(true);
+        });
+
+    });
+
     describe('remove', function() {
 
         it('is a no-op for unknown index names', function() {
