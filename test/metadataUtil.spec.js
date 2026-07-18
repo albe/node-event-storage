@@ -92,6 +92,19 @@ describe('metadataUtil', function () {
             expect(() => buildRawBufferMatcher({type: [{value: 'Foo'}]})).to.throwError(TypeError);
         });
 
+        it('returns the same function instance for the same matcher object reference', function () {
+            const matcherObj = {type: 'Foo'};
+            const first = buildRawBufferMatcher(matcherObj);
+            const second = buildRawBufferMatcher(matcherObj);
+            expect(first).to.be(second);
+        });
+
+        it('returns a different function instance for a different matcher object', function () {
+            const first = buildRawBufferMatcher({type: 'Foo'});
+            const second = buildRawBufferMatcher({type: 'Foo'});
+            expect(first).not.to.be(second);
+        });
+
         it('matches every object when matcher is empty', function () {
             const matcher = buildRawBufferMatcher({});
             expect(matcher(Buffer.from('{"type":"Foo"}', 'utf8'))).to.be(true);

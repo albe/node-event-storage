@@ -10,6 +10,7 @@ import {
 } from './jsonUtil.js';
 
 const compiledOperatorMatcherCache = new WeakMap();
+const rawBufferMatcherCache = new WeakMap();
 
 /**
  * @param {any} value Value to classify.
@@ -245,6 +246,12 @@ function buildTypeMatcherFn(payloadPath) {
  */
 function buildRawBufferMatcher(matcher = {}, options = {}) {
     assert(isPlainObject(matcher), 'Matcher must be an object.', TypeError);
+
+    const cached = rawBufferMatcherCache.get(matcher);
+    if (cached) {
+        return cached;
+    }
+
     const enableOperatorBufferMatcher = options.enableOperatorBufferMatcher !== false;
 
     const root = buildMatcherTree(matcher, enableOperatorBufferMatcher);
@@ -253,7 +260,7 @@ function buildRawBufferMatcher(matcher = {}, options = {}) {
         return () => true;
     }
 
-    return function matchesRawBuffer(buffer) {
+    const matchesRawBuffer = function (buffer) {
         if (!isOpeningObject(buffer[0])) {
             return false;
         }
@@ -262,6 +269,8 @@ function buildRawBufferMatcher(matcher = {}, options = {}) {
         }
         return matchesNode(buffer, 1, root);
     };
+    rawBufferMatcherCache.set(matcher, matchesRawBuffer);
+    return matchesRawBuffer;
 }
 
 /**
