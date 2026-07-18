@@ -304,6 +304,52 @@ describe('EventStore', function() {
                 });
             });
         });
+
+        it('registers streams lazily on startup without eagerly opening stream indexes', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.on('ready', () => {
+                eventstore.commit('stream-a', [{ foo: 1 }], () => {
+                    eventstore.commit('stream-b', [{ foo: 2 }], () => {
+                        eventstore.close();
+
+                        const originalOpenIndex = EventStoreBase.Storage.prototype.openIndex;
+                        let openIndexCalls = 0;
+                        try {
+                            EventStoreBase.Storage.prototype.openIndex = function(...args) {
+                                openIndexCalls++;
+                                return originalOpenIndex.apply(this, args);
+                            };
+
+                            let reopened;
+                            try {
+                                reopened = new EventStore({ storageDirectory });
+                            } catch (error) {
+                                EventStoreBase.Storage.prototype.openIndex = originalOpenIndex;
+                                done(error);
+                                return;
+                            }
+                            reopened.on('ready', () => {
+                                let assertionError = null;
+                                try {
+                                    expect(openIndexCalls).to.be(0);
+                                    expect(reopened.getStreamVersion('stream-a')).to.be(1);
+                                    expect(openIndexCalls).to.be(1);
+                                } catch (error) {
+                                    assertionError = error;
+                                } finally {
+                                    reopened.close();
+                                    EventStoreBase.Storage.prototype.openIndex = originalOpenIndex;
+                                    done(assertionError);
+                                }
+                            });
+                        } catch (error) {
+                            EventStoreBase.Storage.prototype.openIndex = originalOpenIndex;
+                            done(error);
+                        }
+                    });
+                });
+            });
+        });
     });
 
     describe('commit', function() {

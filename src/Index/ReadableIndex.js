@@ -55,7 +55,9 @@ class ReadableIndex extends events.EventEmitter {
 
         this.name = name;
         this.initialize(options);
-        this.open();
+        if (options.autoOpen !== false) {
+            this.open();
+        }
     }
 
     /**

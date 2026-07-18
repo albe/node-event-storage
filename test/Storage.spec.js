@@ -1817,6 +1817,80 @@ describe('Storage', function() {
             expect(openCount).to.be(5);
         });
 
+        describe('maxOpenIndexes (LRU index pool)', function() {
+
+            it('closes the LRU secondary index when the limit is reached', function() {
+                storage = createStorage({ maxOpenIndexes: 2 });
+                storage.open();
+
+                storage.ensureIndex('one', { type: 'one' });
+                storage.ensureIndex('two', { type: 'two' });
+                storage.ensureIndex('three', { type: 'three' });
+
+                const openCount = Object.values(storage.secondaryIndexes)
+                    .filter(({ index }) => index.isOpen()).length;
+                expect(openCount).to.be(2);
+            });
+
+            it('setting maxOpenIndexes to 0 disables the limit', function() {
+                storage = createStorage({ maxOpenIndexes: 0 });
+                storage.open();
+
+                storage.ensureIndex('one', { type: 'one' });
+                storage.ensureIndex('two', { type: 'two' });
+                storage.ensureIndex('three', { type: 'three' });
+
+                const openCount = Object.values(storage.secondaryIndexes)
+                    .filter(({ index }) => index.isOpen()).length;
+                expect(openCount).to.be(3);
+            });
+        });
+
+        describe('startupState', function() {
+
+            it('uses a clean manifest fast-path without calling scanFiles on open', function() {
+                const startupState = { enabled: true, fileName: 'startup-state-test.json' };
+
+                storage = createStorage({ startupState });
+                storage.open();
+                storage.write({ type: 'one', foo: 1 });
+                storage.ensureIndex('one', { type: 'one' });
+                storage.close();
+
+                storage = createStorage({ startupState });
+                storage.scheduleReconciliationScan = () => null;
+                storage.scanFiles = () => {
+                    throw new Error('scanFiles should not be called for clean startup-state fast-path');
+                };
+
+                expect(() => storage.open()).to.not.throwError();
+                expect(storage.length).to.be(1);
+            });
+
+            it('falls back to scan when manifest is dirty', function(done) {
+                const startupState = { enabled: true, fileName: 'startup-state-test.json' };
+
+                storage = createStorage({ startupState });
+                storage.open();
+                storage.write({ foo: 1 });
+                storage.markStartupStateDirty();
+                storage.close();
+
+                storage = createStorage({ startupState });
+                const originalScanFiles = storage.scanFiles.bind(storage);
+                let scanCalled = false;
+                storage.scanFiles = (callback) => {
+                    scanCalled = true;
+                    originalScanFiles(callback);
+                };
+                storage.once('opened', () => {
+                    expect(scanCalled).to.be(true);
+                    done();
+                });
+                storage.open();
+            });
+        });
+
     });
 
 });

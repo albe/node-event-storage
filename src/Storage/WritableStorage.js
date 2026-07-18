@@ -102,9 +102,12 @@ class WritableStorage extends ReadableStorage {
             /* c8 ignore next */
             if (!(index instanceof WritableIndex)) return;
             const wasOpen = index.isOpen();
-            if (!wasOpen) index.open();
+            this.secondaryIndexHandles.open(name);
             iterationHandler(index, name, wasOpen);
-            if (!wasOpen) index.close();
+            if (!wasOpen) {
+                index.close();
+                this.secondaryIndexHandles.forgetOpenHandle(name);
+            }
         }, matchDocument);
     }
 
@@ -152,6 +155,7 @@ class WritableStorage extends ReadableStorage {
      * 4. If no torn writes were found but the index is lagging, reindex directly.
      */
     checkTornWrites() {
+        this.markStartupStateDirty();
         const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
 
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
@@ -179,6 +183,7 @@ class WritableStorage extends ReadableStorage {
         this.forEachPartition(partition => partition.close());
         // Partitions were closed directly (bypassing the pool), so reset the open-handle tracking.
         this.partitions.clearOpenHandles();
+        this.persistStartupState();
     }
 
     /**
@@ -194,6 +199,7 @@ class WritableStorage extends ReadableStorage {
      *   Defaults to 0, which rebuilds all indexes from scratch.
      */
     reindex(fromSequenceNumber = 0) {
+        this.markStartupStateDirty();
         this.index.truncate(fromSequenceNumber);
 
         // Truncate all loaded secondary indexes to match the new primary length.
@@ -214,6 +220,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.flush();
+        this.persistStartupState();
     }
 
     /**
@@ -334,10 +341,12 @@ class WritableStorage extends ReadableStorage {
         if (this.partitions.has(partitionId)) {
             return;
         }
+        this.markStartupStateDirty();
         const partitionConfig = this.buildPartitionConfig(partitionShortName);
         this.ensurePartitionDirectory(partitionName);
         this.partitions.add(partitionId, this.createPartition(partitionName, partitionConfig));
         this.emit('partition-created', partitionId);
+        this.persistStartupState();
     }
 
     /**
@@ -382,7 +391,7 @@ class WritableStorage extends ReadableStorage {
 
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
         this.forEachSecondaryIndex((index, name) => {
-            index.open();
+            this.secondaryIndexHandles.open(name);
             index.add(indexEntry);
             this.emit('index-add', name, index.length, document);
         }, document);
@@ -415,6 +424,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         assert((typeof matcher === 'object' || typeof matcher === 'function') && matcher !== null, 'Need to specify a matcher.');
+        this.markStartupStateDirty();
 
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
         const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
@@ -432,8 +442,12 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.secondaryIndexes[name] = { index, matcher };
+        this.secondaryIndexHandles.add(name, index);
+        this.secondaryIndexHandles.open(name);
+        this.discoveredIndexFiles.add(indexName);
         this.indexMatcher.add(name, matcher);
         this.emit('index-created', name);
+        this.persistStartupState();
         return index;
     }
 
@@ -501,6 +515,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} after The document sequence number to truncate after.
      */
     truncate(after) {
+        this.markStartupStateDirty();
         /*
          To truncate the store following steps need to be done:
 
@@ -520,6 +535,7 @@ class WritableStorage extends ReadableStorage {
         this.forEachWritableSecondaryIndex(index => {
             index.truncate(index.find(after));
         });
+        this.persistStartupState();
     }
 
     /**
