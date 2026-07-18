@@ -3,14 +3,24 @@ import { matches } from './utils/metadataUtil.js';
 
 /**
  * @param {any} value Candidate matcher value at a discriminant path.
+ * @param {string} operator Operator key to check for (e.g. `'$has'`).
+ * @returns {boolean} True when `value` is a plain object with exactly one key equal to `operator`
+ *   and the operator value is non-null and non-undefined.
+ */
+function isLoneOperator(value, operator) {
+    if (Array.isArray(value)) return false;
+    const keys = Object.keys(value);
+    if (keys.length !== 1 || keys[0] !== operator) return false;
+    const operand = value[operator];
+    return operand !== null && operand !== undefined;
+}
+
+/**
+ * @param {any} value Candidate matcher value at a discriminant path.
  * @returns {boolean} True when `value` is `{ $has: scalar }` (lone $has with a non-object value).
  */
 function isLoneHasScalar(value) {
-    if (Array.isArray(value)) return false;
-    const keys = Object.keys(value);
-    if (keys.length !== 1 || keys[0] !== '$has') return false;
-    const has = value.$has;
-    return has !== null && has !== undefined && typeof has !== 'object';
+    return isLoneOperator(value, '$has') && typeof value.$has !== 'object';
 }
 
 /**
@@ -18,12 +28,9 @@ function isLoneHasScalar(value) {
  * @returns {boolean} True when `value` is `{ $hasAny: [scalar, ...] }` (lone $hasAny with a non-empty scalar array).
  */
 function isLoneHasAnyArray(value) {
-    if (Array.isArray(value)) return false;
-    const keys = Object.keys(value);
-    if (keys.length !== 1 || keys[0] !== '$hasAny') return false;
-    const hasAny = value.$hasAny;
-    return Array.isArray(hasAny) && hasAny.length > 0 &&
-        hasAny.every(v => v !== null && v !== undefined && typeof v !== 'object');
+    return isLoneOperator(value, '$hasAny') &&
+        Array.isArray(value.$hasAny) && value.$hasAny.length > 0 &&
+        value.$hasAny.every(v => v !== null && v !== undefined && typeof v !== 'object');
 }
 
 /**
