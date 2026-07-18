@@ -8,7 +8,7 @@ import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
-import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
+import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw, createLazyPropertyHolder } from './utils/apiHelpers.js';
 import { normalizeSelector, buildStreamSource } from "./utils/indexUtil.js";
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
@@ -203,6 +203,24 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
+     * Create a lazy stream entry that opens the backing index on first access.
+     *
+     * @private
+     * @param {string} streamName
+     * @param {boolean} isClosed
+     * @returns {{ closed: boolean, _index: object|null, index: object }}
+     */
+    createLazyStreamEntry(streamName, isClosed) {
+        return createLazyPropertyHolder(
+            { closed: isClosed, _index: null },
+            'index',
+            () => isClosed
+                ? this.storage.openReadonlyIndex('stream-' + streamName + '.closed')
+                : this.storage.openIndex('stream-' + streamName)
+        );
+    }
+
+    /**
      * Check if the last commit in the store was unfinished, which is the case if not all events of the commit have been written.
      * Torn writes are handled at the storage level, so this method only deals with unfinished commits.
      * @private
@@ -252,21 +270,14 @@ class EventStore extends events.EventEmitter {
         }
         if (streamName in this.streams) {
             if (isClosed && !this.streams[streamName].closed) {
-                // The stream was renamed to .closed while this instance had it open.
-                // The old ReadOnlyIndex was already closed via onRename, so we open the new one.
-                const closedIndexName = 'stream-' + streamName + '.closed';
-                const closedIndex = this.storage.openReadonlyIndex(closedIndexName);
                 // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
-                this.streams[streamName] = { index: closedIndex, closed: true };
+                this.streams[streamName] = this.createLazyStreamEntry(streamName, true);
                 this.emit('stream-closed', streamName);
             }
             return;
         }
-        const index = isClosed
-            ? this.storage.openReadonlyIndex(name)
-            : this.storage.openIndex(name);
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
-        this.streams[streamName] = { index, closed: isClosed };
+        this.streams[streamName] = this.createLazyStreamEntry(streamName, isClosed);
         this.emit('stream-available', streamName);
     }
 
@@ -774,7 +785,7 @@ class EventStore extends events.EventEmitter {
         if (!(streamName in this.streams)) {
             return;
         }
-        this.streams[streamName].index.destroy();
+        this.storage.deleteSecondaryIndex('stream-' + streamName);
         delete this.streams[streamName];
         this.emit('stream-deleted', streamName);
     }
@@ -799,6 +810,7 @@ class EventStore extends events.EventEmitter {
 
         const indexName = 'stream-' + streamName;
         const { index } = this.streams[streamName];
+        this.storage.markStartupStateDirty();
 
         // Flush and close the index before renaming the file
         index.close();
@@ -815,7 +827,9 @@ class EventStore extends events.EventEmitter {
         const closedIndex = this.storage.openReadonlyIndex(closedIndexName);
 
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
-        this.streams[streamName] = { index: closedIndex, closed: true };
+        this.streams[streamName] = this.createLazyStreamEntry(streamName, true);
+        this.streams[streamName]._index = closedIndex;
+        this.storage.persistStartupState();
         this.emit('stream-closed', streamName);
     }
 

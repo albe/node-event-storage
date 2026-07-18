@@ -82,6 +82,7 @@ class ReadOnlyStorage extends ReadableStorage {
         }
         if (filename.endsWith('.index')) {
             const indexName = filename.substring(this.storageFile.length + 1, filename.length - 6);
+            this.registerSecondaryIndexDescriptor(indexName);
             // New indexes are not automatically opened in the reader
             this.emit('index-created', indexName);
             return;

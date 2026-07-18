@@ -9,7 +9,9 @@ import { createHmac, matches, buildMetadataForMatcher } from '../utils/metadataU
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import IndexMatcher from '../IndexMatcher.js';
 import PartitionPool from '../PartitionPool.js';
+import IndexPool from '../IndexPool.js';
 import ReadablePartition from "../Partition/ReadablePartition.js";
+import StartupState from './StartupState.js';
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 
@@ -27,6 +29,7 @@ const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
  * Partitions beyond this limit are evicted using LRU order. 0 disables the limit.
  */
 const DEFAULT_MAX_OPEN_PARTITIONS = 1024;
+const DEFAULT_MAX_OPEN_INDEXES = 1024;
 
 /**
  * @typedef {object|function(object):boolean} Matcher
@@ -58,6 +61,11 @@ class ReadableStorage extends events.EventEmitter {
      * @param {number} [config.maxOpenPartitions] Maximum number of partition file descriptors kept open at one time.
      *   When the limit is reached the least-recently-used partition is closed to make room. 0 disables the limit.
      *   Default: 1024.
+     * @param {number} [config.maxOpenIndexes] Maximum number of secondary index file descriptors kept open at one time.
+     *   When the limit is reached the least-recently-used index is closed to make room. 0 disables the limit.
+     *   Default: 1024.
+     * @param {object} [config.startupState] Startup manifest options.
+     * @param {boolean} [config.startupState.enabled=false] Enable startup state manifest fast-path.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -72,7 +80,9 @@ class ReadableStorage extends events.EventEmitter {
             hmacSecret: '',
             metadata: {},
             matcherProperties: DEFAULT_MATCHER_PROPERTIES,
-            maxOpenPartitions: DEFAULT_MAX_OPEN_PARTITIONS
+            maxOpenPartitions: DEFAULT_MAX_OPEN_PARTITIONS,
+            maxOpenIndexes: DEFAULT_MAX_OPEN_INDEXES,
+            startupState: { enabled: false }
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
@@ -84,6 +94,8 @@ class ReadableStorage extends events.EventEmitter {
         const partitionDefaults = { readBufferSize: DEFAULT_READ_BUFFER_SIZE };
         this.partitionConfig = Object.assign(partitionDefaults, config);
         this.partitions = new PartitionPool(config.maxOpenPartitions);
+        this.secondaryIndexHandles = new IndexPool(config.maxOpenIndexes);
+        this.startupState = new StartupState(this.storageFile, resolvePath(config.indexDirectory || config.dataDirectory), config.startupState || {});
 
         // initialized: null = not started (or scan cancelled), false = in progress, true = done
         this.initialized = null;
@@ -129,8 +141,7 @@ class ReadableStorage extends events.EventEmitter {
         delete this.indexOptions.matcher;
         const { index } = this.createIndex(config.indexFile, Object.assign({}, this.indexOptions, { syncOnMissingWatchFilename: true }));
         this.index = index;
-        this.secondaryIndexes = {};
-        this.readonlyIndexes = {};
+        this.secondaryIndexes = this.secondaryIndexHandles.registry;
 
         /** Fast secondary-index lookup — classifies matchers for O(1) candidate resolution on write. */
         this.indexMatcher = new IndexMatcher(config.matcherProperties);
@@ -163,6 +174,134 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
+     * @protected
+     * @param {string} name
+     * @returns {string}
+     */
+    getIndexFileName(name) {
+        return this.storageFile + '.' + name + '.index';
+    }
+
+    /**
+     * @protected
+     * @param {string} name
+     * @returns {boolean}
+     */
+    isClosedSecondaryIndex(name) {
+        return name.endsWith('.closed');
+    }
+
+    /**
+     * @protected
+     * @param {string} name
+     * @param {object} [entry]
+     * @returns {{ index: ReadableIndex|null, matcher?: Matcher, closed: boolean }}
+     */
+    registerSecondaryIndexDescriptor(name, entry = {}) {
+        let descriptor = this.secondaryIndexes[name];
+        if (!descriptor) {
+            descriptor = this.createSecondaryIndexDescriptor(name);
+            this.secondaryIndexHandles.add(name, descriptor);
+        }
+        if ('index' in entry) {
+            descriptor.index = entry.index;
+        }
+        if ('matcher' in entry) {
+            descriptor.matcher = entry.matcher;
+        }
+        if ('closed' in entry) {
+            descriptor.closed = entry.closed;
+        }
+        return descriptor;
+    }
+
+    /**
+     * @private
+     * @param {string} name
+     * @returns {{ index: ReadableIndex|null, matcher?: Matcher, closed: boolean }}
+     */
+    createSecondaryIndexDescriptor(name) {
+        return {
+            index: null,
+            matcher: undefined,
+            closed: this.isClosedSecondaryIndex(name)
+        };
+    }
+
+    /**
+     * Build a startup-state snapshot from current in-memory discovery state.
+     *
+     * @protected
+     * @returns {{ clean: boolean, partitions: string[], indexes: string[] }}
+     */
+    buildStartupSnapshot() {
+        const indexes = Object.keys(this.secondaryIndexes)
+            .map(name => this.getIndexFileName(name))
+            .sort();
+        const partitions = Array.from(this.partitions.values())
+            .map(partition => partition.name)
+            .sort();
+        return {
+            clean: true,
+            partitions,
+            indexes
+        };
+    }
+
+    /**
+     * Persist startup-state snapshot if enabled.
+     *
+     * @protected
+     */
+    persistStartupState() {
+        this.startupState.save(this.buildStartupSnapshot());
+    }
+
+    /**
+     * Mark startup state dirty before on-disk structure changes.
+     */
+    markStartupStateDirty() {
+        this.startupState.markDirty();
+    }
+
+    /**
+     * Run a structural on-disk mutation with startup-state dirty/clean transitions.
+     * @protected
+     * @template T
+     * @param {function(): T} operation
+     * @returns {T}
+     */
+    withStartupStateMutation(operation) {
+        if (!this.startupState.enabled) {
+            return operation();
+        }
+        this.markStartupStateDirty();
+        const result = operation();
+        this.persistStartupState();
+        return result;
+    }
+
+    /**
+     * Apply a loaded startup-state snapshot into in-memory discovery state.
+     *
+     * @protected
+     * @param {object} state
+     */
+    applyStartupSnapshot(state) {
+        for (const partitionName of state.partitions || []) {
+            this.registerPartitionFile(partitionName);
+        }
+        for (const indexFile of state.indexes || []) {
+            const prefix = this.storageFile + '.';
+            if (indexFile.startsWith(prefix) && indexFile.endsWith('.index')) {
+                const name = indexFile.slice(prefix.length, -'.index'.length);
+                this.registerSecondaryIndexDescriptor(name);
+                this.emit('index-created', name);
+            }
+        }
+    }
+
+    /**
      * Scan partitions and secondary index files; emit 'index-created' for each found index.
      * @param {function} done Called when both scans finish.
      */
@@ -186,6 +325,7 @@ class ReadableStorage extends events.EventEmitter {
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
                 if (!(name in this.secondaryIndexes)) {
+                    this.registerSecondaryIndexDescriptor(name);
                     this.emit('index-created', name);
                 }
             }, (indexErr) => {
@@ -227,14 +367,48 @@ class ReadableStorage extends events.EventEmitter {
             return true;
         }
         this.initialized = false;
+        const state = this.startupState.load();
+        if (state && state.clean && this.isStartupStateSafe(state)) {
+            this.applyStartupSnapshot(state);
+            this.initialized = true;
+            this.openIndexes();
+            callback?.();
+            this.emit('opened');
+            return true;
+        }
         this.scanFiles(() => {
             // Guard: close() while scanning resets initialized to null.
             if (this.initialized === null) return;
             this.initialized = true;
             this.openIndexes();
+            this.persistStartupState();
             callback?.();
             this.emit('opened');
         });
+        return true;
+    }
+
+    /**
+     * @param {object} state
+     * @returns {boolean}
+     */
+    isStartupStateSafe(state) {
+        const indexPathPrefix = this.storageFile + '.';
+        // This guards only against missing files. Corruption checks still happen when the
+        // corresponding partition/index is actually opened via the normal read paths.
+        for (const partitionName of state.partitions || []) {
+            if (!fs.existsSync(path.join(this.dataDirectory, partitionName))) {
+                return false;
+            }
+        }
+        for (const indexFile of state.indexes || []) {
+            if (!indexFile.startsWith(indexPathPrefix) || !indexFile.endsWith('.index')) {
+                return false;
+            }
+            if (!fs.existsSync(path.join(this.indexDirectory, indexFile))) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -250,11 +424,11 @@ class ReadableStorage extends events.EventEmitter {
             this.initialized = null;
         }
         this.index.close();
-        this.forEachSecondaryIndex(index => index.close());
-        for (let index of Object.values(this.readonlyIndexes)) {
-            index.close();
+        for (const descriptor of Object.values(this.secondaryIndexes)) {
+            descriptor.index?.close();
         }
         this.forEachPartition(partition => partition.close());
+        this.secondaryIndexHandles.clearOpenHandles();
         this.emit('closed');
     }
 
@@ -392,15 +566,14 @@ class ReadableStorage extends events.EventEmitter {
      * @throws {Error} if the readonly index does not exist.
      */
     openReadonlyIndex(name) {
-        if (name in this.readonlyIndexes) {
-            return this.readonlyIndexes[name];
+        const descriptor = this.registerSecondaryIndexDescriptor(name, { closed: true });
+        if (!descriptor.index) {
+            const indexName = this.getIndexFileName(name);
+            assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
+            descriptor.index = this.createIndex(indexName, Object.assign({}, this.indexOptions)).index;
         }
-        const indexName = this.storageFile + '.' + name + '.index';
-        assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
-        const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions));
-        index.open();
-        this.readonlyIndexes[name] = index;
-        return index;
+        this.secondaryIndexHandles.open(name);
+        return descriptor.index;
     }
 
     /**
@@ -417,20 +590,27 @@ class ReadableStorage extends events.EventEmitter {
         if (name === '_all') {
             return this.index;
         }
-        if (name in this.secondaryIndexes) {
-            return this.secondaryIndexes[name].index;
+        const descriptor = this.registerSecondaryIndexDescriptor(name, { closed: false });
+        if (descriptor.index) {
+            this.secondaryIndexHandles.open(name);
+            return descriptor.index;
         }
 
-        const indexName = this.storageFile + '.' + name + '.index';
+        const indexName = this.getIndexFileName(name);
         assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
 
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
-        let { index } = this.secondaryIndexes[name] = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
+        const { index, matcher: storedMatcher } = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
+        descriptor.index = index;
+        descriptor.matcher = storedMatcher;
+        descriptor.closed = false;
 
-        // Register the actual stored matcher (may have been reconstructed from metadata by WritableStorage.createIndex).
-        this.indexMatcher.add(name, this.secondaryIndexes[name].matcher);
+        // Read-only open can omit matcher metadata; only register when a matcher is known.
+        if (descriptor.matcher) {
+            this.indexMatcher.add(name, descriptor.matcher);
+        }
 
-        index.open();
+        this.secondaryIndexHandles.open(name);
         return index;
     }
 
@@ -443,9 +623,40 @@ class ReadableStorage extends events.EventEmitter {
     removeSecondaryIndex(name) {
         const entry = this.secondaryIndexes[name];
         if (entry) {
-            this.indexMatcher.remove(name);
+            this.secondaryIndexHandles.remove(name);
+            if (!entry.closed) {
+                this.indexMatcher.remove(name);
+            }
             delete this.secondaryIndexes[name];
         }
+    }
+
+    /**
+     * Remove a secondary index file and descriptor.
+     *
+     * @api
+     * @param {string} name
+     */
+    deleteSecondaryIndex(name) {
+        const entry = this.secondaryIndexes[name];
+        if (entry?.index && typeof entry.index.destroy === 'function') {
+            entry.index.destroy();
+        } else {
+            const fileName = path.join(this.indexDirectory, this.getIndexFileName(name));
+            if (fs.existsSync(fileName)) {
+                fs.unlinkSync(fileName);
+            }
+        }
+        this.removeSecondaryIndex(name);
+    }
+
+    /**
+     * @private
+     * @param {{ index: ReadableIndex|null, matcher?: Matcher, closed: boolean }} descriptor
+     * @returns {boolean}
+     */
+    hasOpenIndexDescriptor(descriptor) {
+        return !!descriptor && !descriptor.closed && descriptor.index !== null;
     }
 
      /**
@@ -537,13 +748,21 @@ class ReadableStorage extends events.EventEmitter {
         if (!matchDocument) {
             // No document filter: iterate all secondary indexes unconditionally.
             for (const indexName of Object.keys(this.secondaryIndexes)) {
-                iterationHandler(this.secondaryIndexes[indexName].index, indexName);
+                const descriptor = this.secondaryIndexes[indexName];
+                if (!this.hasOpenIndexDescriptor(descriptor)) {
+                    continue;
+                }
+                iterationHandler(descriptor.index, indexName);
             }
             return;
         }
 
         this.indexMatcher.forEachMatch(matchDocument, indexName => {
-            iterationHandler(this.secondaryIndexes[indexName].index, indexName);
+            const descriptor = this.secondaryIndexes[indexName];
+            if (!this.hasOpenIndexDescriptor(descriptor)) {
+                return;
+            }
+            iterationHandler(descriptor.index, indexName);
         });
     }
 

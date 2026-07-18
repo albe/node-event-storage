@@ -102,9 +102,12 @@ class WritableStorage extends ReadableStorage {
             /* c8 ignore next */
             if (!(index instanceof WritableIndex)) return;
             const wasOpen = index.isOpen();
-            if (!wasOpen) index.open();
+            this.secondaryIndexHandles.open(name);
             iterationHandler(index, name, wasOpen);
-            if (!wasOpen) index.close();
+            if (!wasOpen) {
+                index.close();
+                this.secondaryIndexHandles.forgetOpenHandle(name);
+            }
         }, matchDocument);
     }
 
@@ -334,10 +337,12 @@ class WritableStorage extends ReadableStorage {
         if (this.partitions.has(partitionId)) {
             return;
         }
-        const partitionConfig = this.buildPartitionConfig(partitionShortName);
-        this.ensurePartitionDirectory(partitionName);
-        this.partitions.add(partitionId, this.createPartition(partitionName, partitionConfig));
-        this.emit('partition-created', partitionId);
+        this.withStartupStateMutation(() => {
+            const partitionConfig = this.buildPartitionConfig(partitionShortName);
+            this.ensurePartitionDirectory(partitionName);
+            this.partitions.add(partitionId, this.createPartition(partitionName, partitionConfig));
+            this.emit('partition-created', partitionId);
+        });
     }
 
     /**
@@ -382,7 +387,7 @@ class WritableStorage extends ReadableStorage {
 
         const indexEntry = this.addIndex(partition.id, position, dataSize, document);
         this.forEachSecondaryIndex((index, name) => {
-            index.open();
+            this.secondaryIndexHandles.open(name);
             index.add(indexEntry);
             this.emit('index-add', name, index.length, document);
         }, document);
@@ -405,36 +410,39 @@ class WritableStorage extends ReadableStorage {
         if (name === '_all') {
             return this.index;
         }
-        if (name in this.secondaryIndexes) {
-            return this.secondaryIndexes[name].index;
+        const existing = this.secondaryIndexes[name];
+        if (existing?.index) {
+            return existing.index;
         }
 
-        const indexName = this.storageFile + '.' + name + '.index';
+        const indexName = this.getIndexFileName(name);
         if (fs.existsSync(path.join(this.indexDirectory, indexName))) {
             return this.openIndex(name, matcher);
         }
 
         assert((typeof matcher === 'object' || typeof matcher === 'function') && matcher !== null, 'Need to specify a matcher.');
-
-        const metadata = buildMetadataForMatcher(matcher, this.hmac);
-        const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
-        if (reindex) {
-            try {
-                this.forEachDocument((document, indexEntry) => {
-                    if (matches(document, matcher)) {
-                        index.add(indexEntry);
-                    }
-                });
-            } catch (e) {
-                index.destroy();
-                throw e;
+        return this.withStartupStateMutation(() => {
+            const metadata = buildMetadataForMatcher(matcher, this.hmac);
+            const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
+            if (reindex) {
+                try {
+                    this.forEachDocument((document, indexEntry) => {
+                        if (matches(document, matcher)) {
+                            index.add(indexEntry);
+                        }
+                    });
+                } catch (e) {
+                    index.destroy();
+                    throw e;
+                }
             }
-        }
 
-        this.secondaryIndexes[name] = { index, matcher };
-        this.indexMatcher.add(name, matcher);
-        this.emit('index-created', name);
-        return index;
+            this.registerSecondaryIndexDescriptor(name, { index, matcher, closed: false });
+            this.secondaryIndexHandles.open(name);
+            this.indexMatcher.add(name, matcher);
+            this.emit('index-created', name);
+            return index;
+        });
     }
 
     /**
@@ -536,6 +544,13 @@ class WritableStorage extends ReadableStorage {
             index.truncate(index.find(this.index.length));
         }
         return index;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    deleteSecondaryIndex(name) {
+        return this.withStartupStateMutation(() => super.deleteSecondaryIndex(name));
     }
 
     /**
