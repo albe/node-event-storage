@@ -2,13 +2,11 @@
 
 ## 1.4.0
 
-- Extended `JoinEventStream` with nested selector-algebra composition (`OR` at depth 0, `AND` at depth 1, then alternating), available through `fromStreams`.
-- Updated DCB documentation to describe `types`/`tags` semantics with optional tag-stream indexing and matcher-only execution trade-offs.
-- Added `DcbQuery` shorthand syntax for `query()`: pass `{ items: [{ types, tags }] }` directly instead of constructing the nested selector algebra by hand. Requires `typeAccessor` and/or `tagsAccessor` to be configured for the respective fields.
-- Added `tagsAccessor` option: dot-notation path to an array of tag strings in the event payload. On every `commit()`, one `tags/{tag}` stream is created per distinct value with O(1) IndexMatcher routing.
-- Added `streamSources` option: generic stream-index definitions as `[{ path, nameBuilder }]` entries. `typeAccessor` and `tagsAccessor` are now shorthands that register a source internally; custom sources can produce any stream name from any payload property, including array-valued fields.
-- Added `$has` object-matcher operator for array-containment checks (`{ tags: { $has: 'featured' } }`). Compiles to a fast byte-level scan in raw mode and to `Array.isArray(v) && v.includes(x)` in object mode. Tag-stream matchers built by `tagsAccessor`/`streamSources` for array-valued fields now use `$has` internally so `IndexMatcher` can route them via the O(1) discriminant table.
-- Added `$hasAny` object-matcher operator for any-of array-containment checks (`{ tags: { $hasAny: ['a', 'b'] } }`). Compiles to a fast byte-level scan in raw mode and to `Array.isArray(v) && ['a','b'].some(x => v.includes(x))` in object mode. `IndexMatcher` registers a `$hasAny` matcher under each expected value, so O(1) discriminant routing fires for any matching element.
+- Extended `JoinEventStream` with nested selector-algebra composition, available through `fromStreams`.
+- Added `DcbQuery` shorthand syntax for `query()`: pass `{ items: [{ types, tags }] }` directly. Requires `typeAccessor` and/or `tagsAccessor` to be configured.
+- Added `tagsAccessor` option: dot-notation path to a tag-string array in the event payload; auto-indexes one stream per distinct tag value with O(1) discriminant routing.
+- Added `streamSources` option: generic stream-index definitions as `[{ path, nameBuilder }]` entries; `typeAccessor` and `tagsAccessor` are shorthands over this mechanism.
+- Added `$has` and `$hasAny` matcher operators for array-containment checks: `{ tags: { $has: 'featured' } }` (single value) and `{ tags: { $hasAny: ['a', 'b'] } }` (any of). Both compile to fast byte-level scans in raw mode and support O(1) `IndexMatcher` routing.
 
 ## 1.3.5
 
