@@ -414,21 +414,14 @@ class ReadablePartition extends events.EventEmitter {
      */
     findDocument(sequenceNumber, min = true) {
         const last = this.readLast();
-        if (!last) {
-            return null;
-        }
-
-        if (min && last.header.sequenceNumber < sequenceNumber) {
+        if (!last || (min && last.header.sequenceNumber < sequenceNumber)) {
             return null;
         }
 
         const [low, high] = binarySearch(
             sequenceNumber,
             this.size,
-            (pos) => {
-                const doc = this.readDocumentBefore(pos);
-                return doc ? doc.header.sequenceNumber : Number.MIN_SAFE_INTEGER;
-            }
+            (pos) => this.readDocumentBefore(pos)?.header.sequenceNumber ?? Number.MIN_SAFE_INTEGER
         );
 
         const position = this.findDocumentPositionBefore(min ? low : high);
@@ -503,23 +496,25 @@ class ReadablePartition extends events.EventEmitter {
             return;
         }
 
-        const entry = { partition: this.id };
-        const header = {};
+        const doc = {
+            entry: { partition: this.id },
+            header: {}
+        };
         const iterator = forwards
-            ? this.readAll(found.position, header)
-            : this.readAllBackwards(found.position + this.documentWriteSize(found.header.dataSize), header);
+            ? this.readAll(found.position, doc.header)
+            : this.readAllBackwards(found.position + this.documentWriteSize(found.header.dataSize), doc.header);
 
         for (const data of iterator) {
-            if (header.sequenceNumber < lo || header.sequenceNumber > hi) {
+            if (doc.header.sequenceNumber < lo || doc.header.sequenceNumber > hi) {
                 return;
             }
-            entry.number = header.sequenceNumber;
-            entry.position = header.position;
-            entry.size = header.dataSize;
-            yield { data, header, entry };
+            doc.entry.number = doc.header.sequenceNumber;
+            doc.entry.position = doc.header.position;
+            doc.entry.size = doc.header.dataSize;
+            doc.data = data;
+            yield doc;
         }
     }
-
 
 }
 
