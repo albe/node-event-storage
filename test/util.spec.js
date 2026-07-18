@@ -1,7 +1,7 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
-import { iterate } from '../src/utils/util.js';
+import { iterate, compileAccessor } from '../src/utils/util.js';
 import { scanForFiles } from '../src/utils/fsUtil.js';
 import { fileURLToPath } from 'url';
 
@@ -88,6 +88,35 @@ describe('util', function() {
                 expect(err).to.be.an(Error);
                 done();
             });
+        });
+
+    });
+
+    describe('compileAccessor', function() {
+
+        it('returns a direct-property accessor for a single-part path', function() {
+            const acc = compileAccessor('type');
+            expect(acc({ type: 'OrderPlaced' })).to.be('OrderPlaced');
+            expect(acc({})).to.be(undefined);
+        });
+
+        it('returns undefined when the object is null or undefined (single-part path)', function() {
+            const acc = compileAccessor('type');
+            expect(acc(null)).to.be(undefined);
+            expect(acc(undefined)).to.be(undefined);
+        });
+
+        it('resolves nested dot-notation paths', function() {
+            const acc = compileAccessor('payload.user.id');
+            expect(acc({ payload: { user: { id: 42 } } })).to.be(42);
+        });
+
+        it('returns undefined for missing nested segments', function() {
+            const acc = compileAccessor('payload.user.id');
+            expect(acc(null)).to.be(undefined);
+            expect(acc({})).to.be(undefined);
+            expect(acc({ payload: null })).to.be(undefined);
+            expect(acc({ payload: { user: 'not-an-object' } })).to.be(undefined);
         });
 
     });

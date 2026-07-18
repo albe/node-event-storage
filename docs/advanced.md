@@ -60,6 +60,39 @@ const eventstore = new EventStore('my-event-store', {
 });
 ```
 
+## Dynamic Stream Indexing
+
+On every `commit()`, EventStore can automatically maintain dedicated streams for any payload property. The high-level options `typeAccessor` and `tagsAccessor` are convenient shorthands; `streamSources` is the generic mechanism they build on.
+
+Each entry in `streamSources` specifies a dot-notation `path` into the event payload and a `nameBuilder(value) => streamName` function. Scalar property values are passed to `nameBuilder` directly; array values are iterated so each element produces its own stream. Non-string and empty values are skipped silently.
+
+```javascript
+const store = new EventStore('my-store', {
+    storageDirectory: './data',
+    streamSources: [
+        // one stream per tenant — 'acme' → stream 'tenant/acme'
+        { path: 'tenantId', nameBuilder: (v) => `tenant/${v}` },
+        // one stream per tag value (equivalent to tagsAccessor: 'tags')
+        { path: 'tags',     nameBuilder: (v) => `tags/${v}` }
+    ]
+});
+```
+
+`typeAccessor` and `tagsAccessor` are shorthand for:
+
+```javascript
+streamSources: [
+    { path: 'type', nameBuilder: (v) => v },           // typeAccessor: 'type'
+    { path: 'tags', nameBuilder: (v) => `tags/${v}` }  // tagsAccessor: 'tags'
+]
+```
+
+with the additional benefit that `typeAccessor` and `tagsAccessor` also wire into `DcbQuery` resolution for the `types` and `tags` fields.
+
+Each source's `payload.<path>` is automatically added to `matcherProperties` so the IndexMatcher routes index writes in O(1) rather than scanning all registered matchers.
+
+---
+
 ## Storage Configuration
 
 Pass these options inside `config.storageConfig`:

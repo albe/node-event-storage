@@ -6,11 +6,11 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
-import { assert, getPropertyAtPath } from './utils/util.js';
+import { assert } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
-import { buildTypeMatcherFn } from './utils/metadataUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
-import { normalizeSelector } from "./utils/indexUtil.js";
+import { normalizeSelector, buildStreamSource } from "./utils/indexUtil.js";
+import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
 const ExpectedVersion = {
     Any: -1,
@@ -24,10 +24,22 @@ const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
 const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
 const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
+
 class OptimisticConcurrencyError extends Error {}
 
 /**
  * @typedef {string | SelectorNode[]} SelectorNode
+ */
+
+/**
+ * @typedef {object} QueryItem
+ * @property {string[]} [types] Event type names to match (OR within the group).
+ * @property {string[]} [tags] Tag values to match (each tag is ANDed with the others and with types).
+ */
+
+/**
+ * @typedef {object} DcbQuery
+ * @property {QueryItem[]} items Non-empty array of query items combined with OR semantics at the top level.
  */
 
 /**
@@ -72,9 +84,20 @@ class EventStore extends events.EventEmitter {
      * @param {string} [config.streamsDirectory] The directory where the streams should be stored. Default '{storageDirectory}/streams'.
      * @param {object} [config.storageConfig] Additional config options given to the storage backend. See `Storage`.
      * @param {boolean} [config.readOnly] If the storage should be mounted in read-only mode.
-     * @param {string|function(object): string} [config.typeAccessor] Dot-notation path (e.g. `'type'`) or
-     *   function `(event) => string` identifying the event type. Enables type-based queries via
-     *   {@link EventStore#query} and ensures proper index routing for those queries.
+     * @param {Array<{path: string, nameBuilder: function(string): string}>} [config.streamSources] Generic
+     *   stream-index definitions. Each entry specifies a dot-notation `path` into the event payload and a
+     *   `nameBuilder(value) => streamName` function. On every {@link EventStore#commit} each entry is
+     *   evaluated: scalar values are passed directly to `nameBuilder`; array values are iterated so each
+     *   element produces its own stream. Non-string and empty values are skipped silently. The resulting
+     *   stream names must satisfy the stream-name pattern. Each entry's `path` is automatically registered
+     *   in `matcherProperties` for O(1) IndexMatcher routing.
+     * @param {string} [config.typeAccessor] Shorthand for a `streamSources` entry with `nameBuilder = v => v`.
+     *   Dot-notation path to the event type field (e.g. `'type'`). Enables type-based
+     *   {@link EventStore#query} selectors and {@link DcbQuery} `types` items.
+     * @param {string} [config.tagsAccessor] Shorthand for a `streamSources` entry with
+     *   `nameBuilder = v => \`tags/${v}\``. Dot-notation path to an array field of tag values (e.g.
+     *   `'tags'`). Enables tag-scoped {@link DcbQuery} `tags` items. Values are recommended to use `/`
+     *   as a hierarchy separator (e.g. `'course/jdsj4'` → stream `tags/course/jdsj4`).
      * @param {object|function(string): object} [config.streamMetadata] A metadata object or a function `(streamName) => object`
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
@@ -87,13 +110,26 @@ class EventStore extends events.EventEmitter {
             storeName = 'eventstore';
         }
 
-        if (typeof config.typeAccessor === 'string' && config.typeAccessor) {
-            const accessorPath = config.typeAccessor;
-            this.typeAccessor = (event) => getPropertyAtPath(event, accessorPath);
-            this.typeMatcherFn = buildTypeMatcherFn(accessorPath);
-        } else {
-            this.typeAccessor = typeof config.typeAccessor === 'function' ? config.typeAccessor : null;
-            this.typeMatcherFn = null;
+        this.streamSources = [];
+        this.typeSource = null;
+        this.tagsSource = null;
+
+        if (config.typeAccessor) {
+            assert(typeof config.typeAccessor === 'string', 'typeAccessor must be a dot-notation string path (e.g. \'type\').');
+            this.typeSource = buildStreamSource(config.typeAccessor, (v) => v);
+            this.streamSources.push(this.typeSource);
+        }
+
+        if (config.tagsAccessor) {
+            assert(typeof config.tagsAccessor === 'string', 'tagsAccessor must be a dot-notation string path (e.g. \'tags\').');
+            this.tagsSource = buildStreamSource(config.tagsAccessor, (v) => `tags/${v}`);
+            this.streamSources.push(this.tagsSource);
+        }
+
+        for (const { path, nameBuilder } of config.streamSources ?? []) {
+            assert(typeof path === 'string' && path, 'Each streamSources entry must have a non-empty string path.');
+            assert(typeof nameBuilder === 'function', 'Each streamSources entry must have a nameBuilder function.');
+            this.streamSources.push(buildStreamSource(path, nameBuilder));
         }
 
         this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
@@ -105,11 +141,10 @@ class EventStore extends events.EventEmitter {
         };
         const storageConfig = Object.assign(defaults, config.storageConfig);
 
-        // When typeAccessor is a string path, ensure the corresponding full document path
-        // (payload.<path>) is present in matcherProperties so the IndexMatcher discriminant
-        // table can route type-stream lookups in O(1) on every write.
-        if (this.typeMatcherFn) {
-            const fullPath = `payload.${config.typeAccessor}`;
+        // Register each source's payload path in matcherProperties so the IndexMatcher
+        // discriminant table can route stream lookups in O(1) on every write.
+        for (const source of this.streamSources) {
+            const fullPath = `payload.${source.path}`;
             const currentProps = storageConfig.matcherProperties || DEFAULT_MATCHER_PROPERTIES;
             if (!currentProps.includes(fullPath)) {
                 storageConfig.matcherProperties = [...currentProps, fullPath];
@@ -421,38 +456,30 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Ensure a dedicated type stream exists for each event's type, creating it if needed.
-     * Must be called before the entity stream is created to guarantee correct index routing.
+     * Ensure a dedicated stream exists for each indexed property value across all stream sources.
+     * Must be called before the entity stream write so those indexes are never incomplete.
      *
      * @private
-     * @param {Array<object>} events The events to process.
+     * @param {Array<object>} events
      */
-    ensureTypeStreams(events) {
-        if (!this.typeAccessor) return;
-        for (const event of events) {
-            const type = this.resolveValidatedTypeStreamName(event);
-            if (type && !(type in this.streams)) {
-                const matcher = this.typeMatcherFn
-                    ? this.typeMatcherFn(type)
-                    : (doc) => this.typeAccessor(doc.payload) === type;
-                this.createEventStream(type, matcher, false);
+    ensureStreams(events) {
+        if (this.streamSources.length === 0) return;
+        for (const { accessor, nameBuilder, matcherFn, path } of this.streamSources) {
+            for (const event of events) {
+                const raw = accessor(event);
+                const isArrayValue = Array.isArray(raw);
+                const values = isArrayValue ? raw : (raw != null && raw !== '' ? [raw] : []);
+                const buildMatcher = matcherFn(isArrayValue ? '$has' : undefined);
+                for (const value of values) {
+                    if (typeof value !== 'string' || !value) continue;
+                    const streamName = nameBuilder(value);
+                    assert(STREAM_NAME_PATTERN.test(streamName), `Invalid stream name "${streamName}" derived from path "${path}".`);
+                    if (!(streamName in this.streams)) {
+                        this.createEventStream(streamName, buildMatcher(value), false);
+                    }
+                }
             }
         }
-    }
-
-    /**
-     * @private
-     * @param {object} event
-     * @returns {string|null}
-     */
-    resolveValidatedTypeStreamName(event) {
-        const type = this.typeAccessor(event);
-        if (type === undefined || type === null || type === '') {
-            return null;
-        }
-        assert(typeof type === 'string', 'typeAccessor must return a string.');
-        assert(STREAM_NAME_PATTERN.test(type), `typeAccessor must return a valid stream name. Got: "${type}"`);
-        return type;
     }
 
     /**
@@ -490,9 +517,8 @@ class EventStore extends events.EventEmitter {
             expectedVersion = ExpectedVersion.Any;
         }
 
-        // When typeAccessor is configured, ensure a dedicated type stream exists for each event
-        // before the entity stream write so the type stream index is never incomplete.
-        this.ensureTypeStreams(events);
+        // Ensure all indexed streams exist before the entity stream write so those indexes are never incomplete.
+        this.ensureStreams(events);
 
         if (!(streamName in this.streams)) {
             this.createEventStream(streamName, { stream: streamName }, false);
@@ -559,7 +585,8 @@ class EventStore extends events.EventEmitter {
      * in AND groups they collapse that branch to an empty result.
      *
      * @api
-     * @param {SelectorNode[]} selector A non-empty array of event types or a nested stream-selector algebra.
+     * @param {SelectorNode[]|object} selectorOrDcbQuery A non-empty selector array, or a {@link DcbQuery} object
+     *   with an `items` property (compiled automatically to selector algebra).
      * @param {function|object|null} [matcher] Optional matcher used for stream pre-filtering.
      *   In object mode, function predicates receive `(payload, metadata)`.
      * @param {number} [minRevision=1] The 1-based minimum global revision to include in the returned stream (inclusive).
@@ -571,7 +598,15 @@ class EventStore extends events.EventEmitter {
      *   `[[courseTag, ['CourseCreated', 'CourseCapacityChanged']], [studentTag, ['StudentCreated']]]`
      * @throws {Error} if `selector` is not a non-empty array.
      */
-    query(selector, matcher = null, minRevision = 1, raw = false) {
+    query(selectorOrDcbQuery, matcher = null, minRevision = 1, raw = false) {
+        let selector = selectorOrDcbQuery;
+        if (isDcbQuery(selectorOrDcbQuery)) {
+            selector = compileDcbQuery(
+                selectorOrDcbQuery,
+                (type) => this.resolveTypeStream(type),
+                (tag) => this.resolveTagStream(tag)
+            );
+        }
         assert(Array.isArray(selector) && selector.length > 0, 'Must specify a non-empty array of stream selectors for query.');
         // Normalize the selector once here; both the condition and the stream use
         // the normalized form.  Wrap a string result (single-stream reduction) in
@@ -581,6 +616,28 @@ class EventStore extends events.EventEmitter {
         const condition = new CommitCondition(querySelector, matcher, this.storage.length, raw);
         const stream = this.fromStreams('_query_' + Date.now(), querySelector, minRevision, -1, matcher, raw);
         return { stream, condition };
+    }
+
+    /**
+     * @private
+     * @param {string} type
+     * @returns {string} Stream name for the given event type.
+     * @throws {Error} When typeAccessor is not configured.
+     */
+    resolveTypeStream(type) {
+        assert(this.typeSource !== null, 'DcbQuery references "types" but typeAccessor not configured.');
+        return this.typeSource.nameBuilder(type);
+    }
+
+    /**
+     * @private
+     * @param {string} tag
+     * @returns {string} Stream name for the given tag value.
+     * @throws {Error} When tagsAccessor is not configured.
+     */
+    resolveTagStream(tag) {
+        assert(this.tagsSource !== null, 'DcbQuery references "tags" but tagsAccessor not configured.');
+        return this.tagsSource.nameBuilder(tag);
     }
 
     /**

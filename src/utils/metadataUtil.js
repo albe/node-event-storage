@@ -134,6 +134,9 @@ function buildOperatorChecks(operatorObj) {
             case '$ne':
                 checks.push(value => value !== expectedValue);
                 break;
+            case '$has':
+                checks.push(value => Array.isArray(value) && value.includes(expectedValue));
+                break;
             default:
                 throw new TypeError(`Unknown operator: ${operator}`);
         }
@@ -226,16 +229,22 @@ function buildMatcherFromMetadata(matcherMetadata, hmac) {
 }
 
 /**
- * Builds a factory function that, given a type string, returns an object matcher for
- * documents whose payload contains that type at the given dot-notation path.
+ * Builds a factory function that, given a scalar value, returns an object matcher targeting
+ * the given dot-notation payload path. Without an operator (or with `'$eq'`) the leaf is a
+ * plain scalar equality check; with an operator like `'$has'` the leaf is wrapped as
+ * `{[operator]: value}` so array-containment or other single-operator checks are produced.
  *
- * @param {string} payloadPath Dot-notation path relative to the event payload (e.g. `'type'`, `'meta.kind'`).
- * @returns {function(string): object} A function `(typeValue) => objectMatcher`.
+ * @param {string} payloadPath Dot-notation path relative to the event payload (e.g. `'type'`, `'tags'`).
+ * @param {string} [operator] Optional matcher operator (e.g. `'$has'`). Missing or `'$eq'` produces a scalar matcher.
+ * @returns {function(any): object} A function `(value) => objectMatcher`.
  */
-function buildTypeMatcherFn(payloadPath) {
+function buildMatcherFn(payloadPath, operator) {
     const parts = payloadPath.split('.');
-    return function (typeValue) {
-        let obj = typeValue;
+    const wrapLeaf = (!operator || operator === '$eq')
+        ? (value) => value
+        : (value) => ({[operator]: value});
+    return function (value) {
+        let obj = wrapLeaf(value);
         for (let i = parts.length - 1; i >= 0; i--) {
             obj = {[parts[i]]: obj};
         }
@@ -341,6 +350,14 @@ function buildMatcherTreeChild(key, value) {
             child.pattern = keyPrefix;
             const nePattern = [Buffer.from(JSON.stringify(value['$ne']), 'utf8')];
             child.matches = (buffer, valueStart) => !matchesAnyValuePattern(buffer, valueStart, nePattern);
+        } else if ('$has' in value && Object.keys(value).length === 1) {
+            // A lone $has is a same-level array-containment check. The pattern locates the array
+            // opener (`"key":[`) and the follow-up scans array elements for the serialized scalar
+            // at the array's element level (skipping nested objects/arrays).
+            child.isKeyPattern = true;
+            child.pattern = Buffer.concat([keyPrefix, Buffer.from('[', 'utf8')]);
+            const valuePattern = Buffer.from(JSON.stringify(value['$has']), 'utf8');
+            child.matches = (buffer, valueStart) => indexOfSameLevel(buffer, valuePattern, valueStart) !== -1;
         } else if (isOperatorObject(value)) {
             child.isKeyPattern = true;
             child.pattern = keyPrefix;
@@ -528,6 +545,6 @@ export {
     buildMetadataHeader,
     buildMetadataForMatcher,
     buildMatcherFromMetadata,
-    buildTypeMatcherFn,
+    buildMatcherFn,
     buildRawBufferMatcher
 };

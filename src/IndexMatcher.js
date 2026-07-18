@@ -2,6 +2,18 @@ import { getPropertyAtPath } from './utils/util.js';
 import { matches } from './utils/metadataUtil.js';
 
 /**
+ * @param {any} value Candidate matcher value at a discriminant path.
+ * @returns {boolean} True when `value` is `{ $has: scalar }` (lone $has with a non-object value).
+ */
+function isLoneHasScalar(value) {
+    if (Array.isArray(value)) return false;
+    const keys = Object.keys(value);
+    if (keys.length !== 1 || keys[0] !== '$has') return false;
+    const has = value.$has;
+    return has !== null && has !== undefined && typeof has !== 'object';
+}
+
+/**
  * @typedef {object|function(object):boolean} Matcher
  */
 
@@ -143,7 +155,30 @@ class IndexMatcher {
 
         for (const propPath of this.properties) {
             const docValue = getPropertyAtPath(document, propPath);
-            if (docValue === undefined || docValue === null || typeof docValue === 'object') {
+            if (docValue === undefined || docValue === null) {
+                continue;
+            }
+
+            if (Array.isArray(docValue)) {
+                // Multi-value document property: each array element is a potential discriminant.
+                // A dedup set prevents calling iterationHandler twice when two elements map to
+                // the same index (e.g. duplicate tags, or a single index registered for both).
+                const called = new Set();
+                for (const item of docValue) {
+                    if (item === null || item === undefined || typeof item === 'object') continue;
+                    const indexSet = this.table.get(propPath)?.get(String(item));
+                    if (!indexSet) continue;
+                    for (const indexName of indexSet) {
+                        if (!called.has(indexName) && matches(document, this.matchers.get(indexName))) {
+                            called.add(indexName);
+                            iterationHandler(indexName);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (typeof docValue === 'object') {
                 continue;
             }
 
@@ -194,6 +229,11 @@ class IndexMatcher {
                 if (Array.isArray(value) && value.length > 0 &&
                     value.every(v => v !== null && v !== undefined && typeof v !== 'object')) {
                     return { propPath, values: value.map(String) };
+                }
+                // Lone $has operator: array-containment matcher (e.g. tag streams). Treat the
+                // has-value as the discriminant so array-valued documents route in O(1).
+                if (isLoneHasScalar(value)) {
+                    return { propPath, values: [String(value.$has)] };
                 }
             }
         }
