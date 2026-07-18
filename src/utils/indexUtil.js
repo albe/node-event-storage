@@ -196,13 +196,6 @@ function optimizeSelectorNode(selectorNode, depth) {
     return selectorNode;
 }
 
-export {
-    union,
-    intersect,
-    normalizeSelector,
-    buildStreamSource
-};
-
 /**
  * Pre-compile a stream source descriptor with a single curried matcher factory:
  * `matcherFn(operator)(value) => objectMatcher`. The scalar and `$has` shapes are compiled
@@ -223,3 +216,10 @@ function buildStreamSource(sourcePath, nameBuilder) {
         matcherFn: (operator) => operator === '$has' ? hasMatcher : scalarMatcher
     };
 }
+
+export {
+    union,
+    intersect,
+    normalizeSelector,
+    buildStreamSource
+};
