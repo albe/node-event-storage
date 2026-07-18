@@ -6,7 +6,7 @@ import events from 'events';
 import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
-import { assert, compileAccessor } from './utils/util.js';
+import { assert } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 import { normalizeSelector, buildStreamSource } from "./utils/indexUtil.js";
