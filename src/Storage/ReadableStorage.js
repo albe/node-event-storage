@@ -257,7 +257,11 @@ class ReadableStorage extends events.EventEmitter {
         const escaped = this.storageFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const partitionPattern = new RegExp(`^(${escaped}.*)$`);
         scanForFiles(this.dataDirectory, partitionPattern, (file) => {
+            if (this.initialized === null) {
+                return;
+            }
             if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
+            if (!fs.existsSync(path.join(this.dataDirectory, file))) return;
             this.registerPartitionFile(file);
         }, (partErr) => {
             /* c8 ignore next */
@@ -272,6 +276,11 @@ class ReadableStorage extends events.EventEmitter {
             }
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
+                if (this.initialized === null) {
+                    return;
+                }
+                const indexPath = path.join(this.indexDirectory, this.storageFile + '.' + name + '.index');
+                if (!fs.existsSync(indexPath)) return;
                 this.registerKnownIndex(name);
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
@@ -320,12 +329,12 @@ class ReadableStorage extends events.EventEmitter {
             this.emit('opened');
         };
         if (this.loadStartupStateSnapshot()) {
-            finishOpen();
             this.scanFiles(() => {
                 // Guard: close() while scanning resets initialized to null.
                 if (this.initialized === null) return;
                 this.onKnownStateChanged();
             });
+            setImmediate(finishOpen);
             return true;
         }
         this.scanFiles(() => {
