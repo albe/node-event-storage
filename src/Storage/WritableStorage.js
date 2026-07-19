@@ -84,9 +84,13 @@ class WritableStorage extends ReadableStorage {
             return true;
         }
 
+        const finishOpen = () => {
+            this.scheduleStartupStatePersist();
+            callback?.();
+        };
         const onOpen = needsRepair
-            ? () => { this.checkTornWrites(); this.scheduleStartupStatePersist(); callback?.(); }
-            : () => { this.scheduleStartupStatePersist(); callback?.(); };
+            ? () => { this.checkTornWrites(); finishOpen(); }
+            : finishOpen;
         return super.open(onOpen);
     }
 

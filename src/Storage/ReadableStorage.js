@@ -340,6 +340,7 @@ class ReadableStorage extends events.EventEmitter {
         this.scanFiles(() => {
             // Guard: close() while scanning resets initialized to null.
             finishOpen();
+            this.onKnownStateChanged();
         });
         return true;
     }
