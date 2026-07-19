@@ -1527,6 +1527,50 @@ describe('Storage', function() {
 
             storage.getPartition('');
         });
+
+        it('loads startup state snapshot and opens before the lazy scan finishes', function(done) {
+            storage = createStorage({ partitioner: (document) => document.type });
+            storage.open();
+            storage.write({ foo: 1, type: 'one' });
+            storage.write({ foo: 2, type: 'two' });
+            storage.ensureIndex('one', doc => doc.type === 'one');
+            storage.flush();
+            storage.close();
+
+            const startupStateFile = path.join(dataDirectory, '.storage.startup-state.json');
+            expect(fs.existsSync(startupStateFile)).to.be(true);
+
+            const reader = createReader();
+            let scanCalled = false;
+            reader.scanFiles = () => {
+                scanCalled = true;
+            };
+            reader.once('opened', () => {
+                expect(scanCalled).to.be(true);
+                expect(reader.read(1)).to.eql({ foo: 1, type: 'one' });
+                expect(reader.read(2)).to.eql({ foo: 2, type: 'two' });
+                reader.close();
+                done();
+            });
+            reader.open();
+        });
+
+        it('does not persist startup state in read-only mode', function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 1 });
+            storage.flush();
+            storage.close();
+
+            const startupStateFile = path.join(dataDirectory, '.storage.startup-state.json');
+            fs.removeSync(startupStateFile);
+
+            const reader = createReader();
+            reader.open();
+            reader.close();
+
+            expect(fs.existsSync(startupStateFile)).to.be(false);
+        });
     });
 
     describe('preCommit', function() {

@@ -12,6 +12,7 @@ import PartitionPool from '../PartitionPool.js';
 import ReadablePartition from "../Partition/ReadablePartition.js";
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
+const STARTUP_STATE_FILE_SUFFIX = '.startup-state.json';
 
 /**
  * Default ordered list of document property paths used as discriminant keys when
@@ -122,6 +123,7 @@ class ReadableStorage extends events.EventEmitter {
      */
     initializeIndexes(config) {
         this.indexDirectory = resolvePath(config.indexDirectory || this.dataDirectory);
+        this.startupStateFile = path.join(this.indexDirectory, '.' + this.storageFile + STARTUP_STATE_FILE_SUFFIX);
 
         this.indexOptions = config.indexOptions;
         this.indexOptions.dataDirectory = this.indexDirectory;
@@ -131,6 +133,7 @@ class ReadableStorage extends events.EventEmitter {
         this.index = index;
         this.secondaryIndexes = {};
         this.readonlyIndexes = {};
+        this.knownIndexes = new Set();
 
         /** Fast secondary-index lookup — classifies matchers for O(1) candidate resolution on write. */
         this.indexMatcher = new IndexMatcher(config.matcherProperties);
@@ -158,8 +161,92 @@ class ReadableStorage extends events.EventEmitter {
             const partition = this.createPartition(filename, this.partitionConfig);
             this.partitions.add(partition.id, partition);
             this.emit('partition-created', partition.id);
+            this.onKnownStateChanged();
         }
         return partitionId;
+    }
+
+    /**
+     * Track a known secondary index name and optionally emit `index-created` for first discovery.
+     *
+     * @protected
+     * @param {string} name
+     * @param {boolean} [emitEvent=true]
+     * @returns {boolean} True when the name was newly tracked.
+     */
+    registerKnownIndex(name, emitEvent = true) {
+        if (this.knownIndexes.has(name)) {
+            return false;
+        }
+        this.knownIndexes.add(name);
+        if (emitEvent) {
+            this.emit('index-created', name);
+        }
+        this.onKnownStateChanged();
+        return true;
+    }
+
+    /**
+     * Build a startup-state snapshot from currently known partitions and indexes.
+     *
+     * @protected
+     * @returns {{version: number, partitions: string[], indexes: string[]}}
+     */
+    buildStartupStateSnapshot() {
+        const partitions = [];
+        this.forEachPartition(partition => {
+            partitions.push(partition.name);
+        });
+        return {
+            version: 1,
+            partitions: partitions.sort(),
+            indexes: Array.from(this.knownIndexes).sort()
+        };
+    }
+
+    /**
+     * Load known partition/index names from the persisted startup-state snapshot.
+     * Missing files are ignored and discovered later by the background scan.
+     *
+     * @protected
+     * @returns {boolean} True when a valid snapshot file was consumed.
+     */
+    loadStartupStateSnapshot() {
+        if (!fs.existsSync(this.startupStateFile)) {
+            return false;
+        }
+        let snapshot;
+        try {
+            snapshot = JSON.parse(fs.readFileSync(this.startupStateFile, 'utf8'));
+        } catch (e) {
+            return false;
+        }
+        if (!snapshot || snapshot.version !== 1) {
+            return false;
+        }
+
+        const partitions = Array.isArray(snapshot.partitions) ? snapshot.partitions : [];
+        for (const partitionName of partitions) {
+            if (typeof partitionName !== 'string' || partitionName === '') {
+                continue;
+            }
+            const partitionPath = path.join(this.dataDirectory, partitionName);
+            if (fs.existsSync(partitionPath)) {
+                this.registerPartitionFile(partitionName);
+            }
+        }
+
+        const indexes = Array.isArray(snapshot.indexes) ? snapshot.indexes : [];
+        for (const indexName of indexes) {
+            if (typeof indexName !== 'string' || indexName === '' || indexName === '_all') {
+                continue;
+            }
+            const indexPath = path.join(this.indexDirectory, this.storageFile + '.' + indexName + '.index');
+            if (fs.existsSync(indexPath)) {
+                this.registerKnownIndex(indexName);
+            }
+        }
+        return true;
     }
 
     /**
@@ -185,9 +272,7 @@ class ReadableStorage extends events.EventEmitter {
             }
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
-                if (!(name in this.secondaryIndexes)) {
-                    this.emit('index-created', name);
-                }
+                this.registerKnownIndex(name);
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
                 /* c8 ignore next */
@@ -227,13 +312,25 @@ class ReadableStorage extends events.EventEmitter {
             return true;
         }
         this.initialized = false;
-        this.scanFiles(() => {
-            // Guard: close() while scanning resets initialized to null.
+        const finishOpen = () => {
             if (this.initialized === null) return;
             this.initialized = true;
             this.openIndexes();
             callback?.();
             this.emit('opened');
+        };
+        if (this.loadStartupStateSnapshot()) {
+            finishOpen();
+            this.scanFiles(() => {
+                // Guard: close() while scanning resets initialized to null.
+                if (this.initialized === null) return;
+                this.onKnownStateChanged();
+            });
+            return true;
+        }
+        this.scanFiles(() => {
+            // Guard: close() while scanning resets initialized to null.
+            finishOpen();
         });
         return true;
     }
@@ -400,6 +497,7 @@ class ReadableStorage extends events.EventEmitter {
         const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions));
         index.open();
         this.readonlyIndexes[name] = index;
+        this.registerKnownIndex(name, false);
         return index;
     }
 
@@ -429,6 +527,7 @@ class ReadableStorage extends events.EventEmitter {
 
         // Register the actual stored matcher (may have been reconstructed from metadata by WritableStorage.createIndex).
         this.indexMatcher.add(name, this.secondaryIndexes[name].matcher);
+        this.registerKnownIndex(name, false);
 
         index.open();
         return index;
@@ -561,6 +660,14 @@ class ReadableStorage extends events.EventEmitter {
 
         this.partitions.forEach(iterationHandler);
     }
+
+    /**
+     * Hook called when the set of known partitions/indexes changes.
+     * WritableStorage overrides this to persist startup-state snapshots.
+     *
+     * @protected
+     */
+    onKnownStateChanged() {}
 
 }
 
