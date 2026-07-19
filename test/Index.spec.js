@@ -71,6 +71,7 @@ describe('Index', function() {
 
         const reader = createReader(index.name);
         expect(reader.get(1).position).to.be(11);
+        expect(() => index.close()).to.not.throwError();
 
         other.close();
     });

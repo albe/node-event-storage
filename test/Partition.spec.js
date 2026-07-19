@@ -110,6 +110,7 @@ describe('Partition', function() {
         expect(partition.flush()).to.be(false);
         expect(partition.hasFileHandle()).to.be(false);
         expect(partition.readFrom(0).toString('utf8')).to.be('foo');
+        expect(() => partition.close()).to.not.throwError();
 
         other.close();
     });

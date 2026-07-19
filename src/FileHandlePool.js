@@ -44,13 +44,11 @@ class FileHandlePool {
     }
 
     registerBeforeClose(target, onBeforeClose) {
-        if (typeof onBeforeClose !== 'function') {
+        const handle = this.handles.get(target);
+        if (!handle) {
             return;
         }
-        const handle = this.handles.get(target);
-        if (handle) {
-            handle.onBeforeClose = onBeforeClose;
-        }
+        handle.onBeforeClose = typeof onBeforeClose === 'function' ? onBeforeClose : null;
     }
 
     /**
