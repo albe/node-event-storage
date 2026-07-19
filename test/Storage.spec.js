@@ -680,6 +680,8 @@ describe('Storage', function() {
             const second = storage.openReadonlyIndex('foo.closed');
 
             expect(first).to.be(second);
+            storage.close();
+            expect(first.isOpen()).to.be(false);
         });
 
     });

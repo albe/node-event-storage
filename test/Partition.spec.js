@@ -136,8 +136,13 @@ describe('Partition', function() {
     it('ignores the before-close hook after an explicit close', function() {
         partition.open();
         partition.close();
+        let flushed = false;
+        partition.flush = () => {
+            flushed = true;
+        };
 
         expect(() => partition.onBeforeClose(0)).to.not.throwError();
+        expect(flushed).to.be(false);
     });
 
     it('returns an empty backward reader before the start of the file', function() {
