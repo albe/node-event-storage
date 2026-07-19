@@ -14,6 +14,14 @@ import ReadablePartition from "../Partition/ReadablePartition.js";
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
 const STARTUP_STATE_FILE_SUFFIX = '.startup-state.json';
 
+class IndexNotFoundError extends Error {
+    constructor(indexName) {
+        super(`Index "${indexName}" does not exist.`);
+        this.name = 'IndexNotFoundError';
+        this.code = 'INDEX_NOT_FOUND';
+    }
+}
+
 /**
  * Default ordered list of document property paths used as discriminant keys when
  * classifying object matchers into the fast-lookup table.  Each path may use
@@ -184,6 +192,14 @@ class ReadableStorage extends events.EventEmitter {
         }
         this.onKnownStateChanged();
         return true;
+    }
+
+    /**
+     * @private
+     * @param {string} name
+     */
+    throwIndexNotFoundError(name) {
+        throw new IndexNotFoundError(name);
     }
 
     /**
@@ -496,7 +512,9 @@ class ReadableStorage extends events.EventEmitter {
             return this.readonlyIndexes[name];
         }
         const indexName = this.storageFile + '.' + name + '.index';
-        assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
+        if (!fs.existsSync(path.join(this.indexDirectory, indexName))) {
+            this.throwIndexNotFoundError(name);
+        }
         const { index } = this.createIndex(indexName, Object.assign({}, this.indexOptions));
         index.open();
         this.readonlyIndexes[name] = index;
@@ -523,7 +541,9 @@ class ReadableStorage extends events.EventEmitter {
         }
 
         const indexName = this.storageFile + '.' + name + '.index';
-        assert(fs.existsSync(path.join(this.indexDirectory, indexName)), `Index "${name}" does not exist.`);
+        if (!fs.existsSync(path.join(this.indexDirectory, indexName))) {
+            this.throwIndexNotFoundError(name);
+        }
 
         const metadata = buildMetadataForMatcher(matcher, this.hmac);
         let { index } = this.secondaryIndexes[name] = this.createIndex(indexName, Object.assign({}, this.indexOptions, { metadata }));
@@ -675,4 +695,4 @@ class ReadableStorage extends events.EventEmitter {
 }
 
 export default ReadableStorage;
-export { matches };
+export { matches, IndexNotFoundError };

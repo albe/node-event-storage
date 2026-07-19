@@ -3,7 +3,7 @@ import JoinEventStream from './JoinEventStream.js';
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
+import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM, IndexNotFoundError } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert } from './utils/util.js';
@@ -174,7 +174,9 @@ class EventStore extends events.EventEmitter {
         this.streamsDirectory = resolvePath(storageConfig.indexDirectory);
         this.storeName = storeName;
         this.consumers = new Map();
-        this.knownStreamsLoadedForWrite = storageConfig.readOnly === true;
+        // Read-only stores never enter commit(), so no stream hydration pass is required.
+        // Writable stores defer hydration until the first write path.
+        this.knownStreamsHydrated = storageConfig.readOnly === true;
 
         const storage = storageConfig.readOnly === true
             ? new ReadOnlyStorage(storeName, storageConfig)
@@ -269,7 +271,7 @@ class EventStore extends events.EventEmitter {
                 ? this.storage.openReadonlyIndex(name)
                 : this.storage.openIndex(name);
         } catch (error) {
-            if (error?.message?.includes('does not exist')) {
+            if (error instanceof IndexNotFoundError) {
                 return;
             }
             throw error;
@@ -492,14 +494,15 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Ensure known stream indexes are registered before the first write.
+     * Delay hydrating known stream indexes until a write path is entered to keep startup fast,
+     * while still guaranteeing existing stream versions/matchers are loaded before commit logic runs.
      * @private
      */
-    ensureKnownStreamsForWrite() {
-        if (this.knownStreamsLoadedForWrite) {
+    ensureKnownStreamsHydratedForWrite() {
+        if (this.knownStreamsHydrated) {
             return;
         }
-        this.knownStreamsLoadedForWrite = true;
+        this.knownStreamsHydrated = true;
         for (const indexName of this.storage.knownIndexes) {
             this.registerStream(indexName);
         }
@@ -524,7 +527,7 @@ class EventStore extends events.EventEmitter {
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
         assert(typeof streamName === 'string' && streamName !== '', 'Must specify a stream name for commit.');
         assert(typeof events !== 'undefined' && events !== null, 'No events specified for commit.');
-        this.ensureKnownStreamsForWrite();
+        this.ensureKnownStreamsHydratedForWrite();
 
         ({ events, expectedVersion, metadata, callback } = fixCommitArgumentTypes(
             events,
