@@ -125,7 +125,7 @@ class WritableIndex extends ReadableIndex {
     }
 
     beforeFileHandleClose(fd) {
-        if (fd === null || fd === undefined || !this.writeBuffer) {
+        if (!this.writeBuffer) {
             return;
         }
         this.flush();
