@@ -671,7 +671,9 @@ describe('Storage', function() {
 
         it('reuses cached readonly indexes', function () {
             const index = new Index('storage.foo.closed.index', { dataDirectory });
+            expect(index.isOpen()).to.be(true);
             index.close();
+            expect(fs.existsSync(path.join(dataDirectory, 'storage.foo.closed.index'))).to.be(true);
 
             storage = createStorage();
             storage.open();

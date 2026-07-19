@@ -136,13 +136,18 @@ describe('Partition', function() {
     it('ignores the before-close hook after an explicit close', function() {
         partition.open();
         partition.close();
-        let flushed = false;
-        partition.flush = () => {
-            flushed = true;
+        const originalFsyncSync = fs.fsyncSync;
+        let synced = false;
+        fs.fsyncSync = () => {
+            synced = true;
         };
-
-        expect(() => partition.onBeforeClose(0)).to.not.throwError();
-        expect(flushed).to.be(false);
+        try {
+            expect(partition.writeBuffer).to.be(null);
+            expect(() => partition.onBeforeClose(0)).to.not.throwError();
+            expect(synced).to.be(false);
+        } finally {
+            fs.fsyncSync = originalFsyncSync;
+        }
     });
 
     it('returns an empty backward reader before the start of the file', function() {
