@@ -174,6 +174,7 @@ class EventStore extends events.EventEmitter {
         this.streamsDirectory = resolvePath(storageConfig.indexDirectory);
         this.storeName = storeName;
         this.consumers = new Map();
+        this.knownStreamsLoadedForWrite = storageConfig.readOnly === true;
 
         const storage = storageConfig.readOnly === true
             ? new ReadOnlyStorage(storeName, storageConfig)
@@ -262,9 +263,17 @@ class EventStore extends events.EventEmitter {
             }
             return;
         }
-        const index = isClosed
-            ? this.storage.openReadonlyIndex(name)
-            : this.storage.openIndex(name);
+        let index;
+        try {
+            index = isClosed
+                ? this.storage.openReadonlyIndex(name)
+                : this.storage.openIndex(name);
+        } catch (error) {
+            if (error?.message?.includes('does not exist')) {
+                return;
+            }
+            throw error;
+        }
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index, closed: isClosed };
         this.emit('stream-available', streamName);
@@ -483,6 +492,20 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
+     * Ensure known stream indexes are registered before the first write.
+     * @private
+     */
+    ensureKnownStreamsForWrite() {
+        if (this.knownStreamsLoadedForWrite) {
+            return;
+        }
+        this.knownStreamsLoadedForWrite = true;
+        for (const indexName of this.storage.knownIndexes) {
+            this.registerStream(indexName);
+        }
+    }
+
+    /**
      * Commit a list of events for the given stream name, which is expected to be at the given version.
      * Note that the events committed may still appear in other streams too - the given stream name is only
      * relevant for optimistic concurrency checks with the given expected version.
@@ -501,6 +524,7 @@ class EventStore extends events.EventEmitter {
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
         assert(typeof streamName === 'string' && streamName !== '', 'Must specify a stream name for commit.');
         assert(typeof events !== 'undefined' && events !== null, 'No events specified for commit.');
+        this.ensureKnownStreamsForWrite();
 
         ({ events, expectedVersion, metadata, callback } = fixCommitArgumentTypes(
             events,

@@ -230,10 +230,7 @@ class ReadableStorage extends events.EventEmitter {
             if (typeof partitionName !== 'string' || partitionName === '') {
                 continue;
             }
-            const partitionPath = path.join(this.dataDirectory, partitionName);
-            if (fs.existsSync(partitionPath)) {
-                this.registerPartitionFile(partitionName);
-            }
+            this.registerPartitionFile(partitionName);
         }
 
         const indexes = Array.isArray(snapshot.indexes) ? snapshot.indexes : [];
@@ -241,10 +238,7 @@ class ReadableStorage extends events.EventEmitter {
             if (typeof indexName !== 'string' || indexName === '' || indexName === '_all') {
                 continue;
             }
-            const indexPath = path.join(this.indexDirectory, this.storageFile + '.' + indexName + '.index');
-            if (fs.existsSync(indexPath)) {
-                this.registerKnownIndex(indexName);
-            }
+            this.registerKnownIndex(indexName);
         }
         return true;
     }
@@ -263,10 +257,6 @@ class ReadableStorage extends events.EventEmitter {
             if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) {
                 return;
             }
-            // Guard against rename/delete races while a background scan is in progress.
-            if (!fs.existsSync(path.join(this.dataDirectory, file))) {
-                return;
-            }
             this.registerPartitionFile(file);
         }, (partErr) => {
             /* c8 ignore next */
@@ -282,11 +272,6 @@ class ReadableStorage extends events.EventEmitter {
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
                 if (this.initialized === null) {
-                    return;
-                }
-                const indexPath = path.join(this.indexDirectory, this.storageFile + '.' + name + '.index');
-                // Guard against rename/delete races while a background scan is in progress.
-                if (!fs.existsSync(indexPath)) {
                     return;
                 }
                 this.registerKnownIndex(name);
