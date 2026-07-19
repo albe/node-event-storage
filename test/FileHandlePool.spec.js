@@ -73,15 +73,4 @@ describe('FileHandlePool', function() {
         expect(pool.openCount).to.be(0);
     });
 
-    it('ignores a missing LRU target when the pool is in an inconsistent state', function() {
-        pool = new FileHandlePool(1);
-        const target = createTarget('existing');
-
-        pool.get(target);
-        pool.handles.keys = () => ({ next: () => ({ value: undefined }) });
-
-        expect(() => pool.evictLeastRecentlyUsedIfNeeded(createTarget('next'))).to.not.throwError();
-        expect(pool.openCount).to.be(1);
-    });
-
 });

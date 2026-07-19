@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
 import FileHandlePool from '../src/FileHandlePool.js';
-import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from '../src/Partition/ReadablePartition.js';
+import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -89,6 +89,16 @@ describe('Partition', function() {
         expect(() => partition.open()).to.throwError();
     });
 
+    it('throws on opening a partition file with invalid metadata', function() {
+        const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 4);
+        metadataBuffer.write(HEADER_MAGIC, 0, 8, 'utf8');
+        metadataBuffer.writeUInt32BE(5, 8);
+        metadataBuffer.write('{x}\n', 12, 4, 'utf8');
+        fs.writeFileSync('test/data/.part', metadataBuffer);
+
+        expect(() => partition.open()).to.throwError(/Invalid metadata/);
+    });
+
     it('can be opened and closed multiple times', function() {
         partition.open();
         expect(partition.open()).to.be(true);
@@ -121,6 +131,12 @@ describe('Partition', function() {
         expect(() => partition.close()).to.not.throwError();
 
         other.close();
+    });
+
+    it('returns an empty backward reader before the start of the file', function() {
+        partition.open();
+
+        expect(partition.prepareReadBufferBackwards(-1)).to.eql({ buffer: null, cursor: 0, length: 0 });
     });
 
     describe('write', function() {
