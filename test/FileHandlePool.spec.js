@@ -4,23 +4,37 @@ import FileHandlePool from '../src/FileHandlePool.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const dataDirectory = __dirname + 'data';
+const dataDirectory = fileURLToPath(new URL('./data', import.meta.url));
 
 describe('FileHandlePool', function() {
 
+    let pool;
+    let targets;
+
     beforeEach(function() {
+        fs.emptyDirSync(dataDirectory);
+        pool = null;
+        targets = [];
+    });
+
+    afterEach(function() {
+        if (pool) {
+            for (const target of targets) pool.evict(target, false);
+        }
         fs.emptyDirSync(dataDirectory);
     });
 
     function createTarget(name, overrides = {}) {
-        return Object.assign({
+        const target = Object.assign({
             fileName: dataDirectory + '/' + name,
             fileMode: 'a+'
         }, overrides);
+        targets.push(target);
+        return target;
     }
 
     it('updates the LRU order when touching an open target', function() {
-        const pool = new FileHandlePool(2);
+        pool = new FileHandlePool(2);
         const target1 = createTarget('one');
         const target2 = createTarget('two');
         const target3 = createTarget('three');
@@ -33,13 +47,10 @@ describe('FileHandlePool', function() {
         expect(pool.has(target1)).to.be(true);
         expect(pool.has(target2)).to.be(false);
         expect(pool.has(target3)).to.be(true);
-
-        pool.evict(target1, false);
-        pool.evict(target3, false);
     });
 
     it('returns false when evicting an unknown target and ignores missing touches', function() {
-        const pool = new FileHandlePool(1);
+        pool = new FileHandlePool(1);
         const target = createTarget('missing');
 
         expect(() => pool.touch(target)).to.not.throwError();
@@ -47,7 +58,7 @@ describe('FileHandlePool', function() {
     });
 
     it('passes evicted=false to the before-close hook on explicit close', function() {
-        const pool = new FileHandlePool(1);
+        pool = new FileHandlePool(1);
         const closeCalls = [];
         const target = createTarget('close', {
             onBeforeClose(fd, evicted) {
