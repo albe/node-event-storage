@@ -18,7 +18,7 @@ class FileHandlePool {
 
     /**
      * @param {object} target
-     * @param {function(number, boolean): void} [onBeforeClose]
+     * @param {function(number, boolean): void} [onBeforeClose] Receives `(fd, evicted)`.
      * @returns {number}
      */
     get(target, onBeforeClose) {
