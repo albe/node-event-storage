@@ -58,7 +58,7 @@ class WritablePartition extends ReadablePartition {
      * @returns {boolean}
      */
     open() {
-        if (this.fd) {
+        if (this.opened) {
             return true;
         }
 
@@ -93,16 +93,21 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     close() {
-        if (this.fd && this.writeBuffer) {
-            this.flush();
-            fs.fsyncSync(this.fd);
-
+        super.close();
+        if (this.writeBuffer) {
             this.writeBuffer = null;
             this.writeBufferCursor = 0;
             this.writeBufferDocuments = 0;
             this.writeMetaBuffer = null;
         }
-        super.close();
+    }
+
+    beforeFileHandleClose() {
+        if (!this.fd || !this.writeBuffer) {
+            return;
+        }
+        this.flush();
+        fs.fsyncSync(this.fd);
     }
 
     /**
@@ -124,16 +129,17 @@ class WritablePartition extends ReadablePartition {
      * @returns {boolean}
      */
     flush() {
-        if (!this.fd) {
+        if (!this.isOpen()) {
             return false;
         }
         if (this.writeBufferCursor === 0) {
             return false;
         }
 
-        fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferCursor);
+        const fd = this.getFileHandle();
+        fs.writeSync(fd, this.writeBuffer, 0, this.writeBufferCursor);
         if (this.syncOnFlush) {
-            fs.fsyncSync(this.fd);
+            fs.fsyncSync(fd);
         }
 
         this.writeBufferCursor = 0;
@@ -217,15 +223,16 @@ class WritablePartition extends ReadablePartition {
     writeUnbuffered(data, dataSize, sequenceNumber, callback) {
         this.flush();
         this.writeDocumentHeader(this.writeMetaBuffer, 0, dataSize, sequenceNumber);
+        const fd = this.getFileHandle();
 
         let bytesWritten = 0;
-        bytesWritten += fs.writeSync(this.fd, this.writeMetaBuffer, 0, DOCUMENT_HEADER_SIZE);
-        bytesWritten += fs.writeSync(this.fd, data);
+        bytesWritten += fs.writeSync(fd, this.writeMetaBuffer, 0, DOCUMENT_HEADER_SIZE);
+        bytesWritten += fs.writeSync(fd, data);
         const padSize = alignTo(dataSize + DOCUMENT_FOOTER_SIZE, DOCUMENT_ALIGNMENT);
-        bytesWritten += fs.writeSync(this.fd, DOCUMENT_PAD.substring(0, padSize));
+        bytesWritten += fs.writeSync(fd, DOCUMENT_PAD.substring(0, padSize));
         this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
-        bytesWritten += fs.writeSync(this.fd, this.writeMetaBuffer, 0, 4);
-        bytesWritten += fs.writeSync(this.fd, DOCUMENT_SEPARATOR);
+        bytesWritten += fs.writeSync(fd, this.writeMetaBuffer, 0, 4);
+        bytesWritten += fs.writeSync(fd, DOCUMENT_SEPARATOR);
         if (typeof callback === 'function') {
             process.nextTick(callback);
         }
@@ -270,7 +277,7 @@ class WritablePartition extends ReadablePartition {
      * @returns {number|boolean} The file position at which the data was written or false on error.
      */
     write(data, sequenceNumber, callback) {
-        assert(this.fd, 'Partition is not opened.');
+        this.getFileHandle();
         ({ sequenceNumber, callback } = this.normalizeWriteArguments(sequenceNumber, callback));
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');

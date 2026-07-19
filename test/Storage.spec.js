@@ -1298,7 +1298,7 @@ describe('Storage', function() {
             reader.on('wrote', (doc, entry) => {
                 received++;
                 expect(doc).to.eql({ foo: entry.number, type: `p-${entry.number}` });
-                expect(reader.partitions.has(entry.partition)).to.be(true);
+                expect(entry.partition in reader.partitions).to.be(true);
                 if (received === RACE_CONDITION_WRITES) {
                     clearTimeout(timer);
                     reader.close();
@@ -1492,7 +1492,7 @@ describe('Storage', function() {
             reader.open();
             reader.on('wrote', (doc, entry, position) => {
                 expect(doc).to.eql({ foo: 1, type: 'one' });
-                expect(reader.partitions.has(entry.partition)).to.be(true);
+                expect(entry.partition in reader.partitions).to.be(true);
                 reader.close();
                 done();
             });
@@ -1756,7 +1756,7 @@ describe('Storage', function() {
 
     });
 
-    describe('maxOpenPartitions (LRU partition pool)', function() {
+    describe('file handle pools', function() {
 
         it('closes the LRU partition when the limit is reached', function() {
             // 3 partitions but cap to 2 simultaneous fds
@@ -1771,9 +1771,10 @@ describe('Storage', function() {
             storage.write({ p: 2, foo: 3 });
 
             // After 3 writes the LRU pool held at most 2 simultaneous fds.
-            const openCount = Array.from(storage.partitions.values())
-                .filter(part => part.isOpen()).length;
+            const openCount = Object.values(storage.partitions)
+                .filter(part => part.hasFileHandle()).length;
             expect(openCount).to.be(2);
+            expect(storage.partitionHandlePool.openCount).to.be(2);
         });
 
         it('can still read from an evicted (closed) partition', function() {
@@ -1790,14 +1791,14 @@ describe('Storage', function() {
             // With maxOpenPartitions=1, reading p0 should reopen it (evicting p1 first)
             expect(storage.read(1)).to.eql({ p: 0, foo: 'a' });
             // After reading p0 the LRU pool should hold exactly 1 entry (p0)
-            expect(storage.partitions.openCount).to.be(1);
-            const openAfterP0 = Array.from(storage.partitions.values()).filter(p => p.isOpen());
+            expect(storage.partitionHandlePool.openCount).to.be(1);
+            const openAfterP0 = Object.values(storage.partitions).filter(p => p.hasFileHandle());
             expect(openAfterP0.length).to.be(1);
 
             expect(storage.read(2)).to.eql({ p: 1, foo: 'b' });
             // After reading p1, p1 is now MRU and only p1 should be open
-            expect(storage.partitions.openCount).to.be(1);
-            const openAfterP1 = Array.from(storage.partitions.values()).filter(p => p.isOpen());
+            expect(storage.partitionHandlePool.openCount).to.be(1);
+            const openAfterP1 = Object.values(storage.partitions).filter(p => p.hasFileHandle());
             expect(openAfterP1.length).to.be(1);
         });
 
@@ -1812,9 +1813,38 @@ describe('Storage', function() {
                 storage.write({ p: i, foo: i });
             }
 
-            const openCount = Array.from(storage.partitions.values())
-                .filter(part => part.isOpen()).length;
+            const openCount = Object.values(storage.partitions)
+                .filter(part => part.hasFileHandle()).length;
             expect(openCount).to.be(5);
+        });
+
+        it('reopens an evicted secondary index handle on demand', function() {
+            storage = createStorage({ maxOpenIndexes: 1 });
+            storage.open();
+
+            const foo = storage.ensureIndex('foo', doc => doc.type === 'foo');
+            const bar = storage.ensureIndex('bar', doc => doc.type === 'bar');
+
+            storage.write({ type: 'foo', foo: 1 });
+            storage.write({ type: 'foo', foo: 2 });
+            storage.write({ type: 'bar', foo: 3 });
+            storage.flush();
+
+            foo.close();
+            bar.close();
+            foo.open();
+            bar.open();
+
+            expect(storage.indexHandlePool.openCount).to.be(1);
+            expect(foo.isOpen()).to.be(true);
+            expect(bar.isOpen()).to.be(true);
+            expect(foo.hasFileHandle()).to.be(false);
+            expect(bar.hasFileHandle()).to.be(true);
+
+            expect(storage.read(1, foo)).to.eql({ type: 'foo', foo: 1 });
+            expect(storage.indexHandlePool.openCount).to.be(1);
+            expect(foo.hasFileHandle()).to.be(true);
+            expect(bar.hasFileHandle()).to.be(false);
         });
 
     });

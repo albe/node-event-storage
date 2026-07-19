@@ -155,7 +155,7 @@ class ReadOnlyStorage extends ReadableStorage {
     processAppendedEntries(index, indexShortName, entries, startIndex = 0) {
         for (let i = startIndex; i < entries.length; i++) {
             const entry = entries[i];
-            if (!this.partitions.has(entry.partition)) {
+            if (!(entry.partition in this.partitions)) {
                 this.scheduleScan(() => {
                     this.processAppendedEntries(index, indexShortName, entries, i);
                 });

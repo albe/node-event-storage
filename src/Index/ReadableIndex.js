@@ -42,6 +42,7 @@ class ReadableIndex extends events.EventEmitter {
      * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
+     * @param {object} [options.fileHandlePool] Shared file-handle pool used to reopen evicted handles on demand.
      */
     constructor(name = '.index', options = {}) {
         super();
@@ -66,7 +67,9 @@ class ReadableIndex extends events.EventEmitter {
         /* @type Array<Entry> */
         this.data = [];
         this.fd = null;
+        this.opened = false;
         this.fileMode = 'r';
+        this.fileHandlePool = options.fileHandlePool || null;
         this.EntryClass = options.EntryClass;
         this.dataDirectory = options.dataDirectory;
         this.fileName = resolvePath(options.dataDirectory, this.name);
@@ -109,7 +112,20 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {boolean}
      */
     isOpen() {
+        return this.opened;
+    }
+
+    hasFileHandle() {
         return !!this.fd;
+    }
+
+    getFileHandle() {
+        assert(this.opened, 'Index is not opened.');
+        if (this.fileHandlePool) {
+            return this.fileHandlePool.get(this);
+        }
+        this.fd = this.fd || fs.openSync(this.fileName, this.fileMode);
+        return this.fd;
     }
 
     /**
@@ -120,7 +136,7 @@ class ReadableIndex extends events.EventEmitter {
      * @throws {Error} If the file is corrupt or can not be read correctly.
      */
     checkFile() {
-        const stat = fs.fstatSync(this.fd);
+        const stat = fs.fstatSync(this.getFileHandle());
         if (stat.size === 0) {
             return -1;
         }
@@ -145,11 +161,17 @@ class ReadableIndex extends events.EventEmitter {
      * @throws {Error} if the file can not be opened.
      */
     open() {
-        if (this.fd) {
+        if (this.opened) {
             return false;
         }
+        this.opened = true;
 
-        this.fd = fs.openSync(this.fileName, this.fileMode);
+        try {
+            this.getFileHandle();
+        } catch (error) {
+            this.opened = false;
+            throw error;
+        }
 
         this.readUntil = -1;
 
@@ -209,8 +231,9 @@ class ReadableIndex extends events.EventEmitter {
      */
     readMetadata() {
         if (this.headerSize > 0) return this.headerSize;
+        const fd = this.getFileHandle();
         const headerBuffer = Buffer.allocUnsafe(8 + 4);
-        fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
+        fs.readSync(fd, headerBuffer, 0, 8 + 4, 0);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
 
         assert(headerMagic.substring(0, 6) === HEADER_MAGIC.substring(0, 6), 'Invalid file header.');
@@ -221,7 +244,7 @@ class ReadableIndex extends events.EventEmitter {
 
         const metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
         metadataBuffer.fill(" ");
-        fs.readSync(this.fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
+        fs.readSync(fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
         const metadata = metadataBuffer.toString('utf8').trim();
         this.verifyAndSetMetadata(metadata);
         this.headerSize = 8 + 4 + metadataSize;
@@ -236,10 +259,18 @@ class ReadableIndex extends events.EventEmitter {
         this.data = [];
         this.readUntil = -1;
         this.readBuffer.fill(0);
-        if (this.fd) {
-            fs.closeSync(this.fd);
-            this.fd = null;
+        if (this.fileHandlePool) {
+            this.fileHandlePool.evict(this, false);
+        } else if (this.fd) {
+            const fd = this.fd;
+            try {
+                this.beforeFileHandleClose?.(false);
+            } finally {
+                this.fd = null;
+                fs.closeSync(fd);
+            }
         }
+        this.opened = false;
     }
 
     /**
@@ -253,7 +284,8 @@ class ReadableIndex extends events.EventEmitter {
     read(index) {
         index = Number(index) - 1;
 
-        fs.readSync(this.fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
+        const fd = this.getFileHandle();
+        fs.readSync(fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
         if (index === this.readUntil + 1) {
             this.readUntil++;
         }
@@ -286,7 +318,8 @@ class ReadableIndex extends events.EventEmitter {
         const readBuffer = bufferSize <= this.readBuffer.byteLength
             ? this.readBuffer
             : Buffer.allocUnsafe(bufferSize);
-        let readSize = fs.readSync(this.fd, readBuffer, 0, bufferSize, this.headerSize + readFrom * this.EntryClass.size);
+        const fd = this.getFileHandle();
+        let readSize = fs.readSync(fd, readBuffer, 0, bufferSize, this.headerSize + readFrom * this.EntryClass.size);
         let index = 0;
         while (index < amount && readSize > 0) {
             this.data[index + readFrom] = this.EntryClass.fromBuffer(readBuffer, index * this.EntryClass.size);

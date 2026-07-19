@@ -8,7 +8,7 @@ import { resolvePath, scanForFiles } from '../utils/fsUtil.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import IndexMatcher from '../IndexMatcher.js';
-import PartitionPool from '../PartitionPool.js';
+import FileHandlePool from '../FileHandlePool.js';
 import ReadablePartition from "../Partition/ReadablePartition.js";
 
 const DEFAULT_READ_BUFFER_SIZE = 4 * 1024;
@@ -27,6 +27,7 @@ const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
  * Partitions beyond this limit are evicted using LRU order. 0 disables the limit.
  */
 const DEFAULT_MAX_OPEN_PARTITIONS = 1024;
+const DEFAULT_MAX_OPEN_INDEXES = 0;
 
 /**
  * @typedef {object|function(object):boolean} Matcher
@@ -58,6 +59,9 @@ class ReadableStorage extends events.EventEmitter {
      * @param {number} [config.maxOpenPartitions] Maximum number of partition file descriptors kept open at one time.
      *   When the limit is reached the least-recently-used partition is closed to make room. 0 disables the limit.
      *   Default: 1024.
+     * @param {number} [config.maxOpenIndexes] Maximum number of index file descriptors kept open at one time.
+     *   When the limit is reached the least-recently-used index handle is closed to make room. 0 disables the limit.
+     *   Default: 0.
      */
     constructor(storageName = 'storage', config = {}) {
         super();
@@ -72,7 +76,8 @@ class ReadableStorage extends events.EventEmitter {
             hmacSecret: '',
             metadata: {},
             matcherProperties: DEFAULT_MATCHER_PROPERTIES,
-            maxOpenPartitions: DEFAULT_MAX_OPEN_PARTITIONS
+            maxOpenPartitions: DEFAULT_MAX_OPEN_PARTITIONS,
+            maxOpenIndexes: DEFAULT_MAX_OPEN_INDEXES
         };
         config = Object.assign(defaults, config);
         this.serializer = config.serializer;
@@ -83,7 +88,9 @@ class ReadableStorage extends events.EventEmitter {
 
         const partitionDefaults = { readBufferSize: DEFAULT_READ_BUFFER_SIZE };
         this.partitionConfig = Object.assign(partitionDefaults, config);
-        this.partitions = new PartitionPool(config.maxOpenPartitions);
+        this.partitionHandlePool = new FileHandlePool(config.maxOpenPartitions);
+        this.indexHandlePool = new FileHandlePool(config.maxOpenIndexes);
+        this.partitions = Object.create(null);
 
         // initialized: null = not started (or scan cancelled), false = in progress, true = done
         this.initialized = null;
@@ -99,7 +106,7 @@ class ReadableStorage extends events.EventEmitter {
      */
     createIndex(name, options = {}) {
         /** @type ReadableIndex */
-        const index = new ReadOnlyIndex(name, options);
+        const index = new ReadOnlyIndex(name, { ...options, fileHandlePool: this.indexHandlePool });
         return { index };
     }
 
@@ -110,7 +117,7 @@ class ReadableStorage extends events.EventEmitter {
      * @returns {ReadablePartition}
      */
     createPartition(name, options = {}) {
-        return new ReadOnlyPartition(name, options);
+        return new ReadOnlyPartition(name, { ...options, fileHandlePool: this.partitionHandlePool });
     }
 
     /**
@@ -154,9 +161,9 @@ class ReadableStorage extends events.EventEmitter {
      */
     registerPartitionFile(filename) {
         const partitionId = ReadablePartition.idFor(filename);
-        if (!this.partitions.has(partitionId)) {
+        if (!(partitionId in this.partitions)) {
             const partition = this.createPartition(filename, this.partitionConfig);
-            this.partitions.add(partition.id, partition);
+            this.partitions[partition.id] = partition;
             this.emit('partition-created', partition.id);
         }
         return partitionId;
@@ -268,8 +275,10 @@ class ReadableStorage extends events.EventEmitter {
      * @throws {Error} If no such partition exists.
      */
     getPartition(partitionIdentifier) {
-        assert(this.partitions.has(partitionIdentifier), `Partition #${partitionIdentifier} does not exist.`);
-        return this.partitions.open(partitionIdentifier);
+        assert(partitionIdentifier in this.partitions, `Partition #${partitionIdentifier} does not exist.`);
+        const partition = this.partitions[partitionIdentifier];
+        partition.open();
+        return partition;
     }
 
     /**
@@ -559,7 +568,9 @@ class ReadableStorage extends events.EventEmitter {
             return;
         }
 
-        this.partitions.forEach(iterationHandler);
+        for (const partitionId of Object.keys(this.partitions)) {
+            iterationHandler(this.partitions[partitionId]);
+        }
     }
 
 }
