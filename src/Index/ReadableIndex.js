@@ -120,7 +120,7 @@ class ReadableIndex extends events.EventEmitter {
     }
 
     getFileHandle() {
-        assert(this.opened, 'Index is not opened.');
+        assert(this.opened, 'Index is not open.');
         if (this.fileHandlePool) {
             return this.fileHandlePool.get(this);
         }
@@ -260,6 +260,7 @@ class ReadableIndex extends events.EventEmitter {
         this.readUntil = -1;
         this.readBuffer.fill(0);
         if (this.fileHandlePool) {
+            // `false` marks an explicit close; eviction keeps the logical open state intact.
             this.fileHandlePool.evict(this, false);
         } else if (this.fd) {
             const fd = this.fd;

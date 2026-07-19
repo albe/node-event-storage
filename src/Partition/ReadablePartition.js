@@ -80,7 +80,7 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     getFileHandle() {
-        assert(this.opened, 'Partition is not opened.');
+        assert(this.opened, 'Partition is not open.');
         if (this.fileHandlePool) {
             return this.fileHandlePool.get(this);
         }
@@ -196,6 +196,7 @@ class ReadablePartition extends events.EventEmitter {
      */
     close() {
         if (this.fileHandlePool) {
+            // `false` marks an explicit close; eviction keeps the logical open state intact.
             this.fileHandlePool.evict(this, false);
         } else if (this.fd) {
             const fd = this.fd;
