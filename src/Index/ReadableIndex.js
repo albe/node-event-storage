@@ -260,7 +260,7 @@ class ReadableIndex extends events.EventEmitter {
         this.readUntil = -1;
         this.readBuffer.fill(0);
         if (this.fileHandlePool) {
-            // `false` marks an explicit close; eviction keeps the logical open state intact.
+            // `false` indicates an explicit close (not an eviction), so logical open state is cleared afterwards.
             this.fileHandlePool.evict(this, false);
         } else if (this.fd) {
             const fd = this.fd;

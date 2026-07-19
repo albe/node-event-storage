@@ -26,7 +26,7 @@ class FileHandlePool {
             return target.fd;
         }
 
-        this.evictLeastRecentlyUsed(target);
+        this.evictLeastRecentlyUsedIfNeeded(target);
         const fd = fs.openSync(target.fileName, target.fileMode);
         target.fd = fd;
         this.handles.set(target, fd);
@@ -74,7 +74,7 @@ class FileHandlePool {
         this.handles.set(target, fd);
     }
 
-    evictLeastRecentlyUsed(target) {
+    evictLeastRecentlyUsedIfNeeded(target) {
         if (this.maxOpen <= 0) {
             return;
         }
