@@ -133,6 +133,13 @@ describe('Partition', function() {
         other.close();
     });
 
+    it('ignores the before-close hook after an explicit close', function() {
+        partition.open();
+        partition.close();
+
+        expect(() => partition.onBeforeClose(0)).to.not.throwError();
+    });
+
     it('returns an empty backward reader before the start of the file', function() {
         partition.open();
 

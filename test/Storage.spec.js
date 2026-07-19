@@ -669,6 +669,19 @@ describe('Storage', function() {
             expect(index.length).to.be(1);
         });
 
+        it('reuses cached readonly indexes', function () {
+            const index = new Index('storage.foo.closed.index', { dataDirectory });
+            index.close();
+
+            storage = createStorage();
+            storage.open();
+
+            const first = storage.openReadonlyIndex('foo.closed');
+            const second = storage.openReadonlyIndex('foo.closed');
+
+            expect(first).to.be(second);
+        });
+
     });
 
     describe('truncate', function() {
