@@ -261,6 +261,7 @@ class ReadableStorage extends events.EventEmitter {
         for (let index of Object.values(this.readonlyIndexes)) {
             index.close();
         }
+        this.readonlyIndexes = {};
         this.forEachPartition(partition => partition.close());
         this.emit('closed');
     }
