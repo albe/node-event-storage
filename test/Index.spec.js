@@ -60,11 +60,19 @@ describe('Index', function() {
     it('flushes buffered entries before a pool eviction', function() {
         const fileHandlePool = new FileHandlePool(1);
         index = createIndex('evicted.index', { fileHandlePool, flushDelay: 0 });
+        const initialFd = index.getFileHandle();
+        const closedFds = [];
+        const originalBeforeClose = index.beforeFileHandleClose;
+        index.beforeFileHandleClose = (fd) => {
+            closedFds.push(fd);
+            return originalBeforeClose.call(index, fd);
+        };
         index.add(new IndexEntry(1, 11));
 
         const other = createIndex('other.index', { fileHandlePool, flushDelay: 0 });
         other.add(new IndexEntry(1, 22));
 
+        expect(closedFds).to.eql([initialFd]);
         expect(index.hasFileHandle()).to.be(false);
         expect(index.flush()).to.be(false);
         expect(index.hasFileHandle()).to.be(false);
@@ -579,7 +587,7 @@ describe('Index', function() {
 
             index.add(new IndexEntry(6, 6));
             index.flush();
-            fs.fdatasync(index.fd);
+            fs.fdatasync(index.getFileHandle());
         });
 
         it('updates when writer truncates', function(done){
@@ -594,7 +602,7 @@ describe('Index', function() {
             });
 
             index.truncate(0);
-            fs.fdatasync(index.fd);
+            fs.fdatasync(index.getFileHandle());
         });
 
         it('closes when file renamed', function(done){
@@ -619,7 +627,7 @@ describe('Index', function() {
 
             index.truncate(0);
             reader.close();
-            fs.fdatasync(index.fd, () => done());
+            fs.fdatasync(index.getFileHandle(), () => done());
         });
     });
 });

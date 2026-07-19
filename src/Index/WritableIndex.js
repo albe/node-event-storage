@@ -121,15 +121,15 @@ class WritableIndex extends ReadableIndex {
     }
 
     getFileHandle() {
-        return this.fileHandlePool.get(this, (evicted) => this.beforeFileHandleClose(evicted));
+        return this.fileHandlePool.get(this, (fd) => this.beforeFileHandleClose(fd));
     }
 
-    beforeFileHandleClose() {
-        if (!this.fd) {
+    beforeFileHandleClose(fd) {
+        if (!this.writeBuffer) {
             return;
         }
         this.flush();
-        fs.fdatasyncSync(this.fd);
+        fs.fdatasyncSync(fd);
     }
 
     /**

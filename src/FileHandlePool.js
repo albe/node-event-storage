@@ -3,8 +3,8 @@ import fs from 'fs';
 /**
  * LRU pool for file descriptors shared across multiple file-backed objects.
  *
- * Targets are expected to expose `fileName`, `fileMode`, `fd` and may register
- * an `onBeforeClose` callback through `get()`.
+ * Targets are expected to expose `fileName` and `fileMode` and may register an
+ * `onBeforeClose` callback through `get()`.
  */
 class FileHandlePool {
 
@@ -18,19 +18,19 @@ class FileHandlePool {
 
     /**
      * @param {object} target
-     * @param {function(boolean): void} [onBeforeClose]
+     * @param {function(number, boolean): void} [onBeforeClose]
      * @returns {number}
      */
     get(target, onBeforeClose) {
-        if (target.fd) {
+        const handle = this.handles.get(target);
+        if (handle) {
             this.registerBeforeClose(target, onBeforeClose);
             this.touch(target);
-            return target.fd;
+            return handle.fd;
         }
 
         this.evictLeastRecentlyUsedIfNeeded(target);
         const fd = fs.openSync(target.fileName, target.fileMode);
-        target.fd = fd;
         this.handles.set(target, { fd, onBeforeClose });
         return fd;
     }
@@ -58,16 +58,14 @@ class FileHandlePool {
      */
     evict(target, evicted = true) {
         const handle = this.handles.get(target);
-        const fd = handle?.fd ?? target.fd;
-        this.handles.delete(target);
-        if (!fd) {
+        if (!handle) {
             return false;
         }
         try {
-            handle?.onBeforeClose?.(evicted);
+            handle.onBeforeClose?.(handle.fd, evicted);
         } finally {
-            target.fd = null;
-            fs.closeSync(fd);
+            this.handles.delete(target);
+            fs.closeSync(handle.fd);
         }
         return true;
     }

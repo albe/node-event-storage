@@ -67,7 +67,6 @@ class ReadableIndex extends events.EventEmitter {
     initialize(options) {
         /* @type Array<Entry> */
         this.data = [];
-        this.fd = null;
         this.opened = false;
         this.fileMode = 'r';
         this.fileHandlePool = options.fileHandlePool || new FileHandlePool();
@@ -117,11 +116,10 @@ class ReadableIndex extends events.EventEmitter {
     }
 
     hasFileHandle() {
-        return !!this.fd;
+        return this.fileHandlePool.has(this);
     }
 
     getFileHandle() {
-        assert(this.opened, 'Index is not open.');
         return this.fileHandlePool.get(this);
     }
 
@@ -161,14 +159,7 @@ class ReadableIndex extends events.EventEmitter {
         if (this.opened) {
             return false;
         }
-        this.opened = true;
-
-        try {
-            this.getFileHandle();
-        } catch (error) {
-            this.opened = false;
-            throw error;
-        }
+        this.opened = this.getFileHandle() !== null;
 
         this.readUntil = -1;
 

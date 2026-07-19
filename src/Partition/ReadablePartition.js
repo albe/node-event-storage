@@ -61,7 +61,6 @@ class ReadablePartition extends events.EventEmitter {
         this.fileMode = 'r';
         this.fileHandlePool = config.fileHandlePool || new FileHandlePool();
         this.headerSize = 0;
-        this.fd = null;
         this.opened = false;
 
         this.readBufferSize = config.readBufferSize >>> 0;  // jshint ignore:line
@@ -77,7 +76,7 @@ class ReadablePartition extends events.EventEmitter {
     }
 
     hasFileHandle() {
-        return !!this.fd;
+        return this.fileHandlePool.has(this);
     }
 
     getFileHandle() {

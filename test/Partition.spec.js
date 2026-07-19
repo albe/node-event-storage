@@ -102,10 +102,18 @@ describe('Partition', function() {
         const other = new Partition('.p1', { dataDirectory, readBufferSize: 4 * 1024, fileHandlePool });
 
         partition.open();
+        const initialFd = partition.getFileHandle();
+        const closedFds = [];
+        const originalBeforeClose = partition.beforeFileHandleClose;
+        partition.beforeFileHandleClose = (fd) => {
+            closedFds.push(fd);
+            return originalBeforeClose.call(partition, fd);
+        };
         partition.write('foo', 1);
         other.open();
         other.write('bar', 2);
 
+        expect(closedFds).to.eql([initialFd]);
         expect(partition.hasFileHandle()).to.be(false);
         expect(partition.flush()).to.be(false);
         expect(partition.hasFileHandle()).to.be(false);
@@ -812,7 +820,7 @@ describe('Partition', function() {
             partition.write('foo');
             expect(partition.size).to.be.greaterThan(reader.size);
             partition.flush();
-            fs.fdatasync(partition.fd);
+            fs.fdatasync(partition.getFileHandle());
         });
 
         it('updates reader when writer truncates', function(done){
@@ -830,7 +838,7 @@ describe('Partition', function() {
             });
 
             partition.truncate(0);
-            fs.fdatasync(partition.fd);
+            fs.fdatasync(partition.getFileHandle());
         });
 
         it('recognizes file renames and closes', function(done){

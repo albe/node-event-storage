@@ -103,15 +103,15 @@ class WritablePartition extends ReadablePartition {
     }
 
     getFileHandle() {
-        return this.fileHandlePool.get(this, (evicted) => this.beforeFileHandleClose(evicted));
+        return this.fileHandlePool.get(this, (fd) => this.beforeFileHandleClose(fd));
     }
 
-    beforeFileHandleClose() {
-        if (!this.fd || !this.writeBuffer) {
+    beforeFileHandleClose(fd) {
+        if (!this.writeBuffer) {
             return;
         }
         this.flush();
-        fs.fsyncSync(this.fd);
+        fs.fsyncSync(fd);
     }
 
     /**
@@ -430,9 +430,10 @@ class WritablePartition extends ReadablePartition {
     branchOff(branchName, position) {
         const deletedBranch = new WritablePartition(this.name + '-' + branchName + '-' + position + '.branch', { dataDirectory: this.dataDirectory, metadata: { epoch: this.metadata.epoch } });
         deletedBranch.open();
+        const branchFd = deletedBranch.getFileHandle();
         do {
             const reader = this.prepareReadBuffer(position);
-            fs.writeSync(deletedBranch.fd, reader.buffer, reader.cursor, reader.length);
+            fs.writeSync(branchFd, reader.buffer, reader.cursor, reader.length);
             position += reader.length;
         } while (position < this.size);
         deletedBranch.close();
