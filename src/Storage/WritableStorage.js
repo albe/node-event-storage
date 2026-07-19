@@ -85,8 +85,8 @@ class WritableStorage extends ReadableStorage {
         }
 
         const finishOpen = () => {
-            this.scheduleStartupStatePersist();
             callback?.();
+            this.scheduleStartupStatePersist();
         };
         const onOpen = needsRepair
             ? () => { this.checkTornWrites(); finishOpen(); }
@@ -617,6 +617,7 @@ class WritableStorage extends ReadableStorage {
         try {
             fs.writeFileSync(this.startupStateFile, JSON.stringify(this.buildStartupStateSnapshot()));
         } catch (e) {
+            // Startup snapshots are a best-effort performance optimization.
         }
     }
 

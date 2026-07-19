@@ -260,8 +260,13 @@ class ReadableStorage extends events.EventEmitter {
             if (this.initialized === null) {
                 return;
             }
-            if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) return;
-            if (!fs.existsSync(path.join(this.dataDirectory, file))) return;
+            if (file.endsWith('.index') || file.endsWith('.branch') || file.endsWith('.lock')) {
+                return;
+            }
+            // Guard against rename/delete races while a background scan is in progress.
+            if (!fs.existsSync(path.join(this.dataDirectory, file))) {
+                return;
+            }
             this.registerPartitionFile(file);
         }, (partErr) => {
             /* c8 ignore next */
@@ -280,7 +285,10 @@ class ReadableStorage extends events.EventEmitter {
                     return;
                 }
                 const indexPath = path.join(this.indexDirectory, this.storageFile + '.' + name + '.index');
-                if (!fs.existsSync(indexPath)) return;
+                // Guard against rename/delete races while a background scan is in progress.
+                if (!fs.existsSync(indexPath)) {
+                    return;
+                }
                 this.registerKnownIndex(name);
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
