@@ -102,11 +102,12 @@ class WritablePartition extends ReadablePartition {
         }
     }
 
-    getFileHandle() {
-        return this.fileHandlePool.get(this, (fd) => this.beforeFileHandleClose(fd));
-    }
-
-    beforeFileHandleClose(fd) {
+    /**
+     * Flush pending buffered writes before the pool closes the descriptor.
+     *
+     * @param {number} fd
+     */
+    onBeforeClose(fd) {
         if (!this.writeBuffer) {
             return;
         }

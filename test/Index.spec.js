@@ -62,8 +62,8 @@ describe('Index', function() {
         index = createIndex('evicted.index', { fileHandlePool, flushDelay: 0 });
         const initialFd = index.getFileHandle();
         const closedFds = [];
-        const originalBeforeClose = index.beforeFileHandleClose;
-        index.beforeFileHandleClose = (fd) => {
+        const originalBeforeClose = index.onBeforeClose;
+        index.onBeforeClose = (fd) => {
             closedFds.push(fd);
             return originalBeforeClose.call(index, fd);
         };

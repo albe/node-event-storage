@@ -113,18 +113,11 @@ class WritableIndex extends ReadableIndex {
     }
 
     /**
-     * Close the index and release the file handle.
-     * @api
+     * Flush pending buffered writes before the pool closes the descriptor.
+     *
+     * @param {number} fd
      */
-    close() {
-        super.close();
-    }
-
-    getFileHandle() {
-        return this.fileHandlePool.get(this, (fd) => this.beforeFileHandleClose(fd));
-    }
-
-    beforeFileHandleClose(fd) {
+    onBeforeClose(fd) {
         if (!this.writeBuffer) {
             return;
         }

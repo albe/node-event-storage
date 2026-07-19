@@ -104,8 +104,8 @@ describe('Partition', function() {
         partition.open();
         const initialFd = partition.getFileHandle();
         const closedFds = [];
-        const originalBeforeClose = partition.beforeFileHandleClose;
-        partition.beforeFileHandleClose = (fd) => {
+        const originalBeforeClose = partition.onBeforeClose;
+        partition.onBeforeClose = (fd) => {
             closedFds.push(fd);
             return originalBeforeClose.call(partition, fd);
         };

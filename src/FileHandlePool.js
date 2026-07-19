@@ -3,8 +3,8 @@ import fs from 'fs';
 /**
  * LRU pool for file descriptors shared across multiple file-backed objects.
  *
- * Targets are expected to expose `fileName` and `fileMode` and may register an
- * `onBeforeClose` callback through `get()`.
+ * Targets are expected to expose `fileName` and `fileMode` and may implement
+ * `onBeforeClose(fd, evicted)` to flush state before their descriptor closes.
  */
 class FileHandlePool {
 
@@ -18,20 +18,18 @@ class FileHandlePool {
 
     /**
      * @param {object} target
-     * @param {function(number, boolean): void} [onBeforeClose] Receives `(fd, evicted)`.
      * @returns {number}
      */
-    get(target, onBeforeClose) {
+    get(target) {
         const handle = this.handles.get(target);
         if (handle) {
-            this.registerBeforeClose(target, onBeforeClose);
             this.touch(target);
             return handle.fd;
         }
 
         this.evictLeastRecentlyUsedIfNeeded(target);
         const fd = fs.openSync(target.fileName, target.fileMode);
-        this.handles.set(target, { fd, onBeforeClose });
+        this.handles.set(target, { fd });
         return fd;
     }
 
@@ -41,14 +39,6 @@ class FileHandlePool {
      */
     has(target) {
         return this.handles.has(target);
-    }
-
-    registerBeforeClose(target, onBeforeClose) {
-        const handle = this.handles.get(target);
-        if (!handle) {
-            return;
-        }
-        handle.onBeforeClose = typeof onBeforeClose === 'function' ? onBeforeClose : null;
     }
 
     /**
@@ -62,7 +52,7 @@ class FileHandlePool {
             return false;
         }
         try {
-            handle.onBeforeClose?.(handle.fd, evicted);
+            target.onBeforeClose?.(handle.fd, evicted);
         } finally {
             this.handles.delete(target);
             fs.closeSync(handle.fd);
@@ -83,6 +73,11 @@ class FileHandlePool {
         this.handles.set(target, handle);
     }
 
+    /**
+     * Evict the least-recently-used descriptor before opening another one.
+     *
+     * @param {object} target
+     */
     evictLeastRecentlyUsedIfNeeded(target) {
         if (this.maxOpen <= 0) {
             return;
@@ -98,6 +93,9 @@ class FileHandlePool {
         this.evict(lruTarget);
     }
 
+    /**
+     * @returns {number}
+     */
     get openCount() {
         return this.handles.size;
     }

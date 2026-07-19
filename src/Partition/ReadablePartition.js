@@ -75,12 +75,17 @@ class ReadablePartition extends events.EventEmitter {
         return this.opened;
     }
 
+    /**
+     * @returns {boolean}
+     */
     hasFileHandle() {
         return this.fileHandlePool.has(this);
     }
 
+    /**
+     * @returns {number}
+     */
     getFileHandle() {
-        assert(this.opened, 'Partition is not open.');
         return this.fileHandlePool.get(this);
     }
 
@@ -94,29 +99,21 @@ class ReadablePartition extends events.EventEmitter {
         if (this.opened) {
             return true;
         }
-        this.opened = true;
+        this.opened = this.getFileHandle() !== null;
+        // allocUnsafeSlow because we don't need buffer pooling for these relatively long-lived buffers
+        this.readBuffer = Buffer.allocUnsafeSlow(this.readBufferSize);
+        // Where inside the file the read buffer starts
+        this.readBufferPos = -1;
+        this.readBufferLength = 0;
 
-        try {
-            this.getFileHandle();
-        } catch (error) {
-            this.opened = false;
-            throw error;
+        this.headerSize = 0;
+        this.size = this.readFileSize();
+        if (this.size <= 0) {
+            this.close();
+            return false;
         }
 
         try {
-            // allocUnsafeSlow because we don't need buffer pooling for these relatively long-lived buffers
-            this.readBuffer = Buffer.allocUnsafeSlow(this.readBufferSize);
-            // Where inside the file the read buffer starts
-            this.readBufferPos = -1;
-            this.readBufferLength = 0;
-
-            this.headerSize = 0;
-            this.size = this.readFileSize();
-            if (this.size <= 0) {
-                this.close();
-                return false;
-            }
-
             this.size -= this.readMetadata();
             return true;
         } catch (error) {
@@ -179,7 +176,7 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {number} The file size not including the file header.
      */
     readFileSize() {
-        const stat = fs.statSync(this.fileName);
+        const stat = fs.fstatSync(this.getFileHandle());
         this.crtime = stat.birthtimeMs;
         return stat.size - this.headerSize;
     }

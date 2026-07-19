@@ -115,10 +115,16 @@ class ReadableIndex extends events.EventEmitter {
         return this.opened;
     }
 
+    /**
+     * @returns {boolean}
+     */
     hasFileHandle() {
         return this.fileHandlePool.has(this);
     }
 
+    /**
+     * @returns {number}
+     */
     getFileHandle() {
         return this.fileHandlePool.get(this);
     }
