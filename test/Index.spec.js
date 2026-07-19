@@ -1,6 +1,7 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
+import FileHandlePool from '../src/FileHandlePool.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
 import { fileURLToPath } from 'url';
 
@@ -54,6 +55,24 @@ describe('Index', function() {
         index = createIndex();
         index.open();
         expect(index.open()).to.be(false);
+    });
+
+    it('flushes buffered entries before a pool eviction', function() {
+        const fileHandlePool = new FileHandlePool(1);
+        index = createIndex('evicted.index', { fileHandlePool, flushDelay: 0 });
+        index.add(new IndexEntry(1, 11));
+
+        const other = createIndex('other.index', { fileHandlePool, flushDelay: 0 });
+        other.add(new IndexEntry(1, 22));
+
+        expect(index.hasFileHandle()).to.be(false);
+        expect(index.flush()).to.be(false);
+        expect(index.hasFileHandle()).to.be(false);
+
+        const reader = createReader(index.name);
+        expect(reader.get(1).position).to.be(11);
+
+        other.close();
     });
 
     it('defaults name to ".index"', function() {

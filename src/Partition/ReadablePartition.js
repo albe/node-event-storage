@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
+import FileHandlePool from '../FileHandlePool.js';
 import { assert, alignTo, hash, binarySearch } from '../utils/util.js';
 import { resolvePath } from "../utils/fsUtil.js";
 
@@ -58,7 +59,7 @@ class ReadablePartition extends events.EventEmitter {
         this.id = ReadablePartition.idFor(name);
         this.fileName = path.resolve(this.dataDirectory, this.name);
         this.fileMode = 'r';
-        this.fileHandlePool = config.fileHandlePool || null;
+        this.fileHandlePool = config.fileHandlePool || new FileHandlePool();
         this.headerSize = 0;
         this.fd = null;
         this.opened = false;
@@ -81,11 +82,7 @@ class ReadablePartition extends events.EventEmitter {
 
     getFileHandle() {
         assert(this.opened, 'Partition is not open.');
-        if (this.fileHandlePool) {
-            return this.fileHandlePool.get(this);
-        }
-        this.fd = this.fd || fs.openSync(this.fileName, this.fileMode);
-        return this.fd;
+        return this.fileHandlePool.get(this);
     }
 
     /**
@@ -195,18 +192,7 @@ class ReadablePartition extends events.EventEmitter {
      * @returns void
      */
     close() {
-        if (this.fileHandlePool) {
-            // `false` indicates an explicit close (not an eviction), so logical open state is cleared afterwards.
-            this.fileHandlePool.evict(this, false);
-        } else if (this.fd) {
-            const fd = this.fd;
-            try {
-                this.beforeFileHandleClose?.(false);
-            } finally {
-                this.fd = null;
-                fs.closeSync(fd);
-            }
-        }
+        this.fileHandlePool.evict(this, false);
         this.opened = false;
         if (this.readBuffer) {
             this.readBuffer = null;

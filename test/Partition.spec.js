@@ -1,6 +1,7 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
+import FileHandlePool from '../src/FileHandlePool.js';
 import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
@@ -93,6 +94,24 @@ describe('Partition', function() {
         expect(partition.open()).to.be(true);
         partition.close();
         partition.close();
+    });
+
+    it('flushes buffered writes before a pool eviction', function() {
+        const fileHandlePool = new FileHandlePool(1);
+        partition = new Partition('.p0', { dataDirectory, readBufferSize: 4 * 1024, fileHandlePool });
+        const other = new Partition('.p1', { dataDirectory, readBufferSize: 4 * 1024, fileHandlePool });
+
+        partition.open();
+        partition.write('foo', 1);
+        other.open();
+        other.write('bar', 2);
+
+        expect(partition.hasFileHandle()).to.be(false);
+        expect(partition.flush()).to.be(false);
+        expect(partition.hasFileHandle()).to.be(false);
+        expect(partition.readFrom(0).toString('utf8')).to.be('foo');
+
+        other.close();
     });
 
     describe('write', function() {

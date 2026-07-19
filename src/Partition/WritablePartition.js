@@ -102,6 +102,10 @@ class WritablePartition extends ReadablePartition {
         }
     }
 
+    getFileHandle() {
+        return this.fileHandlePool.get(this, (evicted) => this.beforeFileHandleClose(evicted));
+    }
+
     beforeFileHandleClose() {
         if (!this.fd || !this.writeBuffer) {
             return;

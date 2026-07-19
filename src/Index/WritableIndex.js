@@ -120,6 +120,10 @@ class WritableIndex extends ReadableIndex {
         super.close();
     }
 
+    getFileHandle() {
+        return this.fileHandlePool.get(this, (evicted) => this.beforeFileHandleClose(evicted));
+    }
+
     beforeFileHandleClose() {
         if (!this.fd) {
             return;

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import events from 'events';
 import Entry, { assertValidEntryClass } from '../IndexEntry.js';
+import FileHandlePool from '../FileHandlePool.js';
 import { assert, wrapAndCheck, binarySearch } from '../utils/util.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import { resolvePath } from "../utils/fsUtil.js";
@@ -69,7 +70,7 @@ class ReadableIndex extends events.EventEmitter {
         this.fd = null;
         this.opened = false;
         this.fileMode = 'r';
-        this.fileHandlePool = options.fileHandlePool || null;
+        this.fileHandlePool = options.fileHandlePool || new FileHandlePool();
         this.EntryClass = options.EntryClass;
         this.dataDirectory = options.dataDirectory;
         this.fileName = resolvePath(options.dataDirectory, this.name);
@@ -121,11 +122,7 @@ class ReadableIndex extends events.EventEmitter {
 
     getFileHandle() {
         assert(this.opened, 'Index is not open.');
-        if (this.fileHandlePool) {
-            return this.fileHandlePool.get(this);
-        }
-        this.fd = this.fd || fs.openSync(this.fileName, this.fileMode);
-        return this.fd;
+        return this.fileHandlePool.get(this);
     }
 
     /**
@@ -259,18 +256,7 @@ class ReadableIndex extends events.EventEmitter {
         this.data = [];
         this.readUntil = -1;
         this.readBuffer.fill(0);
-        if (this.fileHandlePool) {
-            // `false` indicates an explicit close (not an eviction), so logical open state is cleared afterwards.
-            this.fileHandlePool.evict(this, false);
-        } else if (this.fd) {
-            const fd = this.fd;
-            try {
-                this.beforeFileHandleClose?.(false);
-            } finally {
-                this.fd = null;
-                fs.closeSync(fd);
-            }
-        }
+        this.fileHandlePool.evict(this, false);
         this.opened = false;
     }
 

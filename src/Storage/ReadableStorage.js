@@ -27,7 +27,7 @@ const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
  * Partitions beyond this limit are evicted using LRU order. 0 disables the limit.
  */
 const DEFAULT_MAX_OPEN_PARTITIONS = 1024;
-const DEFAULT_MAX_OPEN_INDEXES = 0;
+const DEFAULT_MAX_OPEN_INDEXES = 1024;
 
 /**
  * @typedef {object|function(object):boolean} Matcher
@@ -61,7 +61,7 @@ class ReadableStorage extends events.EventEmitter {
      *   Default: 1024.
      * @param {number} [config.maxOpenIndexes] Maximum number of index file descriptors kept open at one time.
      *   When the limit is reached the least-recently-used index handle is closed to make room. 0 disables the limit.
-     *   Default: 0.
+     *   Default: 1024.
      */
     constructor(storageName = 'storage', config = {}) {
         super();

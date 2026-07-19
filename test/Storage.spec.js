@@ -1758,6 +1758,11 @@ describe('Storage', function() {
 
     describe('file handle pools', function() {
 
+        it('defaults index handle limit to 1024', function() {
+            storage = createStorage();
+            expect(storage.indexHandlePool.maxOpen).to.be(1024);
+        });
+
         it('closes the LRU partition when the limit is reached', function() {
             // 3 partitions but cap to 2 simultaneous fds
             storage = createStorage({

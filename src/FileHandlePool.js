@@ -3,8 +3,8 @@ import fs from 'fs';
 /**
  * LRU pool for file descriptors shared across multiple file-backed objects.
  *
- * Targets are expected to expose `fileName`, `fileMode`, `fd` and may optionally
- * implement `beforeFileHandleClose(evicted)`.
+ * Targets are expected to expose `fileName`, `fileMode`, `fd` and may register
+ * an `onBeforeClose` callback through `get()`.
  */
 class FileHandlePool {
 
@@ -18,10 +18,12 @@ class FileHandlePool {
 
     /**
      * @param {object} target
+     * @param {function(boolean): void} [onBeforeClose]
      * @returns {number}
      */
-    get(target) {
+    get(target, onBeforeClose) {
         if (target.fd) {
+            this.registerBeforeClose(target, onBeforeClose);
             this.touch(target);
             return target.fd;
         }
@@ -29,7 +31,7 @@ class FileHandlePool {
         this.evictLeastRecentlyUsedIfNeeded(target);
         const fd = fs.openSync(target.fileName, target.fileMode);
         target.fd = fd;
-        this.handles.set(target, fd);
+        this.handles.set(target, { fd, onBeforeClose });
         return fd;
     }
 
@@ -41,19 +43,30 @@ class FileHandlePool {
         return this.handles.has(target);
     }
 
+    registerBeforeClose(target, onBeforeClose) {
+        if (typeof onBeforeClose !== 'function') {
+            return;
+        }
+        const handle = this.handles.get(target);
+        if (handle) {
+            handle.onBeforeClose = onBeforeClose;
+        }
+    }
+
     /**
      * @param {object} target
      * @param {boolean} [evicted=true]
      * @returns {boolean}
      */
     evict(target, evicted = true) {
-        const fd = target.fd;
+        const handle = this.handles.get(target);
+        const fd = handle?.fd ?? target.fd;
         this.handles.delete(target);
         if (!fd) {
             return false;
         }
         try {
-            target.beforeFileHandleClose?.(evicted);
+            handle?.onBeforeClose?.(evicted);
         } finally {
             target.fd = null;
             fs.closeSync(fd);
@@ -66,12 +79,12 @@ class FileHandlePool {
      * @returns {void}
      */
     touch(target) {
-        const fd = this.handles.get(target);
-        if (fd === undefined) {
+        const handle = this.handles.get(target);
+        if (!handle) {
             return;
         }
         this.handles.delete(target);
-        this.handles.set(target, fd);
+        this.handles.set(target, handle);
     }
 
     evictLeastRecentlyUsedIfNeeded(target) {
