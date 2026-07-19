@@ -1,6 +1,7 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
+import FileHandlePool from '../src/FileHandlePool.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
 import { fileURLToPath } from 'url';
 
@@ -54,6 +55,33 @@ describe('Index', function() {
         index = createIndex();
         index.open();
         expect(index.open()).to.be(false);
+    });
+
+    it('flushes buffered entries before a pool eviction', function() {
+        const fileHandlePool = new FileHandlePool(1);
+        index = createIndex('evicted.index', { fileHandlePool, flushDelay: 0 });
+        const initialFd = index.getFileHandle();
+        const closedFds = [];
+        const originalBeforeClose = index.onBeforeClose;
+        index.onBeforeClose = (fd) => {
+            closedFds.push(fd);
+            return originalBeforeClose.call(index, fd);
+        };
+        index.add(new IndexEntry(1, 11));
+
+        const other = createIndex('other.index', { fileHandlePool, flushDelay: 0 });
+        other.add(new IndexEntry(1, 22));
+
+        expect(closedFds).to.eql([initialFd]);
+        expect(index.hasFileHandle()).to.be(false);
+        expect(index.flush()).to.be(false);
+        expect(index.hasFileHandle()).to.be(false);
+
+        const reader = createReader(index.name);
+        expect(reader.get(1).position).to.be(11);
+        expect(() => index.close()).to.not.throwError();
+
+        other.close();
     });
 
     it('defaults name to ".index"', function() {
@@ -559,7 +587,7 @@ describe('Index', function() {
 
             index.add(new IndexEntry(6, 6));
             index.flush();
-            fs.fdatasync(index.fd);
+            fs.fdatasync(index.getFileHandle());
         });
 
         it('updates when writer truncates', function(done){
@@ -574,7 +602,7 @@ describe('Index', function() {
             });
 
             index.truncate(0);
-            fs.fdatasync(index.fd);
+            fs.fdatasync(index.getFileHandle());
         });
 
         it('closes when file renamed', function(done){
@@ -599,7 +627,7 @@ describe('Index', function() {
 
             index.truncate(0);
             reader.close();
-            fs.fdatasync(index.fd, () => done());
+            fs.fdatasync(index.getFileHandle(), () => done());
         });
     });
 });

@@ -19,7 +19,7 @@ class ReadOnlyPartition extends WatchesFile(ReadablePartition) {
      */
     onChange(filename) {
         /* c8 ignore next 3 */
-        if (!this.fd) {
+        if (!this.isOpen()) {
             return;
         }
         const prevSize = this.size;

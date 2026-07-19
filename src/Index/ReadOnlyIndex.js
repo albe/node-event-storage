@@ -34,7 +34,7 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
      */
     onChange(filename) {
         /* c8 ignore next 3 */
-        if (!this.fd) {
+        if (!this.isOpen()) {
             return;
         }
         const prevLength = this.data.length;

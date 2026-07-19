@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
+import FileHandlePool from '../FileHandlePool.js';
 import { assert, alignTo, hash, binarySearch } from '../utils/util.js';
 import { resolvePath } from "../utils/fsUtil.js";
 
@@ -41,6 +42,7 @@ class ReadablePartition extends events.EventEmitter {
      * @param {object} [config] An object with storage parameters.
      * @param {string} [config.dataDirectory] The path where the storage data should reside. Default '.'.
      * @param {number} [config.readBufferSize] Size of the read buffer in bytes. Default 4096.
+     * @param {object} [config.fileHandlePool] Shared file-handle pool used to reopen evicted handles on demand.
      */
     constructor(name, config = {}) {
         super();
@@ -57,7 +59,9 @@ class ReadablePartition extends events.EventEmitter {
         this.id = ReadablePartition.idFor(name);
         this.fileName = path.resolve(this.dataDirectory, this.name);
         this.fileMode = 'r';
+        this.fileHandlePool = config.fileHandlePool || new FileHandlePool();
         this.headerSize = 0;
+        this.opened = false;
 
         this.readBufferSize = config.readBufferSize >>> 0;  // jshint ignore:line
     }
@@ -68,7 +72,21 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {boolean}
      */
     isOpen() {
-        return !!this.fd;
+        return this.opened;
+    }
+
+    /**
+     * @returns {boolean}
+     */
+    hasFileHandle() {
+        return this.fileHandlePool.has(this);
+    }
+
+    /**
+     * @returns {number}
+     */
+    getFileHandle() {
+        return this.fileHandlePool.get(this);
     }
 
     /**
@@ -78,12 +96,10 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {boolean} Returns false if the file is not a valid partition.
      */
     open() {
-        if (this.fd) {
+        if (this.opened) {
             return true;
         }
-
-        this.fd = fs.openSync(this.fileName, this.fileMode);
-
+        this.opened = this.getFileHandle() !== null;
         // allocUnsafeSlow because we don't need buffer pooling for these relatively long-lived buffers
         this.readBuffer = Buffer.allocUnsafeSlow(this.readBufferSize);
         // Where inside the file the read buffer starts
@@ -97,9 +113,13 @@ class ReadablePartition extends events.EventEmitter {
             return false;
         }
 
-        this.size -= this.readMetadata();
-
-        return true;
+        try {
+            this.size -= this.readMetadata();
+            return true;
+        } catch (error) {
+            this.close();
+            throw error;
+        }
     }
 
     /**
@@ -113,8 +133,9 @@ class ReadablePartition extends events.EventEmitter {
     readMetadata() {
         assert(this.size >= 16, `Invalid file.`);
 
+        const fd = this.getFileHandle();
         const headerBuffer = Buffer.allocUnsafe(8 + 4);
-        fs.readSync(this.fd, headerBuffer, 0, 8 + 4, 0);
+        fs.readSync(fd, headerBuffer, 0, 8 + 4, 0);
         const headerMagic = headerBuffer.toString('utf8', 0, 8);
 
         assert(headerMagic.substring(0, 6) === HEADER_MAGIC.substring(0, 6), `Invalid file header in partition ${this.name}.`);
@@ -127,7 +148,7 @@ class ReadablePartition extends events.EventEmitter {
 
         const metadataBuffer = Buffer.allocUnsafe(metadataSize - 1);
         metadataBuffer.fill(" ");
-        fs.readSync(this.fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
+        fs.readSync(fd, metadataBuffer, 0, metadataSize - 1, 8 + 4);
         const metadata = metadataBuffer.toString('utf8').trim();
         try {
             this.metadata = JSON.parse(metadata);
@@ -155,7 +176,7 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {number} The file size not including the file header.
      */
     readFileSize() {
-        const stat = fs.statSync(this.fileName);
+        const stat = fs.fstatSync(this.getFileHandle());
         this.crtime = stat.birthtimeMs;
         return stat.size - this.headerSize;
     }
@@ -167,10 +188,8 @@ class ReadablePartition extends events.EventEmitter {
      * @returns void
      */
     close() {
-        if (this.fd) {
-            fs.closeSync(this.fd);
-            this.fd = null;
-        }
+        this.fileHandlePool.evict(this, false);
+        this.opened = false;
         if (this.readBuffer) {
             this.readBuffer = null;
             this.readBufferPos = -1;
@@ -185,7 +204,8 @@ class ReadablePartition extends events.EventEmitter {
      * @param {number} [from] The file position to start filling the read buffer from. Default 0.
      */
     fillBuffer(from = 0) {
-        this.readBufferLength = fs.readSync(this.fd, this.readBuffer, 0, this.readBuffer.byteLength, this.headerSize + from);
+        const fd = this.getFileHandle();
+        this.readBufferLength = fs.readSync(fd, this.readBuffer, 0, this.readBuffer.byteLength, this.headerSize + from);
         this.readBufferPos = from;
     }
 
@@ -250,7 +270,7 @@ class ReadablePartition extends events.EventEmitter {
      * @throws {CorruptFileError} if the document at the given position can not be read completely.
      */
     readFrom(position, size = 0, headerOut = null, backwardsHint = false) {
-        assert(this.fd, 'Partition is not opened.');
+        const fd = this.getFileHandle();
         assert((position % DOCUMENT_ALIGNMENT) === 0, `Invalid read position ${position}. Needs to be a multiple of ${DOCUMENT_ALIGNMENT}.`);
 
         const { reader, bufferOffset } = this.selectReader(position, size, backwardsHint);
@@ -272,7 +292,7 @@ class ReadablePartition extends events.EventEmitter {
 
         if (dataSize + DOCUMENT_HEADER_SIZE > reader.buffer.byteLength) {
             const tempReadBuffer = Buffer.allocUnsafe(dataSize);
-            fs.readSync(this.fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
+            fs.readSync(fd, tempReadBuffer, 0, dataSize, this.headerSize + position + DOCUMENT_HEADER_SIZE);
             return tempReadBuffer;
         }
 
@@ -333,7 +353,7 @@ class ReadablePartition extends events.EventEmitter {
      * @returns {number|boolean} The start position of the first document before the given position or false if no header could be found.
      */
     findDocumentPositionBefore(position) {
-        assert(this.fd, 'Partition is not opened.');
+        this.getFileHandle();
         if (position > 0) position -= (position % DOCUMENT_ALIGNMENT);
         if (position <= 0) {
             return false;

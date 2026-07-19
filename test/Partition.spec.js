@@ -1,7 +1,8 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
-import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from '../src/Partition/ReadablePartition.js';
+import FileHandlePool from '../src/FileHandlePool.js';
+import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -88,11 +89,61 @@ describe('Partition', function() {
         expect(() => partition.open()).to.throwError();
     });
 
+    it('throws on opening a partition file with invalid metadata', function() {
+        const metadataBuffer = Buffer.allocUnsafe(8 + 4 + 4);
+        metadataBuffer.write(HEADER_MAGIC, 0, 8, 'utf8');
+        metadataBuffer.writeUInt32BE(5, 8);
+        metadataBuffer.write('{x}\n', 12, 4, 'utf8');
+        fs.writeFileSync('test/data/.part', metadataBuffer);
+
+        expect(() => partition.open()).to.throwError(/Invalid metadata/);
+    });
+
     it('can be opened and closed multiple times', function() {
         partition.open();
         expect(partition.open()).to.be(true);
         partition.close();
         partition.close();
+    });
+
+    it('flushes buffered writes before a pool eviction', function() {
+        const fileHandlePool = new FileHandlePool(1);
+        partition = new Partition('.p0', { dataDirectory, readBufferSize: 4 * 1024, fileHandlePool });
+        const other = new Partition('.p1', { dataDirectory, readBufferSize: 4 * 1024, fileHandlePool });
+
+        partition.open();
+        const initialFd = partition.getFileHandle();
+        const closedFds = [];
+        const originalBeforeClose = partition.onBeforeClose;
+        partition.onBeforeClose = (fd) => {
+            closedFds.push(fd);
+            return originalBeforeClose.call(partition, fd);
+        };
+        partition.write('foo', 1);
+        other.open();
+        other.write('bar', 2);
+
+        expect(closedFds).to.eql([initialFd]);
+        expect(partition.hasFileHandle()).to.be(false);
+        expect(partition.flush()).to.be(false);
+        expect(partition.hasFileHandle()).to.be(false);
+        expect(partition.readFrom(0).toString('utf8')).to.be('foo');
+        expect(() => partition.close()).to.not.throwError();
+
+        other.close();
+    });
+
+    it('ignores the before-close hook after an explicit close', function() {
+        partition.open();
+        partition.close();
+        expect(partition.writeBuffer).to.be(null);
+        expect(() => partition.onBeforeClose(-1)).to.not.throwError();
+    });
+
+    it('returns an empty backward reader before the start of the file', function() {
+        partition.open();
+
+        expect(partition.prepareReadBufferBackwards(-1)).to.eql({ buffer: null, cursor: 0, length: 0 });
     });
 
     describe('write', function() {
@@ -792,7 +843,7 @@ describe('Partition', function() {
             partition.write('foo');
             expect(partition.size).to.be.greaterThan(reader.size);
             partition.flush();
-            fs.fdatasync(partition.fd);
+            fs.fdatasync(partition.getFileHandle());
         });
 
         it('updates reader when writer truncates', function(done){
@@ -810,7 +861,7 @@ describe('Partition', function() {
             });
 
             partition.truncate(0);
-            fs.fdatasync(partition.fd);
+            fs.fdatasync(partition.getFileHandle());
         });
 
         it('recognizes file renames and closes', function(done){

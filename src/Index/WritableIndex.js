@@ -89,7 +89,7 @@ class WritableIndex extends ReadableIndex {
      * @throws {Error} if the file can not be opened.
      */
     open() {
-        if (this.fd) {
+        if (this.opened) {
             return false;
         }
         this.writeBufferCursor = 0;
@@ -108,20 +108,21 @@ class WritableIndex extends ReadableIndex {
             this.metadata = {entryClass: this.EntryClass.name, entrySize: this.EntryClass.size};
         }
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
-        fs.writeSync(this.fd, metadataBuffer, 0, metadataBuffer.byteLength, 0);
+        fs.writeSync(this.getFileHandle(), metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = metadataBuffer.byteLength;
     }
 
     /**
-     * Close the index and release the file handle.
-     * @api
+     * Flush pending buffered writes before the pool closes the descriptor.
+     *
+     * @param {number} fd
      */
-    close() {
-        if (this.fd) {
-            this.flush();
-            fs.fdatasyncSync(this.fd);
+    onBeforeClose(fd) {
+        if (!this.writeBuffer) {
+            return;
         }
-        super.close();
+        this.flush();
+        fs.fdatasyncSync(fd);
     }
 
     /**
@@ -139,7 +140,7 @@ class WritableIndex extends ReadableIndex {
      * @returns {boolean} If a flush actually was executed.
      */
     flush() {
-        if (!this.fd) {
+        if (!this.isOpen()) {
             return false;
         }
         if (this.flushTimeout) {
@@ -150,9 +151,10 @@ class WritableIndex extends ReadableIndex {
             return false;
         }
 
-        fs.writeSync(this.fd, this.writeBuffer, 0, this.writeBufferCursor);
+        const fd = this.getFileHandle();
+        fs.writeSync(fd, this.writeBuffer, 0, this.writeBufferCursor);
         if (this.syncOnFlush) {
-            fs.fsyncSync(this.fd);
+            fs.fsyncSync(fd);
         }
 
         this.writeBufferCursor = 0;
@@ -215,9 +217,10 @@ class WritableIndex extends ReadableIndex {
      * @param {number} after The index entry number to truncate after.
      */
     truncate(after) {
-        if (!this.fd) {
+        if (!this.isOpen()) {
             return;
         }
+        this.getFileHandle();
         if (after < 0) {
             after = 0;
         }

@@ -177,8 +177,6 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.forEachPartition(partition => partition.close());
-        // Partitions were closed directly (bypassing the pool), so reset the open-handle tracking.
-        this.partitions.clearOpenHandles();
     }
 
     /**
@@ -331,12 +329,12 @@ class WritableStorage extends ReadableStorage {
     }
 
     createNamedPartition(partitionId, partitionName, partitionShortName) {
-        if (this.partitions.has(partitionId)) {
+        if (partitionId in this.partitions) {
             return;
         }
         const partitionConfig = this.buildPartitionConfig(partitionShortName);
         this.ensurePartitionDirectory(partitionName);
-        this.partitions.add(partitionId, this.createPartition(partitionName, partitionConfig));
+        this.partitions[partitionId] = this.createPartition(partitionName, partitionConfig);
         this.emit('partition-created', partitionId);
     }
 
@@ -458,7 +456,7 @@ class WritableStorage extends ReadableStorage {
      */
     forEachDistinctPartitionOf(entries, iterationHandler) {
         const partitions = [];
-        const numPartitions = this.partitions.count;
+        const numPartitions = Object.keys(this.partitions).length;
         for (let entry of entries) {
             if (partitions.indexOf(entry.partition) >= 0) {
                 continue;
@@ -545,7 +543,7 @@ class WritableStorage extends ReadableStorage {
      * @returns {{ index: WritableIndex, matcher: Matcher }}
      */
     createIndex(name, options = {}) {
-        const index = new WritableIndex(name, options);
+        const index = new WritableIndex(name, { ...options, fileHandlePool: this.indexHandlePool });
         let matcher;
 
         // If the index contains a matcher (possibly a serialized function) we check HMAC
@@ -569,7 +567,7 @@ class WritableStorage extends ReadableStorage {
      * @returns {WritablePartition}
      */
     createPartition(name, config = {}) {
-        return new WritablePartition(name, config);
+        return new WritablePartition(name, { ...config, fileHandlePool: this.partitionHandlePool });
     }
 
 }
