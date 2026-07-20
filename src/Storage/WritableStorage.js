@@ -522,18 +522,20 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Open an existing secondary index and repair any stale entries beyond the current primary
-     * index length. Stale entries can be present when checkTornWrites() truncated the primary
+     * Check for stale entries before releasing the file descriptor.
+     * Stale entries can be present when checkTornWrites() truncated the primary
      * index before this secondary index was loaded into memory.
+     *
+     * @protected
+     * @param {WritableIndex} index
      */
-    openIndex(name, matcher) {
-        const index = super.openIndex(name, matcher);
+    afterRegisterSecondaryIndex(index) {
         const lastEntry = index.lastEntry;
         if (lastEntry !== false && lastEntry.number > this.index.length) {
             // Secondary index is ahead of primary: truncate stale entries.
             index.truncate(index.find(this.index.length));
         }
-        return index;
+        super.afterRegisterSecondaryIndex(index);
     }
 
     /**

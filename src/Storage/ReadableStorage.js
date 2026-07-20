@@ -440,8 +440,20 @@ class ReadableStorage extends events.EventEmitter {
         // Register the actual stored matcher (may have been reconstructed from metadata by WritableStorage.createIndex).
         this.indexMatcher.add(name, this.secondaryIndexes[name].matcher);
 
-        index.open();
+        this.afterRegisterSecondaryIndex(index);
         return index;
+    }
+
+    /**
+     * Called after a secondary index has been opened and registered.
+     * Releases the file descriptor so it is not held open at startup.
+     * The pool will transparently reacquire it on first actual access.
+     *
+     * @protected
+     * @param {ReadableIndex} index
+     */
+    afterRegisterSecondaryIndex(index) {
+        index.fileHandlePool.evict(index, false);
     }
 
     /**
