@@ -447,7 +447,9 @@ class ReadableStorage extends events.EventEmitter {
     /**
      * Called after a secondary index has been opened and registered.
      * Releases the file descriptor so it is not held open at startup.
-     * The pool will transparently reacquire it on first actual access.
+     * Passing `false` preserves the `opened` state and `data` array so that
+     * `index.length` and `index.lastEntry` remain correct without an fd.
+     * The pool will transparently reacquire the fd on first actual access.
      *
      * @protected
      * @param {ReadableIndex} index
