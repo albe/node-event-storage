@@ -1748,6 +1748,61 @@ describe('Storage', function() {
 
     });
 
+    describe('manifest restore', function() {
+
+        it('keeps secondary index length virtualized until entries are read', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.ensureIndex('foo', { type: 'foo' });
+                for (let i = 0; i < 5; i++) {
+                    storage.write({ type: 'foo', value: i });
+                }
+                storage.flush();
+                storage.close();
+
+                storage = createStorage();
+                storage.open(() => {
+                    const index = storage.openIndex('foo');
+
+                    expect(index.length).to.be(5);
+                    expect(index.data.length).to.be(0);
+
+                    const first = index.get(1);
+                    expect(first.number).to.be(1);
+                    expect(index.data.length).to.be(1);
+                    done();
+                });
+            });
+        });
+
+        it('appends to a manifest-restored secondary index with virtualized length', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.ensureIndex('foo', { type: 'foo' });
+                for (let i = 0; i < 3; i++) {
+                    storage.write({ type: 'foo', value: i });
+                }
+                storage.flush();
+                storage.close();
+
+                storage = createStorage();
+                storage.open(() => {
+                    const index = storage.openIndex('foo');
+                    expect(index.length).to.be(3);
+                    expect(index.data.length).to.be(0);
+
+                    storage.write({ type: 'foo', value: 99 });
+                    storage.flush();
+
+                    expect(index.length).to.be(4);
+                    expect(index.lastEntry.number).to.be(4);
+                    expect(storage.read(4, index)).to.eql({ type: 'foo', value: 99 });
+                    done();
+                });
+            });
+        });
+    });
+
     describe('file handle pools', function() {
 
         it('defaults index handle limit to 1024', function() {

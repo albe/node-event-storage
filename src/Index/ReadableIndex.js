@@ -67,6 +67,7 @@ class ReadableIndex extends events.EventEmitter {
     initialize(options) {
         /* @type Array<Entry> */
         this.data = [];
+        this.entryCount = 0;
         this.opened = false;
         this.fileMode = 'r';
         this.fileHandlePool = options.fileHandlePool || new FileHandlePool();
@@ -105,7 +106,7 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {number}
      */
     get length() {
-        return this.data.length;
+        return this.entryCount;
     }
 
     /**
@@ -173,9 +174,7 @@ class ReadableIndex extends events.EventEmitter {
             this.opened = true;
             this.readUntil = -1;
             this.headerSize = this.manifestData.headerSize;
-            if (this.manifestData.length > 0) {
-                this.data = new Array(this.manifestData.length);
-            }
+            this.entryCount = this.manifestData.length;
             this.manifestData = null;
             return true;
         }
@@ -185,6 +184,7 @@ class ReadableIndex extends events.EventEmitter {
         this.readUntil = -1;
 
         const length = this.readFileLength();
+        this.entryCount = length;
         if (length > 0) {
             this.data = new Array(length);
             // Read last item to get the index started
@@ -266,6 +266,7 @@ class ReadableIndex extends events.EventEmitter {
      */
     close() {
         this.data = [];
+        this.entryCount = 0;
         this.readUntil = -1;
         this.readBuffer.fill(0);
         this.fileHandlePool.evict(this, false);
