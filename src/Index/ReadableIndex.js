@@ -79,6 +79,9 @@ class ReadableIndex extends events.EventEmitter {
             this.metadata = Object.assign({entryClass: options.EntryClass.name, entrySize: options.EntryClass.size}, options.metadata);
         }
         this.headerSize = 0;
+        // When set, open() restores state from this object instead of reading from disk.
+        // Used by WritableStorage to skip per-index file I/O on manifest-based startup.
+        this.manifestData = options.manifestData || null;
     }
 
     /**
@@ -165,6 +168,18 @@ class ReadableIndex extends events.EventEmitter {
         if (this.opened) {
             return false;
         }
+
+        if (this.manifestData) {
+            this.opened = true;
+            this.readUntil = -1;
+            this.headerSize = this.manifestData.headerSize;
+            if (this.manifestData.length > 0) {
+                this.data = new Array(this.manifestData.length);
+            }
+            this.manifestData = null;
+            return true;
+        }
+
         this.opened = this.getFileHandle() !== null;
 
         this.readUntil = -1;

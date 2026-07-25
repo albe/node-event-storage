@@ -445,17 +445,13 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Called after a secondary index has been opened and registered.
-     * Releases the file descriptor so it is not held open at startup.
-     * Passing `false` preserves the `opened` state and `data` array so that
-     * `index.length` and `index.lastEntry` remain correct without an fd.
-     * The pool will transparently reacquire the fd on first actual access.
+     * Called after a secondary index has been opened and registered via openIndex().
+     * No-op in the base class; WritableStorage overrides this to check for stale entries.
      *
      * @protected
      * @param {ReadableIndex} index
      */
-    afterRegisterSecondaryIndex(index) {
-        index.fileHandlePool.evict(index, false);
+    afterRegisterSecondaryIndex(index) { // eslint-disable-line no-unused-vars
     }
 
     /**

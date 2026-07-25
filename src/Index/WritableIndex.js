@@ -118,7 +118,7 @@ class WritableIndex extends ReadableIndex {
      * @param {number} fd
      */
     onBeforeClose(fd) {
-        if (!this.writeBuffer || this.writeBufferCursor === 0) {
+        if (this.writeBufferCursor === 0) {
             return;
         }
         this.flush();

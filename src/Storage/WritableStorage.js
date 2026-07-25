@@ -70,6 +70,11 @@ class WritableStorage extends ReadableStorage {
      * For LOCK_RECLAIM, removes any orphaned lock before trying to acquire our own; torn-write
      * repair runs after the primary index is open, before `'opened'` is emitted.
      *
+     * On the first open (not in recovery mode), tries to load the startup manifest.
+     * A valid manifest restores all secondary indexes and partitions without any file I/O,
+     * making startup time nearly independent of the number of indexes.
+     * If the manifest is missing or its HMAC does not verify, falls back to a full scanFiles().
+     *
      * @param {function(): void} [callback] Called after indexes open, before `'opened'` is emitted.
      *   Can be used as a synchronous alternative to listening to the `'opened'` event.
      * @returns {boolean}
@@ -80,6 +85,26 @@ class WritableStorage extends ReadableStorage {
 
         if (!this.lock()) {
             return true;
+        }
+
+        // Happy path: load manifest and skip scanFiles() entirely.
+        // Only attempted on first open (initialized === null) and when not in recovery.
+        if (this.initialized === null && !needsRepair) {
+            const manifest = this.loadManifest();
+            if (manifest) {
+                this.restoreFromManifest(manifest);
+                this.initialized = true;
+                this.openIndexes();
+                // Defer to match the async behaviour of scanFiles(), so that 'opened'
+                // and 'ready' always fire after the constructor returns and listeners
+                // have been registered.
+                setImmediate(() => {
+                    if (this.initialized === null) return;
+                    callback?.();
+                    this.emit('opened');
+                });
+                return true;
+            }
         }
 
         const onOpen = needsRepair
@@ -255,12 +280,146 @@ class WritableStorage extends ReadableStorage {
     /**
      * @inheritDoc
      * Unlocks the storage, then delegates to the parent close().
+     * Saves the startup manifest after flushing, so the next open() can skip scanFiles().
      */
     close() {
         if (this.locked) {
             this.unlock();
         }
-        super.close();
+        if (this.initialized === true) {
+            this.flush();
+            const manifestData = this.buildManifestData();
+            super.close();
+            this.saveManifest(manifestData);
+        } else {
+            super.close();
+        }
+    }
+
+    /**
+     * Path of the startup manifest file.
+     * @returns {string}
+     */
+    get manifestFile() {
+        return path.join(this.indexDirectory, '.' + this.storageFile + '.manifest.json');
+    }
+
+    /**
+     * Collect current secondary-index and partition state for manifest persistence.
+     * Must be called before super.close() resets index data arrays to [].
+     *
+     * @private
+     * @returns {{ partitions: string[], indexes: object }}
+     */
+    buildManifestData() {
+        const partitions = Object.values(this.partitions).map(p => p.name);
+        const indexes = {};
+        for (const [name, { index, matcher }] of Object.entries(this.secondaryIndexes)) {
+            indexes[name] = {
+                matcher: typeof matcher === 'function' ? matcher.toString() : matcher,
+                length: index.length,
+                headerSize: index.headerSize
+            };
+        }
+        return { partitions, indexes };
+    }
+
+    /**
+     * Write the startup manifest to disk.
+     * A single HMAC over the whole document guards against tampering.
+     *
+     * @private
+     * @param {{ partitions: string[], indexes: object }} data
+     */
+    saveManifest(data) {
+        const body = { version: 1, partitions: data.partitions, indexes: data.indexes };
+        const manifest = Object.assign({}, body, { hmac: this.hmac(JSON.stringify(body)) });
+        try {
+            fs.writeFileSync(this.manifestFile, JSON.stringify(manifest));
+        } catch {
+            // Best-effort: if the write fails, next open falls back to scanFiles().
+        }
+    }
+
+    /**
+     * Read and verify the startup manifest.
+     * Returns the parsed manifest if the HMAC is valid; null otherwise.
+     *
+     * @private
+     * @returns {{ version: number, partitions: string[], indexes: object }|null}
+     */
+    loadManifest() {
+        if (!fs.existsSync(this.manifestFile)) {
+            return null;
+        }
+        try {
+            const raw = JSON.parse(fs.readFileSync(this.manifestFile, 'utf8'));
+            if (!raw || raw.version !== 1 || !raw.indexes) {
+                return null;
+            }
+            const { hmac, ...body } = raw;
+            if (hmac !== this.hmac(JSON.stringify(body))) {
+                return null;
+            }
+            return raw;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Restore secondary indexes and partitions from a verified manifest.
+     * Skips all per-index file I/O: index state is populated from the manifest directly.
+     *
+     * @private
+     * @param {{ partitions: string[], indexes: object }} manifest
+     */
+    restoreFromManifest(manifest) {
+        for (const partitionFile of (manifest.partitions || [])) {
+            this.registerPartitionFile(partitionFile);
+        }
+        for (const [name, entry] of Object.entries(manifest.indexes)) {
+            const { index, matcher } = this.buildIndexFromManifestEntry(name, entry);
+            this.secondaryIndexes[name] = { index, matcher };
+            this.indexMatcher.add(name, matcher);
+            this.emit('index-created', name);
+        }
+    }
+
+    /**
+     * Reconstruct a WritableIndex from a manifest entry without opening the file.
+     * The manifestData option lets ReadableIndex.open() restore state from the manifest
+     * instead of reading from disk.
+     *
+     * @private
+     * @param {string} name  Short index name (e.g. 'stream-orders').
+     * @param {{ matcher: object|string, length: number, headerSize: number }} entry
+     * @returns {{ index: WritableIndex, matcher: Matcher }}
+     */
+    buildIndexFromManifestEntry(name, entry) {
+        const indexName = this.storageFile + '.' + name + '.index';
+        const matcher = this.buildMatcherFromManifestEntry(entry);
+        const options = Object.assign({}, this.indexOptions, {
+            fileHandlePool: this.indexHandlePool,
+            manifestData: { length: entry.length, headerSize: entry.headerSize }
+        });
+        const index = new WritableIndex(indexName, options);
+        return { index, matcher };
+    }
+
+    /**
+     * Reconstruct the matcher from a manifest entry.
+     * The whole manifest is already HMAC-verified, so function matchers can be eval'd safely.
+     *
+     * @private
+     * @param {{ matcher: object|string }} entry
+     * @returns {Matcher}
+     */
+    buildMatcherFromManifestEntry(entry) {
+        if (typeof entry.matcher === 'object') {
+            return entry.matcher;
+        }
+        return eval('(' + entry.matcher + ')').bind({}); // jshint ignore:line
     }
 
     /**
