@@ -93,13 +93,17 @@ class WritableStorage extends ReadableStorage {
             const manifest = this.loadManifest();
             if (manifest) {
                 this.restoreFromManifest(manifest);
-                this.initialized = true;
                 this.openIndexes();
-                // Defer to match the async behaviour of scanFiles(), so that 'opened'
-                // and 'ready' always fire after the constructor returns and listeners
-                // have been registered.
+                // Use initialized = false (the "scan in progress" state) so that close()
+                // while waiting for setImmediate resets it to null and we can skip the
+                // callback — matching the async guard in the scanFiles path.
+                // setImmediate defers the callback to match scanFiles() async behaviour,
+                // so that 'opened' and 'ready' always fire after the constructor returns
+                // and listeners have been registered.
+                this.initialized = false;
                 setImmediate(() => {
                     if (this.initialized === null) return;
+                    this.initialized = true;
                     callback?.();
                     this.emit('opened');
                 });
@@ -332,10 +336,10 @@ class WritableStorage extends ReadableStorage {
      * @param {{ partitions: string[], indexes: object }} data
      */
     saveManifest(data) {
-        const body = { version: 1, partitions: data.partitions, indexes: data.indexes };
-        const manifest = Object.assign({}, body, { hmac: this.hmac(JSON.stringify(body)) });
+        const body = JSON.stringify({ version: 1, partitions: data.partitions, indexes: data.indexes });
+        const manifest = body.slice(0, -1) + ',"hmac":"' + this.hmac(body) + '"}';
         try {
-            fs.writeFileSync(this.manifestFile, JSON.stringify(manifest));
+            fs.writeFileSync(this.manifestFile, manifest);
         } catch {
             // Best-effort: if the write fails, next open falls back to scanFiles().
         }
@@ -419,6 +423,8 @@ class WritableStorage extends ReadableStorage {
         if (typeof entry.matcher === 'object') {
             return entry.matcher;
         }
+        // eval() is safe here: the whole manifest was HMAC-verified before this method is
+        // called, so the function source was written by this process and not tampered with.
         return eval('(' + entry.matcher + ')').bind({}); // jshint ignore:line
     }
 
