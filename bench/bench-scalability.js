@@ -47,14 +47,11 @@
  *    20 000 partitions creates ≈ 40 001 files in a single directory.
  *
  * 3. Population strategy (secondary indexes)
- *    Secondary index files are created as empty shell files (metadata header
- *    only, no historical data) during the setup phase.  This keeps population
- *    time O(docs + indexes) instead of the quadratic O(docs × indexes) that
- *    results from using Storage.ensureIndex(…, reindex=true) for each index.
- *    The write benchmark still measures the full O(N) per-write cost because
- *    every write() call iterates all N registered secondary-index matchers to
- *    find the matching one.  In a real application that starts fresh (no
- *    historical events), the behaviour is identical.
+ *    Secondary indexes are registered before writes so index files contain
+ *    actual entries. This makes startup measurements reflect real-world reopen
+ *    cost with non-empty index files. Population stays O(docs + indexes): each
+ *    write targets one index via matcherProperties-based O(1) discriminant
+ *    lookup, avoiding the quadratic O(docs × indexes) matcher scan.
  *
  * 4. Total data written (Scenario B)
  *    With M indexes and 20 docs/index, partition data grows to:
@@ -161,11 +158,9 @@ function estimateFds(numPartitions, numIndexes) {
 
 /**
  * Populate a fresh data directory:
- *   1. Write all documents directly to partitions (no secondary indexes
- *      registered → O(totalDocs) instead of O(totalDocs × numIndexes)).
- *   2. Create secondary index files as empty shells (header + matcher
- *      metadata, no historical entries) so that startup and write benchmarks
- *      see a realistic file-count overhead without quadratic setup time.
+ *   1. Register all secondary indexes once.
+ *   2. Write all documents so index files are non-empty and startup includes
+ *      realistic secondary-index load work.
  *
  * Documents use `stream` as the discriminant property (matching the default
  * `matcherProperties` config), so each index's object matcher { stream: i }
@@ -181,19 +176,18 @@ function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition) {
     const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
     storage.open();
 
-    // Write all documents with NO secondary indexes registered.
+    // Register all secondary indexes once. With matcherProperties this remains
+    // O(1) index selection on write.
+    for (let i = 0; i < numIndexes; i++) {
+        storage.ensureIndex(`idx-${i}`, { stream: String(i) }, false);
+    }
+
+    // Write all documents with secondary indexes registered so each index gets data.
     const totalDocs = numPartitions * docsPerPartition;
     for (let seq = 0; seq < totalDocs; seq++) {
         const p      = seq % numPartitions;
         const typeId = numIndexes > 0 ? seq % numIndexes : 0;
         storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
-    }
-    storage.flush();
-
-    // Create empty secondary index files (reindex=false → no doc scanning).
-    // This registers the file on disk so it can be opened in the benchmark.
-    for (let i = 0; i < numIndexes; i++) {
-        storage.ensureIndex(`idx-${i}`, { stream: String(i) }, false);
     }
     storage.flush();
     storage.close();

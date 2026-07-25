@@ -125,7 +125,7 @@ there is no need for transactional or crash-safe manifest writes (e.g. write-the
 
 For 5 000 indexes with simple object matchers the manifest file is roughly 300–400 KB.
 
-Latest local re-run (Node v24.18.0, same benchmark harness on both revisions) versus current `main`:
+Latest local re-run (Node v24.18.0, same benchmark harness copied into dedicated worktrees for `main`, `PR #339`, and this branch) with **non-empty** secondary indexes:
 
-- **Scenario A (1 index per partition)** startup at high counts was **~8% faster** (`5k: 248.7 → 227.2 ms`, `10k: 454.7 → 417.5 ms`, `20k: 881.3 → 813.5 ms`).
-- **Scenario B (100 partitions, growing indexes)** startup improved at larger index counts (`1k: 31.3 → 24.5 ms`, `5k: 145.8 → 131.6 ms`), with a small-count regression at `100` indexes (`7.6 → 9.5 ms`).
+- **Scenario A (1 index per partition)** startup improves over `main` at higher counts (`5k: 279.8 → 236.0 ms`, `10k: 540.9 → 453.3 ms`, `20k: 971.7 → 902.5 ms`).
+- **Scenario B (100 partitions, growing indexes)** startup is mixed (`100: 8.0 → 7.2 ms`, `1k: 28.4 → 40.8 ms`, `5k: 157.5 → 145.7 ms`).
