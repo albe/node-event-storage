@@ -124,5 +124,8 @@ there is no need for transactional or crash-safe manifest writes (e.g. write-the
 | Full scan fallback    | O(N indexes × file open cost) | per-index file open + header read |
 
 For 5 000 indexes with simple object matchers the manifest file is roughly 300–400 KB.
-In local benchmarks, startup was around 2× faster with the manifest path than with
-full file scanning at high index counts.
+
+Latest local re-run (Node v24.18.0, same benchmark harness on both revisions) versus current `main`:
+
+- **Scenario A (1 index per partition)** startup at high counts was **~8% faster** (`5k: 248.7 → 227.2 ms`, `10k: 454.7 → 417.5 ms`, `20k: 881.3 → 813.5 ms`).
+- **Scenario B (100 partitions, growing indexes)** startup improved at larger index counts (`1k: 31.3 → 24.5 ms`, `5k: 145.8 → 131.6 ms`), with a small-count regression at `100` indexes (`7.6 → 9.5 ms`).

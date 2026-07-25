@@ -50,12 +50,11 @@ Read latency is dominated by the per-document partition seek and is largely flat
 
 ### Startup time
 
-Startup time scales linearly with the number of files on disk:
+On a clean shutdown path, startup uses the persisted manifest: partitions and secondary-index metadata are restored from one manifest read instead of opening every index file to read headers.
 
-- The store performs one `readdir` call over the data directory followed by one `open` per partition.
-- Registering secondary indexes (`openIndex` / `ensureIndex`) costs one `open` + header-read per index file.
+Secondary indexes are still registered at startup, but their file descriptors are released immediately and reopened lazily on first real index access. This keeps startup fd pressure and heap pressure lower when thousands of indexes exist.
 
-For large deployments consider lazy-loading secondary indexes on first access rather than opening all of them during startup.
+When startup enters crash-recovery mode (`LOCK_RECLAIM` after torn-write repair), the manifest fast path is bypassed and the store falls back to the full scan/rebuild path.
 
 ---
 
@@ -158,4 +157,3 @@ Interpretation:
 
 - When events are **already deserialized**, object matchers are the correct baseline and typically faster.
 - In workloads where data is still in **raw buffer form** (streaming), raw matchers avoid `JSON.parse` and can outperform a deserialize+object-match pipeline by roughly **~50%** in practice.
-
