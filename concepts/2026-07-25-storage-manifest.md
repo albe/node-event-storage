@@ -124,18 +124,5 @@ there is no need for transactional or crash-safe manifest writes (e.g. write-the
 | Full scan fallback    | O(N indexes × file open cost) | per-index file open + header read |
 
 For 5 000 indexes with simple object matchers the manifest file is roughly 300–400 KB.
-Parsing it takes well under 10 ms on modern hardware.  The previous per-file path took
-several seconds at that scale.
-
-## Reverted: "lazy fd-release" approach
-
-A prior attempt added `afterRegisterSecondaryIndex` to release the fd after opening each
-index, keeping `opened = true` but with no fd in the pool.  This was not a genuine
-improvement:
-
-- It still opened every index file at startup (O(N) file opens).
-- It introduced a confusing half-open state (`opened = true`, no fd).
-
-The manifest approach supersedes it completely.  `afterRegisterSecondaryIndex` in
-`ReadableStorage` is now a no-op hook; `WritableStorage` overrides it only for
-the fallback-path torn-write check.
+In local benchmarks, startup was around 2× faster with the manifest path than with
+full file scanning at high index counts.

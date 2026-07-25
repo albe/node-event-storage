@@ -101,7 +101,6 @@ No build step; source is plain ESM consumed directly. No linter configured.
 | `src/Clock.js`                          | Monotonic microsecond clock |
 | `src/IndexEntry.js`                     | Index record serialization |
 | `src/IndexMatcher.js`                   | O(1) discriminant-based matcher classification |
-| `src/PartitionPool.js`                  | LRU-evicting pool for open partition handles |
 | `src/Watcher.js` / `src/WatchesFile.js` | Ref-counting directory watcher and mixin |
 | `src/utils/fsUtil.js`                   | `ensureDirectory`, `scanForFiles` |
 | `src/utils/apiHelpers.js`               | API-shaping helpers for top-level and internal class APIs (argument normalization, stream-name mapping, predicate/raw/revision coercion) |

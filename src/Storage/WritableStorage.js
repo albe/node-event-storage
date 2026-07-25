@@ -63,6 +63,7 @@ class WritableStorage extends ReadableStorage {
         this._lockMode = config.lock;
         this.partitioner = config.partitioner;
         this.partitionIds = {};
+        this.needsSecondaryIndexTruncationCheck = false;
     }
 
     /**
@@ -112,7 +113,10 @@ class WritableStorage extends ReadableStorage {
         }
 
         const onOpen = needsRepair
-            ? () => { this.checkTornWrites(); callback?.(); }
+            ? () => {
+                this.needsSecondaryIndexTruncationCheck = this.checkTornWrites();
+                callback?.();
+            }
             : callback;
         return super.open(onOpen);
     }
@@ -182,6 +186,7 @@ class WritableStorage extends ReadableStorage {
      */
     checkTornWrites() {
         const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
+        let hasPrimaryTruncation = false;
 
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
             // Phase 2: remove all documents at or beyond the torn-write boundary from each partition.
@@ -200,12 +205,14 @@ class WritableStorage extends ReadableStorage {
 
             // Reindex to fill in any missing complete-document entries.
             this.reindex(this.index.length);
+            hasPrimaryTruncation = true;
         } else if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
             // No torn writes, but the index is lagging — repair it.
             this.reindex(this.index.length);
         }
 
         this.forEachPartition(partition => partition.close());
+        return hasPrimaryTruncation;
     }
 
     /**
@@ -695,6 +702,10 @@ class WritableStorage extends ReadableStorage {
      * @param {WritableIndex} index
      */
     afterRegisterSecondaryIndex(index) {
+        if (!this.needsSecondaryIndexTruncationCheck) {
+            super.afterRegisterSecondaryIndex(index);
+            return;
+        }
         const lastEntry = index.lastEntry;
         if (lastEntry !== false && lastEntry.number > this.index.length) {
             // Secondary index is ahead of primary: truncate stale entries.
