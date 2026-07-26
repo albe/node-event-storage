@@ -16,8 +16,8 @@
  *     20 documents per index are guaranteed across the 100 partitions.
  *
  * Metrics collected at each size step
- *   - startup_ms   – time to open a pre-populated storage, including scanning
- *                    the data directory for all partition files plus opening all
+ *   - startup_ms   – time to reopen a pre-populated storage after a successful
+ *                    close() wrote the startup manifest, plus opening all
  *                    secondary index files one by one.
  *   - write_ms_op  – average ms per write() call (100-op sample), with all N
  *                    secondary indexes registered so every write checks all N
@@ -206,9 +206,9 @@ async function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartit
 }
 
 /**
- * Measure startup time: open a pre-populated storage (directory scan +
- * primary index load + all secondary index files) and wait for the scan
- * to complete, mirroring what a real application does on boot.
+ * Measure startup time: reopen a pre-populated storage after a successful
+ * close() persisted the startup manifest, then open every secondary index.
+ * This mirrors a real application booting from the manifest-backed fast path.
  *
  * @returns {Promise<number>} Total elapsed milliseconds.
  */
