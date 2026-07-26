@@ -101,9 +101,12 @@ const FD_LIMIT = getFdSoftLimit();
 // ──────────────────────────────────────────────────────────────────────────────
 // Constants
 // ──────────────────────────────────────────────────────────────────────────────
-const DOCS_PER_PARTITION = 20;
-const WRITE_SAMPLE_OPS   = 100;
-const READ_SAMPLE_OPS    = 100;
+const DOCS_PER_PARTITION        = 20;
+const WRITE_SAMPLE_OPS          = 100;
+const READ_SAMPLE_OPS           = 100;
+// Write partitions in sequential groups during population so the LRU partition
+// pool never needs to hold more than this many partitions open at once.
+const POPULATE_PARTITION_BATCH  = 500;
 
 // Pad the data field so the serialised JSON document is roughly 150 bytes.
 // Documents use a `stream` property so they align with the default `matcherProperties`
@@ -191,12 +194,18 @@ async function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartit
         storage.ensureIndex(`idx-${i}`, { stream: String(i) }, false);
     }
 
-    // Write all documents with secondary indexes registered so each index gets data.
-    const totalDocs = numPartitions * docsPerPartition;
-    for (let seq = 0; seq < totalDocs; seq++) {
-        const p      = seq % numPartitions;
-        const typeId = numIndexes > 0 ? seq % numIndexes : 0;
-        storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
+    // Write all documents partition-by-partition in batches of POPULATE_PARTITION_BATCH.
+    // Sequential writes keep at most POPULATE_PARTITION_BATCH partitions in the LRU pool
+    // at any point, so the maxOpenPartitions cap does not cause close+reopen churn
+    // during the (non-critical) population phase.
+    for (let pBatch = 0; pBatch < numPartitions; pBatch += POPULATE_PARTITION_BATCH) {
+        const pEnd = Math.min(pBatch + POPULATE_PARTITION_BATCH, numPartitions);
+        for (let p = pBatch; p < pEnd; p++) {
+            for (let d = 0; d < docsPerPartition; d++) {
+                const typeId = numIndexes > 0 ? (p * docsPerPartition + d) % numIndexes : 0;
+                storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
+            }
+        }
     }
     storage.flush();
     storage.close();
