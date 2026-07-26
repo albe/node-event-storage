@@ -12,7 +12,7 @@
  *     One secondary index per partition (N indexes for N partitions).
  *
  *   Scenario B – fixed partitions (100), growing index count
- *     Size steps: 100 / 1000 / 5000 indexes
+ *     Size steps: 100 / 1000 / 5000 / 10000 / 20000 / 50000 indexes
  *     20 documents per index are guaranteed across the 100 partitions.
  *
  * Metrics collected at each size step
@@ -56,8 +56,9 @@
  * 4. Total data written (Scenario B)
  *    With M indexes and 20 docs/index, partition data grows to:
  *      100 partitions × ceil(M×20/100) docs/partition × ~200 bytes ≈
- *       100 / 1 000 indexes:  ~  2 MB /  20 MB   partition data
- *       5 000 indexes:        ~ 100 MB             partition data
+ *       100 / 1 000 indexes:  ~   2 MB /   20 MB   partition data
+ *       5 000 / 10 000:       ~ 100 MB /  200 MB   partition data
+ *       20 000 / 50 000:      ~ 400 MB /    1 GB   partition data
  *    Ensure the target --data-dir has enough free space.
  *
  * Usage:
@@ -114,7 +115,7 @@ const APPROX_DOC_SIZE = JSON.stringify({ stream: 'x', partitionId: 0, data: DATA
 // Scenario definitions
 // ──────────────────────────────────────────────────────────────────────────────
 const SCENARIO_A_STEPS      = [100, 1000, 5000, 10000, 20000];
-const SCENARIO_B_STEPS      = [100, 1000, 5000];
+const SCENARIO_B_STEPS      = [100, 1000, 5000, 10000, 20000, 50000];
 const SCENARIO_B_PARTITIONS = 100;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -130,6 +131,14 @@ function rmrf(dir) {
 function elapsed(start) {
     const [s, ns] = process.hrtime(start);
     return s * 1e3 + ns / 1e6;
+}
+
+function openStorage(storage) {
+    return new Promise((resolve) => storage.open(resolve));
+}
+
+function manifestFile(dataDir) {
+    return path.join(dataDir, '.bench.manifest.json');
 }
 
 function makeStorageConfig(dataDir, partitioner) {
@@ -171,10 +180,10 @@ function estimateFds(numPartitions, numIndexes) {
  * @param {number} numIndexes
  * @param {number} docsPerPartition
  */
-function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition) {
+async function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition) {
     const partitioner = (doc) => String(doc.partitionId);
     const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
-    storage.open();
+    await openStorage(storage);
 
     // Register all secondary indexes once. With matcherProperties this remains
     // O(1) index selection on write.
@@ -191,6 +200,9 @@ function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition) {
     }
     storage.flush();
     storage.close();
+    if (!fs.existsSync(manifestFile(dataDir))) {
+        throw new Error('Storage close() returned before writing the startup manifest.');
+    }
 }
 
 /**
@@ -382,7 +394,7 @@ for (const numPartitions of SCENARIO_A_STEPS) {
         `  [${numPartitions}p / ${numIndexes}idx / ${totalDocs} docs] populate … `
     );
     const tPop = Date.now();
-    populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition);
+    await populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition);
     process.stdout.write(`${Date.now() - tPop} ms | `);
 
     const startup_ms  = await measureStartup(dataDir, numIndexes);
@@ -436,7 +448,7 @@ for (const numIndexes of SCENARIO_B_STEPS) {
         ` (${docsPerPartition}/p)] populate … `
     );
     const tPop = Date.now();
-    populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition);
+    await populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition);
     process.stdout.write(`${Date.now() - tPop} ms | `);
 
     const startup_ms  = await measureStartup(dataDir, numIndexes);
