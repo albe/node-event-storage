@@ -398,6 +398,19 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * Register a secondary index discovered during startup scans before notifying listeners.
+     *
+     * @protected
+     * @param {string} name
+     */
+    registerFoundIndex(name) {
+        if (!(name in this.secondaryIndexes)) {
+            this.openIndex(name);
+        }
+        this.emit('index-created', name);
+    }
+
+    /**
      * Reconstruct a WritableIndex from a manifest entry without opening the file.
      * The manifestData option lets ReadableIndex.open() restore state from the manifest
      * instead of reading from disk.

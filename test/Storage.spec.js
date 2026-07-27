@@ -1750,6 +1750,34 @@ describe('Storage', function() {
 
     describe('manifest restore', function() {
 
+        it('registers scanned secondary indexes before emitting index-created', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.ensureIndex('foo', { type: 'foo' });
+                storage.write({ type: 'foo', value: 1 });
+                storage.flush();
+                const manifestFile = storage.manifestFile;
+                storage.close();
+                fs.removeSync(manifestFile);
+
+                storage = createStorage();
+                let sawIndexCreated = false;
+                storage.once('index-created', (name) => {
+                    sawIndexCreated = true;
+                    expect(name).to.be('foo');
+                    expect(storage.secondaryIndexes.foo).to.not.be(undefined);
+                    expect(storage.openIndex('foo')).to.be(storage.secondaryIndexes.foo.index);
+                });
+                storage.open(() => {
+                    expect(sawIndexCreated).to.be(true);
+                    expect(storage.secondaryIndexes.foo).to.not.be(undefined);
+                    expect(storage.secondaryIndexes.foo.index.length).to.be(1);
+                    expect(storage.indexMatcher.matchers.get('foo')).to.eql({ type: 'foo' });
+                    done();
+                });
+            });
+        });
+
         it('keeps secondary index length virtualized until entries are read', function(done) {
             storage = createStorage();
             storage.open(() => {

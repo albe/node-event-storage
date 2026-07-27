@@ -170,7 +170,7 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Scan partitions and secondary index files; emit 'index-created' for each found index.
+     * Scan partitions and secondary index files; register each found index.
      * @param {function} done Called when both scans finish.
      */
     scanFiles(done) {
@@ -193,7 +193,7 @@ class ReadableStorage extends events.EventEmitter {
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
                 if (!(name in this.secondaryIndexes)) {
-                    this.emit('index-created', name);
+                    this.registerFoundIndex(name);
                 }
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
@@ -202,6 +202,16 @@ class ReadableStorage extends events.EventEmitter {
                 done();
             });
         });
+    }
+
+    /**
+     * Register a secondary index discovered while scanning the index directory.
+     *
+     * @protected
+     * @param {string} name
+     */
+    registerFoundIndex(name) {
+        this.emit('index-created', name);
     }
 
     /**
