@@ -404,9 +404,7 @@ class WritableStorage extends ReadableStorage {
      * @param {string} name
      */
     registerFoundIndex(name) {
-        if (!(name in this.secondaryIndexes)) {
-            this.openIndex(name);
-        }
+        this.openIndex(name);
         this.emit('index-created', name);
     }
 
