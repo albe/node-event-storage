@@ -185,7 +185,6 @@ class WritableStorage extends ReadableStorage {
      */
     checkTornWrites() {
         const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
-        let hasPrimaryTruncation = false;
 
         if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
             // Phase 2: remove all documents at or beyond the torn-write boundary from each partition.
@@ -203,14 +202,12 @@ class WritableStorage extends ReadableStorage {
 
             // Reindex to fill in any missing complete-document entries.
             this.reindex(this.index.length);
-            hasPrimaryTruncation = true;
         } else if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
             // No torn writes, but the index is lagging — repair it.
             this.reindex(this.index.length);
         }
 
         this.forEachPartition(partition => partition.close());
-        return hasPrimaryTruncation;
     }
 
     /**
@@ -363,12 +360,11 @@ class WritableStorage extends ReadableStorage {
         }
         try {
             const manifest = fs.readFileSync(this.manifestFile, 'utf8');
-            const match = manifest.match(/^(.*),\s*"hmac"\s*:\s*"([^"]+)"\s*}\s*$/s);
-            if (!match) {
+            const parts = this.splitManifestBodyAndHmac(manifest);
+            if (!parts) {
                 return null;
             }
-            const body = match[1] + '}';
-            const hmac = match[2];
+            const { body, hmac } = parts;
             if (hmac !== this.hmac(body)) {
                 return null;
             }
@@ -380,6 +376,66 @@ class WritableStorage extends ReadableStorage {
         } catch {
             return null;
         }
+    }
+
+    /**
+     * Split the raw manifest text into the original JSON body and trailing HMAC property.
+     * The property is always written last, so a reverse scan can recover the exact body bytes
+     * without regexes or re-serializing the parsed object.
+     *
+     * @private
+     * @param {string} manifest
+     * @returns {{ body: string, hmac: string }|null}
+     */
+    splitManifestBodyAndHmac(manifest) {
+        let cursor = manifest.length - 1;
+        while (cursor >= 0 && /\s/.test(manifest[cursor])) cursor--;
+        if (cursor < 0 || manifest[cursor] !== '}') {
+            return null;
+        }
+        const closingBraceIndex = cursor;
+
+        cursor--;
+        while (cursor >= 0 && /\s/.test(manifest[cursor])) cursor--;
+        if (cursor < 0 || manifest[cursor] !== '"') {
+            return null;
+        }
+        const valueEnd = cursor;
+
+        const valueStart = manifest.lastIndexOf('"', valueEnd - 1);
+        if (valueStart < 0) {
+            return null;
+        }
+        const hmac = manifest.slice(valueStart + 1, valueEnd);
+
+        cursor = valueStart - 1;
+        while (cursor >= 0 && /\s/.test(manifest[cursor])) cursor--;
+        if (cursor < 0 || manifest[cursor] !== ':') {
+            return null;
+        }
+
+        cursor--;
+        while (cursor >= 0 && /\s/.test(manifest[cursor])) cursor--;
+        if (cursor < 0 || manifest[cursor] !== '"') {
+            return null;
+        }
+        const keyEnd = cursor;
+
+        const keyStart = manifest.lastIndexOf('"', keyEnd - 1);
+        if (keyStart < 0 || manifest.slice(keyStart + 1, keyEnd) !== 'hmac') {
+            return null;
+        }
+
+        cursor = keyStart - 1;
+        while (cursor >= 0 && /\s/.test(manifest[cursor])) cursor--;
+        if (cursor < 0 || manifest[cursor] !== ',') {
+            return null;
+        }
+
+        return {
+            body: manifest.slice(0, cursor) + manifest.slice(closingBraceIndex, closingBraceIndex + 1),
+            hmac
+        };
     }
 
     /**
