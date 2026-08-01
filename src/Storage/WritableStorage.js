@@ -63,7 +63,6 @@ class WritableStorage extends ReadableStorage {
         this._lockMode = config.lock;
         this.partitioner = config.partitioner;
         this.partitionIds = {};
-        this.needsSecondaryIndexTruncationCheck = false;
     }
 
     /**
@@ -114,7 +113,7 @@ class WritableStorage extends ReadableStorage {
 
         const onOpen = needsRepair
             ? () => {
-                this.needsSecondaryIndexTruncationCheck = this.checkTornWrites();
+                this.checkTornWrites();
                 callback?.();
             }
             : callback;
@@ -198,7 +197,6 @@ class WritableStorage extends ReadableStorage {
             // Truncate all indexes to the torn-write boundary.
             this.index.open();
             this.index.truncate(lastValidSequenceNumber);
-            /* c8 ignore next */
             this.forEachWritableSecondaryIndex(index => {
                 index.truncate(index.find(lastValidSequenceNumber));
             });
@@ -364,15 +362,21 @@ class WritableStorage extends ReadableStorage {
             return null;
         }
         try {
-            const raw = JSON.parse(fs.readFileSync(this.manifestFile, 'utf8'));
+            const manifest = fs.readFileSync(this.manifestFile, 'utf8');
+            const match = manifest.match(/^(.*),\s*"hmac"\s*:\s*"([^"]+)"\s*}\s*$/s);
+            if (!match) {
+                return null;
+            }
+            const body = match[1] + '}';
+            const hmac = match[2];
+            if (hmac !== this.hmac(body)) {
+                return null;
+            }
+            const raw = JSON.parse(body);
             if (!raw || raw.version !== 1 || !raw.indexes) {
                 return null;
             }
-            const { hmac, ...body } = raw;
-            if (hmac !== this.hmac(JSON.stringify(body))) {
-                return null;
-            }
-            return raw;
+            return { ...raw, hmac };
         } catch {
             return null;
         }
@@ -701,28 +705,6 @@ class WritableStorage extends ReadableStorage {
         this.forEachWritableSecondaryIndex(index => {
             index.truncate(index.find(after));
         });
-    }
-
-    /**
-     * @inheritDoc
-     * Check for stale entries before releasing the file descriptor.
-     * Stale entries can be present when checkTornWrites() truncated the primary
-     * index before this secondary index was loaded into memory.
-     *
-     * @protected
-     * @param {WritableIndex} index
-     */
-    afterRegisterSecondaryIndex(index) {
-        if (!this.needsSecondaryIndexTruncationCheck) {
-            super.afterRegisterSecondaryIndex(index);
-            return;
-        }
-        const lastEntry = index.lastEntry;
-        if (lastEntry !== false && lastEntry.number > this.index.length) {
-            // Secondary index is ahead of primary: truncate stale entries.
-            index.truncate(index.find(this.index.length));
-        }
-        super.afterRegisterSecondaryIndex(index);
     }
 
     /**

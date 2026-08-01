@@ -61,6 +61,8 @@ EventStore  →  Storage  →  Partition (append-only data files)
 - **`initialized` three-state**: `null` = not started, `false` = scan in progress, `true` = scan done. Re-opens after `close()` are synchronous.
 - **`open(callback)` hook** — fires after `openIndexes()` and before `'opened'`. Used by `WritableStorage` for torn-write repair.
 - **LOCK_RECLAIM in `open()`** — orphaned lock removal lives in `WritableStorage.open()`, directly before `lock()`; torn-write repair runs via the `open(callback)` hook.
+- **Manifest HMAC verification hashes the raw manifest body text** — avoid parsing and re-serializing the full manifest just to validate integrity; startup can verify first and parse once.
+- **Recovery truncates secondary indexes inside the repair run itself** — do not defer torn-write cleanup to later `openIndex()` calls, or a safe close/reopen can preserve stale secondary tails that were never opened during recovery.
 - **EventStore `initialize()`** — register `storage.on('index-created', ...)` *before* calling `storage.open()`.
 - **Watcher singleton key includes watch options** — do not share one `DirectoryWatcher` across different `fs.watch` option sets (notably recursive vs non-recursive), or read-only/file watchers can miss events.
 - **ReadOnlyStorage watcher filenames may contain leading directories** — normalize watched filenames to the storage-relative segment (starting at `<storageFile>...`) so nested index roots (e.g. `streams/`) and hierarchical stream paths both resolve correctly.

@@ -1133,6 +1133,43 @@ describe('Storage', function() {
             crashedStorage.locked = false;
         });
 
+        it('repairs secondary indexes during LOCK_RECLAIM recovery', function(done) {
+            const crashedStorage = new Storage({ dataDirectory });
+            refs.push(crashedStorage);
+            crashedStorage.open();
+            crashedStorage.ensureIndex('all-docs', { foo: { $gte: 1 } });
+            for (let i = 1; i <= 5; i++) {
+                crashedStorage.write({ foo: i });
+            }
+            crashedStorage.flush();
+
+            const partitionName = path.join(dataDirectory, 'storage');
+            const fd = fs.openSync(partitionName, 'r+');
+            const stat = fs.fstatSync(fd);
+            fs.ftruncateSync(fd, stat.size - 8);
+            fs.closeSync(fd);
+
+            crashedStorage.index.close();
+            crashedStorage.forEachSecondaryIndex(index => index.close());
+            crashedStorage.forEachPartition(partition => partition.close());
+
+            const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
+            refs.push(repairedStorage);
+            repairedStorage.once('opened', () => {
+                expect(repairedStorage.secondaryIndexes['all-docs'].index.length).to.be(4);
+                repairedStorage.close();
+
+                storage = createStorage();
+                storage.once('opened', () => {
+                    expect(storage.openIndex('all-docs').length).to.be(4);
+                    done();
+                });
+                storage.open();
+            });
+            repairedStorage.open();
+            crashedStorage.locked = false;
+        });
+
     });
 
     describe('matches', function() {
@@ -1773,6 +1810,34 @@ describe('Storage', function() {
                     expect(storage.secondaryIndexes.foo).to.not.be(undefined);
                     expect(storage.secondaryIndexes.foo.index.length).to.be(1);
                     expect(storage.indexMatcher.matchers.get('foo')).to.eql({ type: 'foo' });
+                    done();
+                });
+            });
+        });
+
+        it('accepts a valid reformatted manifest without falling back to scanFiles', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.ensureIndex('foo', { type: 'foo' });
+                storage.write({ type: 'foo', value: 1 });
+                storage.flush();
+                storage.close();
+
+                const manifest = JSON.parse(fs.readFileSync(storage.manifestFile, 'utf8'));
+                const body = JSON.stringify({
+                    version: manifest.version,
+                    partitions: manifest.partitions,
+                    indexes: manifest.indexes
+                }, null, 2);
+                const rewrittenManifest = body.slice(0, -1) + ',\n  "hmac": "' + storage.hmac(body) + '"\n}';
+                fs.writeFileSync(storage.manifestFile, rewrittenManifest);
+
+                storage = createStorage();
+                storage.scanFiles = () => {
+                    throw new Error('scanFiles should not run when the manifest HMAC is valid.');
+                };
+                storage.open(() => {
+                    expect(storage.secondaryIndexes.foo.index.length).to.be(1);
                     done();
                 });
             });

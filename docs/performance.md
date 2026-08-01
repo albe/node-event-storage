@@ -52,7 +52,7 @@ Read latency is dominated by the per-document partition seek and is largely flat
 
 On a clean shutdown path, startup uses the persisted manifest: partitions and secondary-index metadata are restored from one manifest read instead of opening every index file to read headers.
 
-Secondary indexes are still registered at startup, but their file descriptors are released immediately and reopened lazily on first real index access. This keeps startup fd pressure and heap pressure lower when thousands of indexes exist.
+On that manifest fast path, secondary indexes are registered from the manifest metadata alone and their files stay unopened until the first real index access.
 
 When startup enters crash-recovery mode (`LOCK_RECLAIM` after torn-write repair), the manifest fast path is bypassed and the store falls back to the full scan/rebuild path.
 
