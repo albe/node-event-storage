@@ -12,12 +12,12 @@
  *     One secondary index per partition (N indexes for N partitions).
  *
  *   Scenario B – fixed partitions (100), growing index count
- *     Size steps: 100 / 1000 / 5000 indexes
+ *     Size steps: 100 / 1000 / 5000 / 10000 / 20000 / 50000 indexes
  *     20 documents per index are guaranteed across the 100 partitions.
  *
  * Metrics collected at each size step
- *   - startup_ms   – time to open a pre-populated storage, including scanning
- *                    the data directory for all partition files plus opening all
+ *   - startup_ms   – time to reopen a pre-populated storage after a successful
+ *                    close() wrote the startup manifest, plus opening all
  *                    secondary index files one by one.
  *   - write_ms_op  – average ms per write() call (100-op sample), with all N
  *                    secondary indexes registered so every write checks all N
@@ -47,20 +47,18 @@
  *    20 000 partitions creates ≈ 40 001 files in a single directory.
  *
  * 3. Population strategy (secondary indexes)
- *    Secondary index files are created as empty shell files (metadata header
- *    only, no historical data) during the setup phase.  This keeps population
- *    time O(docs + indexes) instead of the quadratic O(docs × indexes) that
- *    results from using Storage.ensureIndex(…, reindex=true) for each index.
- *    The write benchmark still measures the full O(N) per-write cost because
- *    every write() call iterates all N registered secondary-index matchers to
- *    find the matching one.  In a real application that starts fresh (no
- *    historical events), the behaviour is identical.
+ *    Secondary indexes are registered before writes so index files contain
+ *    actual entries. This makes startup measurements reflect real-world reopen
+ *    cost with non-empty index files. Population stays O(docs + indexes): each
+ *    write targets one index via matcherProperties-based O(1) discriminant
+ *    lookup, avoiding the quadratic O(docs × indexes) matcher scan.
  *
  * 4. Total data written (Scenario B)
  *    With M indexes and 20 docs/index, partition data grows to:
  *      100 partitions × ceil(M×20/100) docs/partition × ~200 bytes ≈
- *       100 / 1 000 indexes:  ~  2 MB /  20 MB   partition data
- *       5 000 indexes:        ~ 100 MB             partition data
+ *       100 / 1 000 indexes:  ~   2 MB /   20 MB   partition data
+ *       5 000 / 10 000:       ~ 100 MB /  200 MB   partition data
+ *       20 000 / 50 000:      ~ 400 MB /    1 GB   partition data
  *    Ensure the target --data-dir has enough free space.
  *
  * Usage:
@@ -103,9 +101,12 @@ const FD_LIMIT = getFdSoftLimit();
 // ──────────────────────────────────────────────────────────────────────────────
 // Constants
 // ──────────────────────────────────────────────────────────────────────────────
-const DOCS_PER_PARTITION = 20;
-const WRITE_SAMPLE_OPS   = 100;
-const READ_SAMPLE_OPS    = 100;
+const DOCS_PER_PARTITION        = 20;
+const WRITE_SAMPLE_OPS          = 100;
+const READ_SAMPLE_OPS           = 100;
+// Write partitions in sequential groups during population so the LRU partition
+// pool never needs to hold more than this many partitions open at once.
+const POPULATE_PARTITION_BATCH  = 500;
 
 // Pad the data field so the serialised JSON document is roughly 150 bytes.
 // Documents use a `stream` property so they align with the default `matcherProperties`
@@ -117,7 +118,7 @@ const APPROX_DOC_SIZE = JSON.stringify({ stream: 'x', partitionId: 0, data: DATA
 // Scenario definitions
 // ──────────────────────────────────────────────────────────────────────────────
 const SCENARIO_A_STEPS      = [100, 1000, 5000, 10000, 20000];
-const SCENARIO_B_STEPS      = [100, 1000, 5000];
+const SCENARIO_B_STEPS      = [100, 1000, 5000, 10000, 20000, 50000];
 const SCENARIO_B_PARTITIONS = 100;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -133,6 +134,14 @@ function rmrf(dir) {
 function elapsed(start) {
     const [s, ns] = process.hrtime(start);
     return s * 1e3 + ns / 1e6;
+}
+
+function openStorage(storage) {
+    return new Promise((resolve) => storage.open(resolve));
+}
+
+function manifestFile(dataDir) {
+    return path.join(dataDir, '.bench.manifest.json');
 }
 
 function makeStorageConfig(dataDir, partitioner) {
@@ -161,11 +170,9 @@ function estimateFds(numPartitions, numIndexes) {
 
 /**
  * Populate a fresh data directory:
- *   1. Write all documents directly to partitions (no secondary indexes
- *      registered → O(totalDocs) instead of O(totalDocs × numIndexes)).
- *   2. Create secondary index files as empty shells (header + matcher
- *      metadata, no historical entries) so that startup and write benchmarks
- *      see a realistic file-count overhead without quadratic setup time.
+ *   1. Register all secondary indexes once.
+ *   2. Write all documents so index files are non-empty and startup includes
+ *      realistic secondary-index load work.
  *
  * Documents use `stream` as the discriminant property (matching the default
  * `matcherProperties` config), so each index's object matcher { stream: i }
@@ -176,47 +183,60 @@ function estimateFds(numPartitions, numIndexes) {
  * @param {number} numIndexes
  * @param {number} docsPerPartition
  */
-function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition) {
+async function populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition) {
     const partitioner = (doc) => String(doc.partitionId);
     const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
-    storage.open();
+    await openStorage(storage);
 
-    // Write all documents with NO secondary indexes registered.
-    const totalDocs = numPartitions * docsPerPartition;
-    for (let seq = 0; seq < totalDocs; seq++) {
-        const p      = seq % numPartitions;
-        const typeId = numIndexes > 0 ? seq % numIndexes : 0;
-        storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
-    }
-    storage.flush();
-
-    // Create empty secondary index files (reindex=false → no doc scanning).
-    // This registers the file on disk so it can be opened in the benchmark.
+    // Register all secondary indexes once. With matcherProperties this remains
+    // O(1) index selection on write.
     for (let i = 0; i < numIndexes; i++) {
         storage.ensureIndex(`idx-${i}`, { stream: String(i) }, false);
     }
+
+    // Write all documents partition-by-partition in batches of POPULATE_PARTITION_BATCH.
+    // Sequential writes keep at most POPULATE_PARTITION_BATCH partitions in the LRU pool
+    // at any point, so the maxOpenPartitions cap does not cause close+reopen churn
+    // during the (non-critical) population phase.
+    for (let pBatch = 0; pBatch < numPartitions; pBatch += POPULATE_PARTITION_BATCH) {
+        const pEnd = Math.min(pBatch + POPULATE_PARTITION_BATCH, numPartitions);
+        for (let p = pBatch; p < pEnd; p++) {
+            for (let d = 0; d < docsPerPartition; d++) {
+                const typeId = numIndexes > 0 ? (p * docsPerPartition + d) % numIndexes : 0;
+                storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
+            }
+        }
+    }
     storage.flush();
     storage.close();
+    if (!fs.existsSync(manifestFile(dataDir))) {
+        throw new Error('Storage close() returned before writing the startup manifest.');
+    }
 }
 
 /**
- * Measure startup time: open a pre-populated storage (directory scan +
- * primary index load) and then explicitly open all secondary index files,
- * mirroring what a real application does on boot.
+ * Measure startup time: reopen a pre-populated storage after a successful
+ * close() persisted the startup manifest.  The clock stops as soon as the
+ * open() callback fires — at that point the storage is fully usable.  The
+ * openIndex calls that follow are outside the timed region; they serve only
+ * to keep index file descriptors warm for the subsequent write/read samples.
  *
- * @returns {number} Total elapsed milliseconds.
+ * @returns {Promise<number>} Total elapsed milliseconds.
  */
 function measureStartup(dataDir, numIndexes) {
-    const partitioner = (doc) => String(doc.partitionId);
-    const t0 = process.hrtime();
-    const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
-    storage.open();
-    for (let i = 0; i < numIndexes; i++) {
-        storage.openIndex(`idx-${i}`);
-    }
-    const ms = elapsed(t0);
-    storage.close();
-    return ms;
+    return new Promise((resolve) => {
+        const partitioner = (doc) => String(doc.partitionId);
+        const t0 = process.hrtime();
+        const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
+        storage.open(() => {
+            const ms = elapsed(t0);
+            for (let i = 0; i < numIndexes; i++) {
+                storage.openIndex(`idx-${i}`);
+            }
+            storage.close();
+            resolve(ms);
+        });
+    });
 }
 
 /**
@@ -226,53 +246,58 @@ function measureStartup(dataDir, numIndexes) {
  * With the discriminant lookup table, each write() resolves the matching index
  * via an O(1) Map lookup on the `stream` property instead of iterating all N matchers.
  *
- * @returns {number} Average ms per write() call.
+ * @returns {Promise<number>} Average ms per write() call.
  */
 function measureWrite(dataDir, numPartitions, numIndexes) {
-    const partitioner = (doc) => String(doc.partitionId);
-    const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
-    storage.open();
+    return new Promise((resolve) => {
+        const partitioner = (doc) => String(doc.partitionId);
+        const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
+        storage.open(() => {
+            // Open all secondary indexes outside the timed region.
+            for (let i = 0; i < numIndexes; i++) {
+                storage.openIndex(`idx-${i}`);
+            }
 
-    // Open all secondary indexes outside the timed region.
-    for (let i = 0; i < numIndexes; i++) {
-        storage.openIndex(`idx-${i}`);
-    }
+            const t0 = process.hrtime();
+            for (let i = 0; i < WRITE_SAMPLE_OPS; i++) {
+                const p      = i % numPartitions;
+                const typeId = numIndexes > 0 ? i % numIndexes : 0;
+                storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
+            }
+            storage.flush();
+            const ms = elapsed(t0);
 
-    const t0 = process.hrtime();
-    for (let i = 0; i < WRITE_SAMPLE_OPS; i++) {
-        const p      = i % numPartitions;
-        const typeId = numIndexes > 0 ? i % numIndexes : 0;
-        storage.write({ stream: String(typeId), partitionId: p, data: DATA_PAD, ts: Date.now() });
-    }
-    storage.flush();
-    const ms = elapsed(t0);
-
-    storage.close();
-    return ms / WRITE_SAMPLE_OPS;
+            storage.close();
+            resolve(ms / WRITE_SAMPLE_OPS);
+        });
+    });
 }
 
 /**
  * Measure read performance using evenly-spread positions in the primary index.
+ * Waits for the full directory scan so all partition handles are registered.
  *
- * @returns {number} Average ms per read() call.
+ * @returns {Promise<number>} Average ms per read() call.
  */
 function measureRead(dataDir) {
-    const partitioner = (doc) => String(doc.partitionId);
-    const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
-    storage.open();
+    return new Promise((resolve) => {
+        const partitioner = (doc) => String(doc.partitionId);
+        const storage = new Storage('bench', makeStorageConfig(dataDir, partitioner));
+        storage.open(() => {
+            const length = storage.length;
+            const step   = Math.max(1, Math.floor(length / READ_SAMPLE_OPS));
 
-    const length = storage.length;
-    const step   = Math.max(1, Math.floor(length / READ_SAMPLE_OPS));
+            const t0 = process.hrtime();
+            for (let i = 0; i < READ_SAMPLE_OPS; i++) {
+                const pos = ((i * step) % length) + 1;
+                storage.read(pos);
+            }
+            const ms = elapsed(t0);
 
-    const t0 = process.hrtime();
-    for (let i = 0; i < READ_SAMPLE_OPS; i++) {
-        const pos = ((i * step) % length) + 1;
-        storage.read(pos);
-    }
-    const ms = elapsed(t0);
-
-    storage.close();
-    return ms / READ_SAMPLE_OPS;
+            storage.close();
+            resolve(ms / READ_SAMPLE_OPS);
+        });
+    });
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -352,6 +377,8 @@ console.log(`Write-sample ops: ${WRITE_SAMPLE_OPS}   Read-sample ops: ${READ_SAM
 
 fs.mkdirSync(BASE_DIR, { recursive: true });
 
+(async () => {
+
 // ─── Scenario A ──────────────────────────────────────────────────────────────
 console.log('\n== Scenario A: growing partitions (1 index per partition) ==');
 const scenarioAResults = [];
@@ -378,16 +405,16 @@ for (const numPartitions of SCENARIO_A_STEPS) {
         `  [${numPartitions}p / ${numIndexes}idx / ${totalDocs} docs] populate … `
     );
     const tPop = Date.now();
-    populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition);
+    await populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition);
     process.stdout.write(`${Date.now() - tPop} ms | `);
 
-    const startup_ms  = measureStartup(dataDir, numIndexes);
+    const startup_ms  = await measureStartup(dataDir, numIndexes);
     process.stdout.write(`startup ${fmtMs(startup_ms)} ms | `);
 
-    const write_ms_op = measureWrite(dataDir, numPartitions, numIndexes);
+    const write_ms_op = await measureWrite(dataDir, numPartitions, numIndexes);
     process.stdout.write(`write ${fmtMs(write_ms_op)} ms/op | `);
 
-    const read_ms_op  = measureRead(dataDir);
+    const read_ms_op  = await measureRead(dataDir);
     process.stdout.write(`read ${fmtMs(read_ms_op)} ms/op\n`);
 
     scenarioAResults.push({ size: numPartitions, startup_ms, write_ms_op, read_ms_op });
@@ -432,16 +459,16 @@ for (const numIndexes of SCENARIO_B_STEPS) {
         ` (${docsPerPartition}/p)] populate … `
     );
     const tPop = Date.now();
-    populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition);
+    await populateStorage(dataDir, numPartitions, numIndexes, docsPerPartition);
     process.stdout.write(`${Date.now() - tPop} ms | `);
 
-    const startup_ms  = measureStartup(dataDir, numIndexes);
+    const startup_ms  = await measureStartup(dataDir, numIndexes);
     process.stdout.write(`startup ${fmtMs(startup_ms)} ms | `);
 
-    const write_ms_op = measureWrite(dataDir, numPartitions, numIndexes);
+    const write_ms_op = await measureWrite(dataDir, numPartitions, numIndexes);
     process.stdout.write(`write ${fmtMs(write_ms_op)} ms/op | `);
 
-    const read_ms_op  = measureRead(dataDir);
+    const read_ms_op  = await measureRead(dataDir);
     process.stdout.write(`read ${fmtMs(read_ms_op)} ms/op\n`);
 
     scenarioBResults.push({ size: numIndexes, startup_ms, write_ms_op, read_ms_op });
@@ -456,3 +483,5 @@ printTable(
 );
 
 console.log('\nDone.');
+
+})();

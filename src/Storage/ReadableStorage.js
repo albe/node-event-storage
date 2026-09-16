@@ -170,7 +170,7 @@ class ReadableStorage extends events.EventEmitter {
     }
 
     /**
-     * Scan partitions and secondary index files; emit 'index-created' for each found index.
+     * Scan partitions and secondary index files; register each found index.
      * @param {function} done Called when both scans finish.
      */
     scanFiles(done) {
@@ -193,7 +193,7 @@ class ReadableStorage extends events.EventEmitter {
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
                 if (!(name in this.secondaryIndexes)) {
-                    this.emit('index-created', name);
+                    this.registerFoundIndex(name);
                 }
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
@@ -202,6 +202,16 @@ class ReadableStorage extends events.EventEmitter {
                 done();
             });
         });
+    }
+
+    /**
+     * Register a secondary index discovered while scanning the index directory.
+     *
+     * @protected
+     * @param {string} name
+     */
+    registerFoundIndex(name) {
+        this.emit('index-created', name);
     }
 
     /**
@@ -440,8 +450,18 @@ class ReadableStorage extends events.EventEmitter {
         // Register the actual stored matcher (may have been reconstructed from metadata by WritableStorage.createIndex).
         this.indexMatcher.add(name, this.secondaryIndexes[name].matcher);
 
-        index.open();
+        this.afterRegisterSecondaryIndex(index);
         return index;
+    }
+
+    /**
+     * Called after a secondary index has been opened and registered via openIndex().
+     * No-op in the base class; WritableStorage overrides this to check for stale entries.
+     *
+     * @protected
+     * @param {ReadableIndex} index
+     */
+    afterRegisterSecondaryIndex(index) { // eslint-disable-line no-unused-vars
     }
 
     /**

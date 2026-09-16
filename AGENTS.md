@@ -20,6 +20,7 @@ Always try to use available tools through the MCP servers, which should provide 
 - **Pre-compile over per-call dispatch**: if a descriptor or configuration object is known at setup time, compile it into closures or lookup structures once rather than re-interpreting it on every hot-path call. The gain compounds with call frequency (e.g. building operator closures once per matcher object instead of running `Object.entries` + switch per document).
 - **WeakMap for caching derived state on user objects**: prefer `WeakMap` over Symbol properties or plain properties to attach computed state keyed on user-supplied objects — avoids mutation, works on frozen objects, and is GC-friendly. On the hot path use `cache.get()` directly rather than `has()` + `get()` to avoid a double lookup.
 - **Pass cheap prefilter results as hints to expensive scans**: when a cheap pass (e.g. `Buffer.indexOf`) already locates a candidate position, carry that result forward as a hint to the costlier depth- or context-aware pass rather than letting it re-scan from the start. Eliminates a full O(n) scan on every call.
+- **Virtualize known lengths instead of pre-allocating sparse arrays**: when startup metadata already carries collection size (e.g. secondary index entry counts), keep an explicit length field and lazily fill cache entries on demand. Avoids large sparse-array allocations and reduces startup heap pressure.
 - **Custom implementations only when benchmarks justify the complexity**: a hand-rolled solution may edge out a standard library call by 10–15 %, but the maintenance cost is rarely worth it unless the gain is substantial and measurable at realistic data sizes (e.g. a custom numeric parser vs. `JSON.parse` with try/catch).
 - **Prefer a flag on a shared helper over near-duplicate functions**: when two functions differ only in a single behavioral detail, add a boolean parameter to the shared function rather than maintaining two near-identical copies. Keep the flag's semantics explicit and limited to one axis of variation.
 - **Inline single-use hot-path helpers once the surrounding flow becomes simpler**: if a helper is only called from one place and its logic can be embedded while keeping the caller below the local complexity/return-count budget, prefer the inline version. Removes call indirection and often makes the hot path easier to read as straight-line pseudo-code.
@@ -60,6 +61,8 @@ EventStore  →  Storage  →  Partition (append-only data files)
 - **`initialized` three-state**: `null` = not started, `false` = scan in progress, `true` = scan done. Re-opens after `close()` are synchronous.
 - **`open(callback)` hook** — fires after `openIndexes()` and before `'opened'`. Used by `WritableStorage` for torn-write repair.
 - **LOCK_RECLAIM in `open()`** — orphaned lock removal lives in `WritableStorage.open()`, directly before `lock()`; torn-write repair runs via the `open(callback)` hook.
+- **Manifest HMAC verification hashes the raw manifest body text** — split the trailing `"hmac"` property off the raw file bytes with a cheap reverse scan, not regexes or full-object re-serialization, so startup can verify first and parse once.
+- **Recovery truncates secondary indexes inside the repair run itself** — do not defer torn-write cleanup to later `openIndex()` calls, or a safe close/reopen can preserve stale secondary tails that were never opened during recovery.
 - **EventStore `initialize()`** — register `storage.on('index-created', ...)` *before* calling `storage.open()`.
 - **Watcher singleton key includes watch options** — do not share one `DirectoryWatcher` across different `fs.watch` option sets (notably recursive vs non-recursive), or read-only/file watchers can miss events.
 - **ReadOnlyStorage watcher filenames may contain leading directories** — normalize watched filenames to the storage-relative segment (starting at `<storageFile>...`) so nested index roots (e.g. `streams/`) and hierarchical stream paths both resolve correctly.
@@ -101,7 +104,6 @@ No build step; source is plain ESM consumed directly. No linter configured.
 | `src/Clock.js`                          | Monotonic microsecond clock |
 | `src/IndexEntry.js`                     | Index record serialization |
 | `src/IndexMatcher.js`                   | O(1) discriminant-based matcher classification |
-| `src/PartitionPool.js`                  | LRU-evicting pool for open partition handles |
 | `src/Watcher.js` / `src/WatchesFile.js` | Ref-counting directory watcher and mixin |
 | `src/utils/fsUtil.js`                   | `ensureDirectory`, `scanForFiles` |
 | `src/utils/apiHelpers.js`               | API-shaping helpers for top-level and internal class APIs (argument normalization, stream-name mapping, predicate/raw/revision coercion) |
