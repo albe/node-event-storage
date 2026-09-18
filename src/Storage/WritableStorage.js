@@ -9,6 +9,7 @@ import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../u
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
+const STARTUP_STATE_PERSIST_DELAY_MS = 10;
 
 const LOCK_RECLAIM = 0x1;
 const LOCK_THROW = 0x2;
@@ -63,6 +64,7 @@ class WritableStorage extends ReadableStorage {
         this._lockMode = config.lock;
         this.partitioner = config.partitioner;
         this.partitionIds = {};
+        this.startupStatePersistTimer = null;
     }
 
     /**
@@ -82,9 +84,13 @@ class WritableStorage extends ReadableStorage {
             return true;
         }
 
+        const finishOpen = () => {
+            callback?.();
+            this.scheduleStartupStatePersist();
+        };
         const onOpen = needsRepair
-            ? () => { this.checkTornWrites(); callback?.(); }
-            : callback;
+            ? () => { this.checkTornWrites(); finishOpen(); }
+            : finishOpen;
         return super.open(onOpen);
     }
 
@@ -257,6 +263,11 @@ class WritableStorage extends ReadableStorage {
      * Unlocks the storage, then delegates to the parent close().
      */
     close() {
+        this.persistStartupStateSnapshot();
+        if (this.startupStatePersistTimer) {
+            clearTimeout(this.startupStatePersistTimer);
+            this.startupStatePersistTimer = null;
+        }
         if (this.locked) {
             this.unlock();
         }
@@ -336,6 +347,7 @@ class WritableStorage extends ReadableStorage {
         this.ensurePartitionDirectory(partitionName);
         this.partitions[partitionId] = this.createPartition(partitionName, partitionConfig);
         this.emit('partition-created', partitionId);
+        this.onKnownStateChanged();
     }
 
     /**
@@ -431,7 +443,7 @@ class WritableStorage extends ReadableStorage {
 
         this.secondaryIndexes[name] = { index, matcher };
         this.indexMatcher.add(name, matcher);
-        this.emit('index-created', name);
+        this.registerKnownIndex(name);
         return index;
     }
 
@@ -568,6 +580,43 @@ class WritableStorage extends ReadableStorage {
      */
     createPartition(name, config = {}) {
         return new WritablePartition(name, { ...config, fileHandlePool: this.partitionHandlePool });
+    }
+
+    /**
+     * Persist the known partitions/indexes snapshot asynchronously, debounced.
+     *
+     * @protected
+     */
+    onKnownStateChanged() {
+        this.scheduleStartupStatePersist();
+    }
+
+    /**
+     * Schedule snapshot persistence for startup-state optimization.
+     * @private
+     */
+    scheduleStartupStatePersist() {
+        if (this.startupStatePersistTimer || this.initialized !== true) {
+            return;
+        }
+        this.startupStatePersistTimer = setTimeout(() => {
+            this.startupStatePersistTimer = null;
+            this.persistStartupStateSnapshot();
+        }, STARTUP_STATE_PERSIST_DELAY_MS);
+    }
+
+    /**
+     * Persist currently known partitions/indexes.
+     * Best-effort optimization: failures are intentionally ignored.
+     *
+     * @private
+     */
+    persistStartupStateSnapshot() {
+        try {
+            fs.writeFileSync(this.startupStateFile, JSON.stringify(this.buildStartupStateSnapshot()));
+        } catch (e) {
+            // Startup snapshots are a best-effort performance optimization.
+        }
     }
 
 }
