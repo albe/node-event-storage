@@ -394,6 +394,32 @@ describe('EventStore', function() {
             });
         });
 
+        it('hydrates known streams only once on first commit', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.on('ready', () => {
+                eventstore.storage.registerKnownIndex('stream-missing', false);
+
+                let knownStreamOpenAttempts = 0;
+                const originalOpenIndex = eventstore.storage.openIndex.bind(eventstore.storage);
+                eventstore.storage.openIndex = (name, matcher) => {
+                    if (name === 'stream-missing') {
+                        knownStreamOpenAttempts++;
+                    }
+                    return originalOpenIndex(name, matcher);
+                };
+
+                eventstore.commit('foo', [{ value: 1 }], () => {
+                    eventstore.commit('foo', [{ value: 2 }], () => {
+                        expect(knownStreamOpenAttempts).to.be(1);
+                        done();
+                    });
+                });
+            });
+        });
+
         it('invokes callback when finished with optimistic concurrency check', function(done) {
             eventstore = new EventStore({
                 storageDirectory
