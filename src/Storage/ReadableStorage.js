@@ -65,6 +65,7 @@ class ReadableStorage extends events.EventEmitter {
      */
     constructor(storageName = 'storage', config = {}) {
         super();
+        this.setMaxListeners(0);
         ({ name: storageName, options: config } = normalizeNamedCtorArgs(storageName, config));
 
         this.storageFile = storageName || 'storage';

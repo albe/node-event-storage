@@ -47,6 +47,7 @@ class ReadableIndex extends events.EventEmitter {
      */
     constructor(name = '.index', options = {}) {
         super();
+        this.setMaxListeners(0);
         ({ name, options } = normalizeNamedCtorArgs(name, options, '.index'));
         let defaults = {
             dataDirectory: '.',

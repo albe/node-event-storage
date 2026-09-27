@@ -46,6 +46,7 @@ class ReadablePartition extends events.EventEmitter {
      */
     constructor(name, config = {}) {
         super();
+        this.setMaxListeners(0);
         assert(typeof name === 'string' && name !== '', 'Must specify a partition name.');
 
         let defaults = {

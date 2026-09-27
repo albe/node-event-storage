@@ -229,6 +229,7 @@ class Watcher extends events.EventEmitter {
      */
     constructor(fileOrDirectory, fileFilter = null, options = null) {
         super();
+        this.setMaxListeners(0);
         const watchOptions = Object.assign({ recursive: true }, options);
         delete watchOptions.rootDirectory;
         this.relativePrefixes = [];

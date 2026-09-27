@@ -105,6 +105,7 @@ class EventStore extends events.EventEmitter {
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
+        this.setMaxListeners(0);
         if (typeof storeName !== 'string') {
             config = storeName;
             storeName = 'eventstore';
