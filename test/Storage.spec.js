@@ -837,37 +837,6 @@ describe('Storage', function() {
             expect(index.length).to.be(3);
         });
 
-        it('repairs stale secondary index when opened after a primary index truncation', function() {
-            // Simulate the case where checkTornWrites() truncated the primary index before
-            // secondary indexes were loaded (e.g. after LOCK_RECLAIM on an unclean shutdown).
-            storage = createStorage();
-            storage.open();
-            // Write 10 documents and ensure a secondary index (matches even-numbered foo)
-            const totalDocuments = 10;
-            const truncateAt = 6; // simulated truncation point
-            const expectedSecondaryCount = Math.floor(truncateAt / 2); // even numbers in 1..truncateAt
-            storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
-            for (let i = 1; i <= totalDocuments; i++) {
-                storage.write({foo: i});
-            }
-            storage.flush();
-            storage.close();
-
-            // Re-open and truncate primary index directly (simulating checkTornWrites running
-            // before secondary indexes are loaded)
-            storage = createStorage();
-            storage.open();
-            storage.index.truncate(truncateAt); // truncate primary index without going through full truncate()
-            // Close without touching secondary index on disk
-            storage.index.flush();
-            storage.close();
-
-            // Re-open: openIndex() should detect the stale secondary index and repair it
-            storage = createStorage();
-            storage.open();
-            const repairedIndex = storage.openIndex('foobar');
-            expect(repairedIndex.length).to.be(expectedSecondaryCount); // only entries 2,4,6 are still valid
-        });
     });
 
     describe('checkTornWrites', function() {
@@ -1161,6 +1130,43 @@ describe('Storage', function() {
             });
             repairedStorage.open();
             // Prevent afterEach from trying to remove the now-gone lock file
+            crashedStorage.locked = false;
+        });
+
+        it('repairs secondary indexes during LOCK_RECLAIM recovery', function(done) {
+            const crashedStorage = new Storage({ dataDirectory });
+            refs.push(crashedStorage);
+            crashedStorage.open();
+            crashedStorage.ensureIndex('all-docs', { foo: { $gte: 1 } });
+            for (let i = 1; i <= 5; i++) {
+                crashedStorage.write({ foo: i });
+            }
+            crashedStorage.flush();
+
+            const partitionName = path.join(dataDirectory, 'storage');
+            const fd = fs.openSync(partitionName, 'r+');
+            const stat = fs.fstatSync(fd);
+            fs.ftruncateSync(fd, stat.size - 8);
+            fs.closeSync(fd);
+
+            crashedStorage.index.close();
+            crashedStorage.forEachSecondaryIndex(index => index.close());
+            crashedStorage.forEachPartition(partition => partition.close());
+
+            const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
+            refs.push(repairedStorage);
+            repairedStorage.once('opened', () => {
+                expect(repairedStorage.secondaryIndexes['all-docs'].index.length).to.be(4);
+                repairedStorage.close();
+
+                storage = createStorage();
+                storage.once('opened', () => {
+                    expect(storage.openIndex('all-docs').length).to.be(4);
+                    done();
+                });
+                storage.open();
+            });
+            repairedStorage.open();
             crashedStorage.locked = false;
         });
 
@@ -1777,6 +1783,117 @@ describe('Storage', function() {
             expect(() => storage.removeSecondaryIndex('nonexistent')).to.not.throwError();
         });
 
+    });
+
+    describe('manifest restore', function() {
+
+        it('registers scanned secondary indexes before emitting index-created', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.ensureIndex('foo', { type: 'foo' });
+                storage.write({ type: 'foo', value: 1 });
+                storage.flush();
+                const manifestFile = storage.manifestFile;
+                storage.close();
+                fs.removeSync(manifestFile);
+
+                storage = createStorage();
+                let sawIndexCreated = false;
+                storage.once('index-created', (name) => {
+                    sawIndexCreated = true;
+                    expect(name).to.be('foo');
+                    expect(storage.secondaryIndexes.foo).to.not.be(undefined);
+                    expect(storage.openIndex('foo')).to.be(storage.secondaryIndexes.foo.index);
+                });
+                storage.open(() => {
+                    expect(sawIndexCreated).to.be(true);
+                    expect(storage.secondaryIndexes.foo).to.not.be(undefined);
+                    expect(storage.secondaryIndexes.foo.index.length).to.be(1);
+                    expect(storage.indexMatcher.matchers.get('foo')).to.eql({ type: 'foo' });
+                    done();
+                });
+            });
+        });
+
+        it('accepts a valid reformatted manifest without falling back to scanFiles', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.ensureIndex('foo', { type: 'foo' });
+                storage.write({ type: 'foo', value: 1 });
+                storage.flush();
+                storage.close();
+
+                const manifest = JSON.parse(fs.readFileSync(storage.manifestFile, 'utf8'));
+                const body = JSON.stringify({
+                    version: manifest.version,
+                    partitions: manifest.partitions,
+                    indexes: manifest.indexes
+                }, null, 2);
+                const rewrittenManifest = body.slice(0, -1) + ',\n  "hmac": "' + storage.hmac(body) + '"\n}';
+                fs.writeFileSync(storage.manifestFile, rewrittenManifest);
+
+                storage = createStorage();
+                storage.scanFiles = () => {
+                    throw new Error('scanFiles should not run when the manifest HMAC is valid.');
+                };
+                storage.open(() => {
+                    expect(storage.secondaryIndexes.foo.index.length).to.be(1);
+                    done();
+                });
+            });
+        });
+
+        it('keeps secondary index length virtualized until entries are read', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.ensureIndex('foo', { type: 'foo' });
+                for (let i = 0; i < 5; i++) {
+                    storage.write({ type: 'foo', value: i });
+                }
+                storage.flush();
+                storage.close();
+
+                storage = createStorage();
+                storage.open(() => {
+                    const index = storage.openIndex('foo');
+
+                    expect(index.length).to.be(5);
+                    expect(index.data.length).to.be(0);
+
+                    const first = index.get(1);
+                    expect(first.number).to.be(1);
+                    expect(index.data.length).to.be(1);
+                    done();
+                });
+            });
+        });
+
+        it('appends to a manifest-restored secondary index with virtualized length', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.ensureIndex('foo', { type: 'foo' });
+                for (let i = 0; i < 3; i++) {
+                    storage.write({ type: 'foo', value: i });
+                }
+                storage.flush();
+                storage.close();
+
+                storage = createStorage();
+                storage.open(() => {
+                    const index = storage.openIndex('foo');
+                    expect(index.length).to.be(3);
+                    expect(index.data.length).to.be(0);
+
+                    storage.write({ type: 'foo', value: 99 });
+                    storage.flush();
+
+                    expect(index.length).to.be(4);
+                    expect(index.lastEntry.number).to.be(4);
+                    expect(storage.read(4, index)).to.eql({ type: 'foo', value: 99 });
+                    done();
+                });
+            });
+        });
     });
 
     describe('file handle pools', function() {

@@ -68,6 +68,7 @@ class ReadableIndex extends events.EventEmitter {
     initialize(options) {
         /* @type Array<Entry> */
         this.data = [];
+        this.entryCount = 0;
         this.opened = false;
         this.fileMode = 'r';
         this.fileHandlePool = options.fileHandlePool || new FileHandlePool();
@@ -80,6 +81,9 @@ class ReadableIndex extends events.EventEmitter {
             this.metadata = Object.assign({entryClass: options.EntryClass.name, entrySize: options.EntryClass.size}, options.metadata);
         }
         this.headerSize = 0;
+        // When set, open() restores state from this object instead of reading from disk.
+        // Used by WritableStorage to skip per-index file I/O on manifest-based startup.
+        this.manifestData = options.manifestData || null;
     }
 
     /**
@@ -103,7 +107,7 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {number}
      */
     get length() {
-        return this.data.length;
+        return this.entryCount;
     }
 
     /**
@@ -166,11 +170,22 @@ class ReadableIndex extends events.EventEmitter {
         if (this.opened) {
             return false;
         }
+
+        if (this.manifestData) {
+            this.opened = true;
+            this.readUntil = -1;
+            this.headerSize = this.manifestData.headerSize;
+            this.entryCount = this.manifestData.length;
+            this.manifestData = null;
+            return true;
+        }
+
         this.opened = this.getFileHandle() !== null;
 
         this.readUntil = -1;
 
         const length = this.readFileLength();
+        this.entryCount = length;
         if (length > 0) {
             this.data = new Array(length);
             // Read last item to get the index started
@@ -252,6 +267,7 @@ class ReadableIndex extends events.EventEmitter {
      */
     close() {
         this.data = [];
+        this.entryCount = 0;
         this.readUntil = -1;
         this.readBuffer.fill(0);
         this.fileHandlePool.evict(this, false);
