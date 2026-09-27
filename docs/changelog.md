@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.1
+
+- Emit `index-add` event on the `_all` stream, allowing consumers to listen for new events across all streams without needing to subscribe to each individual stream.
+- Set `maxListeners` to `0` on all `EventStore` instances to allow unlimited concurrent listeners (fixes `MaxListenersExceededWarning` when many consumers are connected)
+
 ## 1.4.0
 
 - **Breaking:** `fromStreams`/`query` no longer throws on non-existing streams; considers them empty.
