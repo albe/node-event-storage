@@ -39,6 +39,7 @@
     "src/JoinEventStream*.js",
     "src/Partition*.js",
     "src/Storage*.js",
+    "src/FileHandlePool.js",
     "src/Watcher*.js",
     "src/Clock*.js",
     "src/Index/*.js",
