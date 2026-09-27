@@ -292,6 +292,7 @@ class WritableStorage extends ReadableStorage {
                 return callback(indexPosition);
             }
         });
+        this.emit('index-add', '_all', this.index.length, document);
         return entry;
     }
 
