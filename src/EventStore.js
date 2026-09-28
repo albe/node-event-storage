@@ -3,7 +3,7 @@ import JoinEventStream from './JoinEventStream.js';
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
+import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM, IndexNotFoundError } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert } from './utils/util.js';
@@ -175,6 +175,9 @@ class EventStore extends events.EventEmitter {
         this.streamsDirectory = resolvePath(storageConfig.indexDirectory);
         this.storeName = storeName;
         this.consumers = new Map();
+        // Read-only stores never enter commit(), so no stream hydration pass is required.
+        // Writable stores defer hydration until the first write path.
+        this.knownStreamsHydrated = storageConfig.readOnly === true;
 
         const storage = storageConfig.readOnly === true
             ? new ReadOnlyStorage(storeName, storageConfig)
@@ -263,9 +266,17 @@ class EventStore extends events.EventEmitter {
             }
             return;
         }
-        const index = isClosed
-            ? this.storage.openReadonlyIndex(name)
-            : this.storage.openIndex(name);
+        let index;
+        try {
+            index = isClosed
+                ? this.storage.openReadonlyIndex(name)
+                : this.storage.openIndex(name);
+        } catch (error) {
+            if (error instanceof IndexNotFoundError) {
+                return;
+            }
+            throw error;
+        }
         // deepcode ignore PrototypePollutionFunctionParams: streams is a Map
         this.streams[streamName] = { index, closed: isClosed };
         this.emit('stream-available', streamName);
@@ -484,6 +495,21 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
+     * Delay hydrating known stream indexes until a write path is entered to keep startup fast,
+     * while still guaranteeing existing stream versions/matchers are loaded before commit logic runs.
+     * @private
+     */
+    ensureKnownStreamsHydratedForWrite() {
+        if (this.knownStreamsHydrated) {
+            return;
+        }
+        this.knownStreamsHydrated = true;
+        for (const indexName of this.storage.knownIndexes) {
+            this.registerStream(indexName);
+        }
+    }
+
+    /**
      * Commit a list of events for the given stream name, which is expected to be at the given version.
      * Note that the events committed may still appear in other streams too - the given stream name is only
      * relevant for optimistic concurrency checks with the given expected version.
@@ -502,6 +528,7 @@ class EventStore extends events.EventEmitter {
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
         assert(typeof streamName === 'string' && streamName !== '', 'Must specify a stream name for commit.');
         assert(typeof events !== 'undefined' && events !== null, 'No events specified for commit.');
+        this.ensureKnownStreamsHydratedForWrite();
 
         ({ events, expectedVersion, metadata, callback } = fixCommitArgumentTypes(
             events,
