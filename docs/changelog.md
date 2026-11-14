@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix consumer state with non-ASCII characters being truncated on persist, which reset the consumer to its initial state and position 0 after a restart.
+
 ## 1.4.1
 
 - Emit `index-add` event on the `_all` stream, allowing consumers to listen for new events across all streams without needing to subscribe to each individual stream.
