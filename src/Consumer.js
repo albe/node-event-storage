@@ -163,9 +163,9 @@ class Consumer extends stream.Readable {
         }
         this.persisting = setImmediate(() => {
             const consumerState = JSON.stringify(this.state);
-            const consumerData = Buffer.allocUnsafe(4 + consumerState.length);
+            const consumerData = Buffer.allocUnsafe(4 + Buffer.byteLength(consumerState, 'utf8'));
             consumerData.writeInt32LE(this.position, 0);
-            consumerData.write(consumerState, 4, consumerState.length, 'utf-8');
+            consumerData.write(consumerState, 4, 'utf8');
             const tmpFile = this.fileName + '.' + this.position;
             this.persisting = null;
             /* c8 ignore next 3 */
