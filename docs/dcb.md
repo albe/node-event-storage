@@ -114,12 +114,14 @@ stream.forEach((event, metadata) => {
 Commit the resulting events together with the condition captured in Step 2:
 
 ```javascript
+import { OptimisticConcurrencyError } from 'event-storage';
+
 try {
     store.commit('enrollment-...', [
         { type: 'StudentSubscribedToCourse', courseId: 'jdsj4', studentId: 'gfh3j', tags: ['course/jdsj4', 'student/gfh3j'] }
     ], condition);
 } catch (e) {
-    if (e instanceof EventStore.OptimisticConcurrencyError) {
+    if (e instanceof OptimisticConcurrencyError) {
         // A conflicting event appeared between query and commit — replay and retry
     }
 }

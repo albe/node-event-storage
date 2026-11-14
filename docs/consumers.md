@@ -19,7 +19,7 @@ consumer.on('data', (event) => {
 
 ## Exactly-Once Semantics
 
-Since version 0.6, consumers can persist their state alongside their position. Because state and position are updated in the same transaction, the state always reflects exactly the events processed — even across restarts.
+Since version 0.6, consumers can persist their state alongside their position. State and position are written together into one file that is replaced atomically (write to a temporary file, then rename), so the persisted state always reflects exactly the events processed — even across restarts. The file is not `fsync`ed, so after an OS crash or power loss the consumer may fall back to an earlier persisted state; it never sees a state that does not match its position.
 
 ```javascript
 const consumer = eventstore.getConsumer('orders', 'orders-projection');

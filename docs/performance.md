@@ -151,8 +151,10 @@ Matcher objects used in `bench/bench-matcher.js`:
 
 Observed median delta (`raw` vs `obj`) from the benchmark run:
 
-At **ANY match ratio**, raw is roughly **40–55% slower** than object mode.
-At **ANY match ratio**, raw is roughly **50–60% faster** than object mode when deserializing the event first.
+Across all tested match ratios:
+
+- Compared with matching **already deserialized** objects, raw matching is roughly **40–55% slower**.
+- Compared with **deserializing first and then** matching the object, raw matching is roughly **50–60% faster**.
 
 Interpretation:
 

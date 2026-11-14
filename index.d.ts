@@ -22,9 +22,23 @@ export interface StreamInfo {
     closed?: boolean;
 }
 
+/** Stream selector tree: depth 0 = OR, depth 1 = AND, depth 2 = OR, ... */
+export type StreamSelector = Array<string | StreamSelector>;
+
+export interface DcbQueryItem {
+    types?: string[];
+    tags?: string[];
+}
+
+export interface DcbQuery {
+    items: DcbQueryItem[];
+}
+
+export type CommitCallback = (commit: Record<string, unknown>) => void;
+
 export class CommitCondition {
-    constructor(types: string[], matcher: EventMatcher | null | undefined, noneMatchAfter: number, raw?: boolean);
-    types: string[];
+    constructor(selector: StreamSelector | string, matcher: EventMatcher | null | undefined, noneMatchAfter: number, raw?: boolean);
+    selector: StreamSelector | string;
     matcher: EventMatcher | null;
     raw: boolean;
     noneMatchAfter: number;
@@ -74,7 +88,7 @@ export class Consumer extends Readable {
     start(): this;
     stop(): void;
     reset(initialState?: Record<string, unknown>, startFrom?: number): this;
-    setState(state: Record<string, unknown>): this;
+    setState(state: Record<string, unknown> | ((state: Record<string, unknown>) => Record<string, unknown>), persist?: boolean): void;
 }
 
 export class Storage extends EventEmitter {
@@ -117,19 +131,22 @@ export class EventStore extends EventEmitter {
     getStreamVersion(streamName: string): number;
     getEventStream(streamName: string, minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream | false;
     getAllEvents(minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
-    fromStreams(streamName: string, streamNames: string[], minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
+    fromStreams(streamName: string, streamNames: StreamSelector, minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
     getEventStreamForCategory(categoryName: string, minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
 
-    query(types: string[], matcher?: EventMatcher | null, minRevision?: number, raw?: boolean): { stream: EventStream; condition: CommitCondition };
+    query(selectorOrDcbQuery: StreamSelector | DcbQuery, matcher?: EventMatcher | null, minRevision?: number, raw?: boolean): { stream: EventStream; condition: CommitCondition };
     createEventStream(streamName: string, matcher: EventMatcher, reindex?: boolean): EventStream;
 
     commit(
         streamName: string,
-        events: any[],
-        expectedVersion: number | CommitCondition,
-        metadata: Record<string, unknown>,
-        callback: (error: Error | null, commit?: Record<string, unknown>) => void
+        events: any | any[],
+        expectedVersion?: number | CommitCondition,
+        metadata?: Record<string, unknown>,
+        callback?: CommitCallback
     ): void;
+    commit(streamName: string, events: any | any[], expectedVersion: number | CommitCondition, callback: CommitCallback): void;
+    commit(streamName: string, events: any | any[], metadata: Record<string, unknown>, callback?: CommitCallback): void;
+    commit(streamName: string, events: any | any[], callback: CommitCallback): void;
 
     getConsumer(streamName: string, identifier: string, initialState?: Record<string, unknown>, since?: number): Consumer;
     getConsumer(identifier: string): Consumer | null;

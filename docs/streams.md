@@ -7,16 +7,17 @@ An event stream is an ordered sequence of events that can be iterated. Every str
 Events are appended to a named stream with `commit`. The stream is created automatically the first time you write to it.
 
 ```javascript
+import { ExpectedVersion } from 'event-storage';
+
 eventstore.commit('user-123', [
     { type: 'UserRegistered', email: 'alice@example.com' },
     { type: 'ProfileCompleted', name: 'Alice' }
-], EventStore.ExpectedVersion.EmptyStream, (err) => {
-    if (err) throw err;
-    console.log('Committed!');
+], ExpectedVersion.EmptyStream, (commit) => {
+    console.log('Committed and flushed:', commit.commitId);
 });
 ```
 
-A single `commit` call is the unit of atomicity: either all events in the array are persisted or none of them are.
+A single `commit` call is the unit of atomicity: either all events in the array are persisted or none of them are. Validation and concurrency errors are thrown synchronously from `commit()`; the callback only runs after a successful flush and receives the `commit` object.
 
 ### Optimistic Concurrency
 
@@ -31,6 +32,8 @@ The pattern is:
 If another writer has committed in the meantime the version will have advanced and an `OptimisticConcurrencyError` will be thrown. You then replay state and retry.
 
 ```javascript
+import { OptimisticConcurrencyError } from 'event-storage';
+
 const model = new MyAggregateModel();
 const stream = eventstore.getEventStream('order-42');
 stream.forEach((event) => model.apply(event));
@@ -43,7 +46,7 @@ try {
         // success
     });
 } catch (e) {
-    if (e instanceof EventStore.OptimisticConcurrencyError) {
+    if (e instanceof OptimisticConcurrencyError) {
         // Replay and retry, or return a conflict error to the caller
     }
 }
@@ -53,8 +56,8 @@ try {
 
 | Value | Meaning |
 |-------|---------|
-| `EventStore.ExpectedVersion.Any` (`-1`) | No check — always succeeds (default). |
-| `EventStore.ExpectedVersion.EmptyStream` (`0`) | Stream must not exist yet. |
+| `ExpectedVersion.Any` (`-1`) | No check — always succeeds (default). |
+| `ExpectedVersion.EmptyStream` (`0`) | Stream must not exist yet. |
 | Positive integer | Stream must be at exactly that version. |
 
 ## Reading Streams
@@ -226,9 +229,15 @@ You can create derived read streams that contain only a filtered subset of anoth
 
 ```javascript
 // Only events whose type is 'FooHappened' or 'BarHappened'
-const projectionStream = eventstore.createStream(
+const projectionStream = eventstore.createEventStream(
     'my-projection-stream',
-    (event) => ['FooHappened', 'BarHappened'].includes(event.type)
+    (document) => ['FooHappened', 'BarHappened'].includes(document.payload.type)
+);
+
+// The same with an object matcher (preferred: routed in O(1) on writes and not eval'd on load)
+const sameStream = eventstore.createEventStream(
+    'my-projection-stream-2',
+    { payload: { type: ['FooHappened', 'BarHappened'] } }
 );
 
 for (const event of projectionStream) {
@@ -236,7 +245,7 @@ for (const event of projectionStream) {
 }
 ```
 
-The matcher function is persisted in the index file so you do not need to re-specify it when reopening the store. See [Security](advanced.md#security) for how the matcher is protected against tampering.
+A function matcher receives the stored document `{ stream, payload, metadata }`, not just the event payload. The matcher is persisted in the index file so you do not need to re-specify it when reopening the store. See [Security](advanced.md#security) for how the matcher is protected against tampering.
 
 ## Joining Streams
 
@@ -275,7 +284,7 @@ eventstore.fromStreams('selector-stream', [
 
 The union and intersection are computed over index entry ranges before any document is read — no events are deserialized that do not belong to the result set.
 
-The result is not persisted and cannot be used with consumers. For frequently-needed joins, create a permanent derived stream with `createStream` instead.
+The result is not persisted and cannot be used with consumers. For frequently-needed joins, create a permanent derived stream with `createEventStream` instead.
 
 ## Stream Categories
 
@@ -293,7 +302,7 @@ for (const event of allUsersStream) {
 }
 ```
 
-If you already created a dedicated stream for the category (e.g. via `createStream`), that stream is returned directly.
+If you already created a dedicated stream for the category (e.g. via `createEventStream`), that stream is returned directly.
 
 This layout stores every stream as a flat file in the data directory:
 
@@ -445,11 +454,11 @@ stream.forEach((event, metadata, streamName) => {
 });
 ```
 
-You can also pass extra metadata through when committing, and it will be merged into this object:
+You can also pass extra metadata through when committing, and it will be merged into this object. The metadata argument comes before the callback:
 
 ```javascript
-eventstore.commit('my-stream', [{ type: 'Foo' }], EventStore.ExpectedVersion.Any, () => {}, {
+eventstore.commit('my-stream', [{ type: 'Foo' }], ExpectedVersion.Any, {
     causationId: 'cmd-123',
     correlationId: 'req-456'
-});
+}, (commit) => {});
 ```
