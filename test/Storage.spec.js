@@ -128,6 +128,103 @@ describe('Storage', function() {
 
     });
 
+    describe('partition id collisions', function() {
+
+        // Both names hash to the same 32-bit partition id, independent of the storage name.
+        const first = 'product-5829';
+        const second = 'account-8444';
+
+        function partitionerFor(doc) {
+            return doc.partition;
+        }
+
+        it('stores colliding partitions in separate files', function() {
+            storage = createStorage({ partitioner: partitionerFor });
+            storage.open();
+
+            storage.write({ partition: first, foo: 1 });
+            storage.write({ partition: second, foo: 2 });
+
+            expect(storage.read(1)).to.eql({ partition: first, foo: 1 });
+            expect(storage.read(2)).to.eql({ partition: second, foo: 2 });
+            storage.close();
+
+            expect(fs.existsSync(path.join(dataDirectory, 'storage.' + first))).to.be(true);
+            expect(fs.existsSync(path.join(dataDirectory, 'storage.' + second))).to.be(false);
+            expect(fs.existsSync(path.join(dataDirectory, 'storage.' + second + '~1'))).to.be(true);
+        });
+
+        it('resolves colliding partitions to the same files after reopening', function(done) {
+            storage = createStorage({ partitioner: partitionerFor });
+            storage.open();
+            storage.write({ partition: first, foo: 1 });
+            storage.write({ partition: second, foo: 2 });
+            storage.close();
+
+            storage = createStorage({ partitioner: partitionerFor });
+            storage.once('opened', () => {
+                storage.write({ partition: second, foo: 3 });
+                storage.write({ partition: first, foo: 4 });
+                storage.close();
+
+                const files = fs.readdirSync(dataDirectory).filter(file => file.startsWith('storage.') && !file.endsWith('.lock') && !file.endsWith('.index'));
+                expect(files.sort()).to.eql(['storage.' + second + '~1', 'storage.' + first].sort());
+
+                const reader = createReader();
+                reader.once('opened', () => {
+                    expect(reader.read(1)).to.eql({ partition: first, foo: 1 });
+                    expect(reader.read(2)).to.eql({ partition: second, foo: 2 });
+                    expect(reader.read(3)).to.eql({ partition: second, foo: 3 });
+                    expect(reader.read(4)).to.eql({ partition: first, foo: 4 });
+                    done();
+                });
+                reader.open();
+            });
+            storage.open();
+        });
+
+        it('keeps documents readable that were written into a colliding partition before', function(done) {
+            // Simulates a store written by an older version, where the second partition shared the first one's file.
+            storage = createStorage({ partitioner: (doc) => doc.partition === second ? first : doc.partition });
+            storage.open();
+            storage.write({ partition: first, foo: 1 });
+            storage.write({ partition: second, foo: 2 });
+            storage.close();
+
+            storage = createStorage({ partitioner: partitionerFor });
+            storage.once('opened', () => {
+                storage.write({ partition: second, foo: 3 });
+                expect(storage.read(1)).to.eql({ partition: first, foo: 1 });
+                expect(storage.read(2)).to.eql({ partition: second, foo: 2 });
+                expect(storage.read(3)).to.eql({ partition: second, foo: 3 });
+                expect(fs.existsSync(path.join(dataDirectory, 'storage.' + second + '~1'))).to.be(true);
+                done();
+            });
+            storage.open();
+        });
+
+        it('passes the partition name to the metadata function for a probed partition', function() {
+            storage = createStorage({ partitioner: partitionerFor, metadata: (name) => ({ name }) });
+            storage.open();
+            const seen = [];
+            storage.preCommit((document, partitionMetadata) => seen.push(partitionMetadata.name));
+
+            storage.write({ partition: first });
+            storage.write({ partition: second });
+
+            expect(seen).to.eql([first, second]);
+        });
+
+        it('rejects new partition names that end in a probe suffix', function() {
+            storage = createStorage({ partitioner: partitionerFor });
+            storage.open();
+
+            expect(() => storage.write({ partition: 'foo~1' })).to.throwError(/reserved/);
+            expect(storage.write({ partition: 'foo~bar' })).to.be(1);
+        });
+
+    });
+
     describe('length', function() {
 
         it('returns the amount of documents in the storage', function(done) {

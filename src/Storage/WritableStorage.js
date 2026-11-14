@@ -8,6 +8,9 @@ import { ensureDirectory } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
+const PARTITION_PROBE_SEPARATOR = '~';
+const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
+
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
 const LOCK_RECLAIM = 0x1;
@@ -309,10 +312,33 @@ class WritableStorage extends ReadableStorage {
         this.on('preCommit', hook);
     }
 
-    getPartitionIdForName(partitionShortName, partitionName) {
-        const partitionId = this.partitionIds[partitionShortName] ?? WritablePartition.idFor(partitionName);
-        this.partitionIds[partitionShortName] = partitionId;
-        return partitionId;
+    /**
+     * Resolve the id and file name of the partition for a partition name.
+     *
+     * A partition id is the 32-bit hash of the partition file name, both here and when readers scan the files.
+     * If that id is already taken by a partition with a different file name (hash collision), the partition is
+     * stored in the file `<partitionName>~1` instead, and so on. The probing is deterministic, so the same
+     * name always resolves to the same file, and readers derive the same id from the file name.
+     *
+     * @private
+     * @param {string} partitionShortName The partition name returned by the partitioner.
+     * @param {string} partitionName The partition file name without probe suffix.
+     * @returns {{ id: number, fileName: string }}
+     */
+    resolvePartition(partitionShortName, partitionName) {
+        const cached = this.partitionIds[partitionShortName];
+        if (cached !== undefined) {
+            return cached;
+        }
+        let fileName = partitionName;
+        let partitionId = WritablePartition.idFor(fileName);
+        for (let probe = 1; partitionId in this.partitions && this.partitions[partitionId].name !== fileName; probe++) {
+            fileName = partitionName + PARTITION_PROBE_SEPARATOR + probe;
+            partitionId = WritablePartition.idFor(fileName);
+        }
+        const resolved = { id: partitionId, fileName };
+        this.partitionIds[partitionShortName] = resolved;
+        return resolved;
     }
 
     buildPartitionConfig(partitionShortName) {
@@ -333,6 +359,8 @@ class WritableStorage extends ReadableStorage {
         if (partitionId in this.partitions) {
             return;
         }
+        assert(!PROBE_SUFFIX_PATTERN.test(partitionShortName),
+            `Invalid partition name "${partitionShortName}". Names ending in "${PARTITION_PROBE_SEPARATOR}<number>" are reserved.`);
         const partitionConfig = this.buildPartitionConfig(partitionShortName);
         this.ensurePartitionDirectory(partitionName);
         this.partitions[partitionId] = this.createPartition(partitionName, partitionConfig);
@@ -355,8 +383,9 @@ class WritableStorage extends ReadableStorage {
         if (typeof partitionIdentifier === 'string') {
             const partitionShortName = partitionIdentifier;
             const partitionName = this.storageFile + (partitionIdentifier.length ? '.' + partitionIdentifier : '');
-            partitionIdentifier = this.getPartitionIdForName(partitionShortName, partitionName);
-            this.createNamedPartition(partitionIdentifier, partitionName, partitionShortName);
+            const { id, fileName } = this.resolvePartition(partitionShortName, partitionName);
+            this.createNamedPartition(id, fileName, partitionShortName);
+            partitionIdentifier = id;
         }
         return super.getPartition(partitionIdentifier);
     }
