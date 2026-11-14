@@ -4,11 +4,13 @@ Consumers are durable, event-driven listeners attached to a stream. They impleme
 
 ## Basic Usage
 
+Each `'data'` event delivers the stored document `{ stream, payload, metadata }`; the event itself is `payload`.
+
 ```javascript
 const consumer = eventstore.getConsumer('my-stream', 'my-consumer-id');
 
-consumer.on('data', (event) => {
-    console.log('Received event:', event.type);
+consumer.on('data', ({ payload, metadata }) => {
+    console.log('Received event:', payload.type, 'at stream version', metadata.streamVersion);
     // position is advanced automatically after this handler returns
 });
 ```
@@ -24,11 +26,11 @@ Consumers can persist their state alongside their position. State and position a
 ```javascript
 const consumer = eventstore.getConsumer('orders', 'orders-projection');
 
-consumer.on('data', (event) => {
+consumer.on('data', ({ payload }) => {
     // setState atomically advances position + persists state
     consumer.setState((state) => ({
         ...state,
-        totalRevenue: state.totalRevenue + (event.amount || 0)
+        totalRevenue: state.totalRevenue + (payload.amount || 0)
     }));
 });
 ```
@@ -49,10 +51,10 @@ const consumer = eventstore.getConsumer('my-stream', 'my-consumer', {
     lastSeen: null
 });
 
-consumer.on('data', (event) => {
+consumer.on('data', ({ payload }) => {
     consumer.setState((state) => ({
         count: state.count + 1,
-        lastSeen: event.type
+        lastSeen: payload.type
     }));
 });
 ```
@@ -89,8 +91,8 @@ A *consistency guard* (what DDD calls an *Aggregate*) is a consumer of its own s
 const guard = eventstore.getConsumer('order-42', 'order-42-guard');
 
 // Apply events to keep the guard's state up-to-date
-guard.on('data', (event) => {
-    guard.setState((state) => applyEvent(state, event));
+guard.on('data', ({ payload }) => {
+    guard.setState((state) => applyEvent(state, payload));
 });
 
 // Validate a command against the current state
@@ -119,31 +121,4 @@ How this works:
 > consumer.setState(newState, this.position % 20 === 0); // snapshot every 20 events
 > ```
 
-## Read-Only Mode
-
-Open the store in read-only mode to create consumers that run in a **separate process** from the writer:
-
-```javascript
-import { EventStore } from 'event-storage';
-
-const eventstore = new EventStore('my-event-store', {
-    storageDirectory: './data',
-    readOnly: true
-});
-
-eventstore.on('ready', () => {
-    const consumer = eventstore.getConsumer('my-stream', 'my-consumer');
-    consumer.on('data', (event) => {
-        // build a read model, serve it via HTTP, etc.
-    });
-});
-```
-
-- Writes are prevented; all reads and consumers work normally.
-- The read-only store watches the underlying files and automatically picks up changes written by the writer process.
-- Multiple read-only instances can run simultaneously.
-- This enables a multi-process projection pattern: one writer process + N reader processes building different projections.
-
-If you need to hand the *current* process over from writing to reading during a deployment, use `EventStore.makeReadOnly([callback])` instead of starting a new read-only instance.
-
-> In principle this also works across machines sharing a common filesystem (e.g. NFS), as long as the Node.js file watcher functions correctly on that filesystem.
+To run consumers in a separate process from the writer, see [Multiple Processes](multi-process.md).

@@ -7,87 +7,42 @@
 
 # node-event-storage
 
-An optimized embedded event store for modern Node.js, written in ES6.
+An embedded event store for Node.js: events are appended to plain files in your application's data directory, with no database server to run.
+
+```bash
+npm install event-storage
+```
 
 ---
 
-## Why node-event-storage?
+## Where do you want to start?
 
-The only other embedded event store for Node.js is [node-eventstore](https://github.com/adrai/node-eventstore). It is a solid project, but has several limitations:
+**New to event sourcing?** Read [Event Sourcing in 5 Minutes](event-sourcing.md) for the core ideas and good references, then [When to Use node-event-storage](when-to-use.md) and the [Getting Started](getting-started.md) tutorial.
 
-- Its API is built entirely around Event Streams, requiring you to load a full stream before committing a new event — impractical for client applications that restart frequently.
-- It supports many existing databases as backends (MongoDB, NeDB, …), but none of them are optimized for event storage workloads.
-- The embeddable backends (TingoDB, NeDB) do not persist indexes, making initial load very slow at scale.
-- It stores publishing metadata inside events, which causes data mutations.
-- Events are fixed to one stream; there is no way to create overlapping streams for projections.
-
-**node-event-storage** addresses all of these by building an event store from first principles, optimized exclusively for append-only workloads.
+**Evaluating the implementation?** Start with [Guarantees](guarantees.md) (atomicity, consistency, isolation, durability, crash recovery), then [Implementation Architecture](architecture.md) and [Performance](performance.md). Each page explains the mechanism behind its claims.
 
 ---
 
-## Use Cases
+## A good fit
 
-- Event-sourced desktop applications built with Electron or NW.js.
-- Small event-sourced single-server applications that need near-optimal write performance.
-- Queryable log storage.
+- Event-sourced desktop applications (Electron, NW.js) and single-server applications.
+- One writer process, optionally with several reader processes for projections.
+- Many small streams (thousands to millions) and fast sequential reads.
+- Queryable append-only log storage.
 
----
+## Not a good fit
 
-## Design Goals
-
-### Single-node scalability
-
-- Opening or writing to an existing store with millions of events must be as fast as an empty store.
-- Write performance must not be constrained by locking or distributed-transaction costs (a single writer process per store).
-- Read performance is optimized for sequential forward reads from arbitrary positions.
-- Any number of concurrent readers are supported (typically one per projection).
-- Thousands of streams can be created without significant memory or CPU overhead.
-- Replaying a stream costs no more than visiting every event in it — no full table scan.
-
-### Consistency
-
-- Writes to a single stream guarantee consistency: every write sees the state immediately before it.
-- Reads from a stream are always consistent: repeatable-read isolation with read-committed for read-only stores and read-uncommitted (read-your-own-writes) for writers.
-
-### Simplicity
-
-- The architecture is intentionally minimal.
-- Creating new derived streams from existing data is achievable with standard language constructs.
-
-### Non-Goals
-
-- Distributed storage or distributed transactions.
-- Network API.
-- Atomic writes to several streams in one commit (a commit always targets one write stream; consistency checks across streams are possible with [DCB conditions](dcb.md)).
-- An ad-hoc query language — reads are range scans over stream indexes, optionally combined with AND/OR selectors and filtered by matchers.
+- Several application servers writing to the same store, or replication across machines.
+- Access from other languages or over the network (see [event-storage-http](https://github.com/albe/node-event-storage-http) for an HTTP layer).
+- Ad-hoc queries over event contents beyond stream selection and matchers.
 
 ---
 
-## How Append-Only Storage Changes Everything
+## Documentation map
 
-Traditional databases do a great deal of work that event stores simply do not need:
-
-| Property | Traditional DB | node-event-storage |
-|----------|---------------|--------------------|
-| Write-ahead log | Required | Not needed — the store **is** the log |
-| Write speed | Constrained by WAL + locks | As fast as sequential disk I/O |
-| Single writer | Optional | Required (per stream) |
-| Durability overhead | High | Configurable (trade off for performance) |
-| Read isolation | Complex MVCC | Natural — append-only means reads never see partial writes |
-| Indexes | B+-Tree / fractal trees | Simple file-position lists — cheap to create in high numbers |
-| Backups | Database-specific tooling | `rsync` or file copy |
-
----
-
-## Documentation Structure
-
-| Page | Contents |
-|------|----------|
-| [Getting Started](getting-started.md) | Installation, constructor options, first commit & read |
-| [Event Streams](streams.md) | Writing, reading, raw mode, object matcher syntax, revision ranges, fluent API, joining, categories, metadata |
-| [Dynamic Consistency Boundaries](dcb.md) | `typeAccessor`, query matchers, consistency tokens, and DCB workflow |
-| [Consumers](consumers.md) | At-least-once & exactly-once delivery, state, consistency guards, read-only mode |
-| [Advanced Topics](advanced.md) | ACID details, reliability & crash-safety guarantees, storage config, partitioning, serialization, compression, security, access control |
-| [Performance](performance.md) | Write/read/startup benchmarks at scale, `matcherProperties` and `maxOpenPartitions` tuning guide |
-| [Implementation Architecture](architecture.md) | Source directory layout, component dependency diagram, and key technical decisions |
-| [API Reference](api.md) | Complete listing of all public constructors and methods for EventStore, EventStream, and Storage |
+| Section | Pages |
+|---------|-------|
+| Getting started | [Event Sourcing in 5 Minutes](event-sourcing.md), [When to Use](when-to-use.md), [Getting Started](getting-started.md) |
+| Guides | [Writing and Reading Events](reading-writing.md), [Organizing Streams](organizing-streams.md), [Matchers](matchers.md), [DCB](dcb.md), [Consumers](consumers.md), [Multiple Processes](multi-process.md), [Customization](customization.md), [Operations](operations.md) |
+| Guarantees and internals | [Guarantees](guarantees.md), [Implementation Architecture](architecture.md), [Performance](performance.md) |
+| Reference | [API](api.md), [Configuration](configuration.md), [Changelog](changelog.md), [Upgrading](upgrading/index.md) |
