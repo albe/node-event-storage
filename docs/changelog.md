@@ -1,5 +1,7 @@
 # Changelog
 
+Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation for a released version is available through the version selector on Read the Docs.
+
 ## 1.4.1
 
 - Emit `index-add` event on the `_all` stream, allowing consumers to listen for new events across all streams without needing to subscribe to each individual stream.

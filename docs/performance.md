@@ -72,7 +72,7 @@ new Storage('events', { matcherProperties: ['stream', 'payload.type'] });
 // Override when your documents use a different discriminant field
 new Storage('events', { matcherProperties: ['tenantId', 'eventType'] });
 
-// Disable — falls back to an O(N) scan (pre-v1 behaviour)
+// Disable — every write evaluates all registered matchers (O(N) scan)
 new Storage('events', { matcherProperties: [] });
 ```
 
@@ -97,7 +97,7 @@ new Storage('events', {
     maxOpenPartitions: 4096
 });
 
-// Disable the cap entirely (pre-v1 behaviour — one fd per partition, forever)
+// Disable the cap entirely — one fd per partition stays open until close()
 new Storage('events', {
     maxOpenPartitions: 0
 });

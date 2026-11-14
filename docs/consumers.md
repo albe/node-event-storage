@@ -19,7 +19,7 @@ consumer.on('data', (event) => {
 
 ## Exactly-Once Semantics
 
-Since version 0.6, consumers can persist their state alongside their position. State and position are written together into one file that is replaced atomically (write to a temporary file, then rename), so the persisted state always reflects exactly the events processed — even across restarts. The file is not `fsync`ed, so after an OS crash or power loss the consumer may fall back to an earlier persisted state; it never sees a state that does not match its position.
+Consumers can persist their state alongside their position. State and position are written together into one file that is replaced atomically (write to a temporary file, then rename), so the persisted state always reflects exactly the events processed — even across restarts. The file is not `fsync`ed, so after an OS crash or power loss the consumer may fall back to an earlier persisted state; it never sees a state that does not match its position.
 
 ```javascript
 const consumer = eventstore.getConsumer('orders', 'orders-projection');
@@ -35,7 +35,7 @@ consumer.on('data', (event) => {
 
 Whenever state is persisted the consumer emits a `'persisted'` event.
 
-> **Important:** Never mutate `consumer.state` directly — always use `setState()`. Since version 0.8 the state object is frozen to enforce this.
+> **Important:** Never mutate `consumer.state` directly — always use `setState()`. The state object is frozen to enforce this.
 
 > **Limitation:** Exactly-once applies only to operations you wrap together with the state update. For example, sending an email *and* persisting position cannot be made exactly-once without an external transaction coordinator.
 
@@ -59,7 +59,7 @@ consumer.on('data', (event) => {
 
 ## Updating State with a Function
 
-Since version 0.8 `setState` accepts either a new state object or a function that receives the current state:
+`setState` accepts either a new state object or a function that receives the current state:
 
 ```javascript
 // Pass a plain object

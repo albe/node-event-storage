@@ -117,7 +117,7 @@ Pass these options inside `config.storageConfig`:
 
 The storage maintains a global primary index that gives every event a monotonically increasing sequence number. This guarantees a consistent order when reading across multiple write streams (e.g. in joined streams or category streams).
 
-Since version 0.7 a monotonic clock stamp and an external sequence number are also stored with each event, so a consistent global order can be reconstructed without the global index if needed.
+Each event additionally carries a monotonic clock stamp and its global sequence number in its binary header, so a consistent global order can be reconstructed without the global index if needed.
 
 ## Reindexing
 
