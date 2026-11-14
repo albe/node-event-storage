@@ -384,6 +384,23 @@ describe('Consumer', function() {
         storage.write({ type: 'Foobar', id: 1 });
     });
 
+    it('restores state with multi-byte characters after reopening', function(done) {
+        const state = { name: 'Müller', city: 'Zürich', note: '日本語 🚀' };
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.on('data', () => {
+            consumer.setState(state);
+            consumer.once('persisted', () => {
+                consumer = new Consumer(storage, 'foobar', 'consumer-1');
+                expect(consumer.state).to.eql(state);
+                expect(consumer.position).to.be(1);
+                done();
+            });
+            consumer.stop();
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+    });
+
     it('allows function argument in setState', function(done) {
         consumer = new Consumer(storage, 'foobar', 'consumer-1');
         consumer.on('data', (document) => {
