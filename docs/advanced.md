@@ -24,8 +24,10 @@ For optimal I/O, avoid limiting `maxWriteBufferDocuments` so that the buffer fil
 The append-only nature guarantees consistency for all successful writes. Torn writes (partial flushes caused by a crash) are detected on startup and truncated when the lock is reclaimed:
 
 ```javascript
+import { EventStore, LOCK_RECLAIM } from 'event-storage';
+
 const eventstore = new EventStore('my-event-store', {
-    storageConfig: { lock: EventStore.LOCK_RECLAIM }
+    storageConfig: { lock: LOCK_RECLAIM }
 });
 ```
 
@@ -101,13 +103,13 @@ Pass these options inside `config.storageConfig`:
 |--------|------|---------|-------------|
 | `dataDirectory` | `string` | `storageDirectory` | Where partition (event) files are stored. |
 | `indexDirectory` | `string` | `storageDirectory/streams` | Where index files are stored. |
-| `partitioner` | `function` | stream-per-event | `(document, sequenceNumber) => partitionName`. |
+| `partitioner` | `function` | one partition per stream | `(document, sequenceNumber) => partitionName`. `EventStore` uses `(document) => document.stream`; the bare `Storage` class defaults to a single partition. |
 | `serializer` | `object` | JSON | `{ serialize(doc), deserialize(string) }` — custom serialization. |
 | `writeBufferSize` | `number` | `16384` | Write-buffer size in bytes. |
 | `maxWriteBufferDocuments` | `number` | unlimited | Maximum events per write buffer. |
 | `syncOnFlush` | `boolean` | `false` | Call `fsync` on every flush. |
 | `dirtyReads` | `boolean` | `true` | Allow reading from the unflushed write buffer. |
-| `lock` | `symbol` | strict lock | Pass `EventStore.LOCK_RECLAIM` to reclaim stale locks and auto-repair indexes. |
+| `lock` | `LOCK_THROW` \| `LOCK_RECLAIM` | `LOCK_THROW` | Pass `LOCK_RECLAIM` to reclaim stale locks and auto-repair indexes. |
 | `hmacSecret` | `string` | `''` | Secret used to fingerprint persisted matcher functions (see [Security](#security)). |
 | `metadata` | `function` | — | `(partitionName) => object` — per-partition metadata (lower-level alternative to `config.streamMetadata`). |
 
@@ -138,7 +140,7 @@ With `LOCK_RECLAIM`, the store detects on startup that the primary index lags be
 ```javascript
 const eventstore = new EventStore('my-event-store', {
     storageDirectory: './data',
-    storageConfig: { lock: EventStore.LOCK_RECLAIM }
+    storageConfig: { lock: LOCK_RECLAIM }
 });
 
 eventstore.on('ready', () => {
@@ -166,15 +168,15 @@ node-event-storage is designed to survive hard process crashes (e.g. `SIGKILL`, 
 Two factors bound how many events can be lost in a crash:
 
 1. **Partition write buffer** — each stream buffers up to `writeBufferSize` bytes or `maxWriteBufferDocuments` events before flushing. With a 16 KB buffer and ~100-byte events, that is at most ~160 events per stream.
-2. **In-flight commit** — at most one commit's worth of events (bounded by `maxBatchSize`) may be torn.
+2. **In-flight commit** — at most one commit's worth of events (the number of events passed to that `commit()` call) may be torn.
 
 Index entries that were buffered but not yet flushed at the time of the crash are **not** lost: `LOCK_RECLAIM` automatically reindexes from the data files on the next open, making all on-disk events visible again.
 
 With the default settings and a single stream the worst-case data loss is roughly:
 
 ```
-max_loss ≈ (writeBufferSize / avg_event_size) + max_batch_size
-         ≈ 160 + batch_size   (for 100-byte events and a 16 KB write buffer)
+max_loss ≈ (writeBufferSize / avg_event_size) + events_per_commit
+         ≈ 160 + events_per_commit   (for 100-byte events and a 16 KB write buffer)
 ```
 
 ### The stress test
@@ -306,7 +308,7 @@ const eventstore = new EventStore('my-event-store', {
 
 ## Security
 
-Matcher functions passed to `createStream` are serialized into the index file and later `eval`'d on load for convenience (so you don't have to re-specify them every time). To prevent a tampered index file from executing arbitrary code, every persisted matcher is fingerprinted with an HMAC.
+Matcher functions passed to `createEventStream` are serialized into the index file and later `eval`'d on load for convenience (so you don't have to re-specify them every time). To prevent a tampered index file from executing arbitrary code, every persisted matcher is fingerprinted with an HMAC.
 
 **Always set a strong, random `hmacSecret` in production:**
 
@@ -318,13 +320,15 @@ const eventstore = new EventStore('my-event-store', {
 });
 ```
 
-Alternatively, always pass the matcher explicitly when creating a stream — the store will verify the supplied matcher matches the one stored in the index:
+Object matchers (e.g. `{ payload: { type: ['FooHappened', 'BarHappened'] } }`) are stored as JSON and never evaluated as code, so prefer them over function matchers for persisted streams.
+
+When working with the `Storage` class directly, you can also re-supply the matcher when opening an index; the storage then verifies it against the stored HMAC instead of evaluating the persisted source:
 
 ```javascript
-// Explicitly re-supply the matcher — the store verifies it matches
-const stream = eventstore.createEventStream(
-    'my-projection-stream',
-    (event) => ['FooHappened', 'BarHappened'].includes(event.type)
+// Explicitly re-supply the matcher — the storage verifies it matches
+const index = storage.openIndex(
+    'stream-my-projection-stream',
+    (document) => ['FooHappened', 'BarHappened'].includes(document.payload.type)
 );
 ```
 

@@ -38,7 +38,7 @@ The only other embedded event store for Node.js is [node-eventstore](https://git
 ### Single-node scalability
 
 - Opening or writing to an existing store with millions of events must be as fast as an empty store.
-- Write performance must not be constrained by locking or distributed-transaction costs (single writer per stream).
+- Write performance must not be constrained by locking or distributed-transaction costs (a single writer process per store).
 - Read performance is optimized for sequential forward reads from arbitrary positions.
 - Any number of concurrent readers are supported (typically one per projection).
 - Thousands of streams can be created without significant memory or CPU overhead.
@@ -58,8 +58,8 @@ The only other embedded event store for Node.js is [node-eventstore](https://git
 
 - Distributed storage or distributed transactions.
 - Network API.
-- Cross-stream transactions.
-- Arbitrary query capabilities — only sequential range scans per stream.
+- Atomic writes to several streams in one commit (a commit always targets one write stream; consistency checks across streams are possible with [DCB conditions](dcb.md)).
+- An ad-hoc query language — reads are range scans over stream indexes, optionally combined with AND/OR selectors and filtered by matchers.
 
 ---
 

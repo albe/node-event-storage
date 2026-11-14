@@ -61,8 +61,8 @@ eventstore.on('ready', () => {
 - **Append events** with optimistic concurrency via `commit(stream, events, expectedVersion, cb)`.
 - **Read streams** with `getEventStream()` and fluent options for revision/range/direction.
 - **Run cross-stream queries** with `query(types, matcher)` and commit with its returned `condition` for DCB.
-- **Build projections** with `fromStreams()` (joined streams) and `createStream()` for persistent filtered streams.
-- **Consume reliably** with `createConsumer()` for durable at-least-once (or exactly-once with state) processing.
+- **Build projections** with `fromStreams()` (joined streams) and `createEventStream()` for persistent filtered streams.
+- **Consume reliably** with `getConsumer()` for durable at-least-once (or exactly-once with state) processing.
 
 ## Key Features
 
@@ -110,7 +110,7 @@ See [Event Streams](https://node-event-storage.readthedocs.io/en/latest/streams/
 
 ```javascript
 const { stream, condition } = store.query(['OrderPlaced'], { payload: { customerId: 'cust-1' } });
-const hasOpenOrder = stream.some((event) => event.status === 'open');
+const hasOpenOrder = stream.events.some((event) => event.status === 'open');
 
 if (!hasOpenOrder) {
     store.commit('orders-cust-1', [{ type: 'OrderPlaced', customerId: 'cust-1' }], condition);

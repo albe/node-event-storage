@@ -34,6 +34,9 @@ new EventStore([storeName], [config])
 | `config.storageConfig` | `object` | `{}` | Options forwarded to the underlying `Storage` backend. |
 | `config.readOnly` | `boolean` | `false` | Mount the store in read-only mode. |
 | `config.streamMetadata` | `object\|function` | — | Metadata stored once per stream partition at creation time. Either a `{ streamName: metaObj }` map or a function `(streamName) => object`. |
+| `config.typeAccessor` | `string` | — | Dot-notation path to the event type (e.g. `'type'`). Maintains one stream per type value and enables `types` in `DcbQuery`. |
+| `config.tagsAccessor` | `string` | — | Dot-notation path to an array of tag strings. Maintains one stream `tags/<tag>` per tag value and enables `tags` in `DcbQuery`. |
+| `config.streamSources` | `Array<{ path, nameBuilder }>` | `[]` | Generic automatically maintained stream indexes; see [Dynamic Stream Indexing](advanced.md#dynamic-stream-indexing). |
 
 ### Methods
 
@@ -74,9 +77,29 @@ Append one or more events to a stream.
 | `events` | `object\|Array<object>` | — | Event or array of events to commit. |
 | `expectedVersion` | `number` | `ExpectedVersion.Any` | Optimistic concurrency version check. Use `ExpectedVersion.Any` (`-1`) to skip, `ExpectedVersion.EmptyStream` (`0`) for a new stream, or any positive integer for an exact version match. |
 | `metadata` | `object` | `{}` | Additional metadata merged into every event's metadata envelope. |
-| `callback` | `function(commit)` | — | Called after all events have been persisted. |
+| `expectedVersion` | `number\|CommitCondition` | `ExpectedVersion.Any` | Either a stream version (see above) or the `condition` returned by `query()` for a DCB-style check. |
+| `callback` | `function(commit)` | — | Called with the `commit` object after all events have been flushed to disk. |
 
-Throws `OptimisticConcurrencyError` when the stream is not at `expectedVersion`.
+Throws `OptimisticConcurrencyError` synchronously when the stream is not at `expectedVersion`, or when events matching the `CommitCondition` were appended since the query. The callback is not called with an error.
+
+---
+
+#### `query(selectorOrDcbQuery, [matcher], [minRevision], [raw])`
+
+```javascript
+eventstore.query(selectorOrDcbQuery [, matcher [, minRevision [, raw]]]) → { stream, condition }
+```
+
+Read the events relevant for a decision and capture a `CommitCondition` for a later `commit()`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `selectorOrDcbQuery` | `Array<string\|Array>\|{ items }` | — | A stream selector tree (same algebra as `fromStreams()`), or a `DcbQuery` object `{ items: [{ types, tags }] }` (requires `typeAccessor` / `tagsAccessor`). |
+| `matcher` | `function\|object\|null` | `null` | Optional matcher that narrows both the returned stream and the conflict check. |
+| `minRevision` | `number` | `1` | First global revision to include in the returned stream. |
+| `raw` | `boolean` | `false` | Return NDJSON `Buffer` chunks. |
+
+Returns `stream` (an `EventStream` over all matching events) and `condition`. Passing `condition` as `expectedVersion` to `commit()` throws `OptimisticConcurrencyError` if any event matching the selector (and matcher) was appended after the query. Streams referenced in the selector that do not exist yet are treated as empty. See [Dynamic Consistency Boundaries](dcb.md).
 
 ---
 
@@ -120,25 +143,28 @@ eventstore.getEventStreamForCategory(categoryName [, minRevision [, maxRevision 
 ```
 
 Return a joined `EventStream` for all streams whose names begin with
-`categoryName + '-'`.  If a dedicated physical stream named `categoryName`
+`categoryName + '-'` (flat layout) or `categoryName + '/'` (hierarchical layout).  If a dedicated physical stream named `categoryName`
 already exists, that stream is returned directly.
 
 Throws if no streams for the category exist.
 
 ---
 
-#### `createEventStream(streamName, matcher)` ✅ Stable
+#### `createEventStream(streamName, matcher, [reindex])` ✅ Stable
 
 ```javascript
-eventstore.createEventStream(streamName, matcher) → EventStream
+eventstore.createEventStream(streamName, matcher [, reindex]) → EventStream
 ```
 
-Create a new named stream backed by an index that includes every event matching `matcher`. `matcher` can be:
+Create a new named stream backed by an index that includes every event matching `matcher`. Matchers are evaluated against the stored document `{ stream, payload, metadata }`. `matcher` can be:
 
 - a plain object using nested equality,
 - array values for OR semantics,
-- scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), or
-- a predicate `(event) => boolean`.
+- scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`),
+- array-containment operators (`$has`, `$hasAny`), or
+- a predicate `(document) => boolean`.
+
+`reindex` (default `true`) scans existing events to populate the new index; pass `false` when no existing event can match.
 
 For the full object-matcher syntax and raw-mode caveats, see [Event Streams -> Object Matcher Syntax](streams.md#object-matcher-syntax).
 
@@ -256,7 +282,7 @@ Create a virtual stream from selected streams.
 | `streamName` | `string` | Transient name for the resulting virtual stream. |
 | `streamNames` | `Array<string\|Array>` | Stream selector tree (strings as leaves, arrays as nested groups). |
 
-Throws if any named stream does not exist.
+Streams that do not exist are treated as empty: in an `OR` group they have no effect, in an `AND` group they make that branch empty.
 
 ---
 
@@ -264,9 +290,10 @@ Throws if any named stream does not exist.
 
 ```javascript
 eventstore.getConsumer(streamName, identifier [, initialState [, since]]) → Consumer
+eventstore.getConsumer(identifier) → Consumer | null
 ```
 
-Return a durable `Consumer` that tracks its position across process restarts.
+Return a durable `Consumer` that tracks its position across process restarts. Called with a single argument, it returns the already running consumer registered under that identifier, or `null`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -277,15 +304,15 @@ Return a durable `Consumer` that tracks its position across process restarts.
 
 ---
 
-#### `scanConsumers(callback)`
+#### `scanConsumers(callback, [autoStart])`
 
 ```javascript
-eventstore.scanConsumers(callback)
+eventstore.scanConsumers(callback [, autoStart])
 ```
 
-Asynchronously scan all consumer state files and return their identifiers.
+Asynchronously scan all consumer state files.
 
-`callback` signature: `(error, consumers: Array<string>)`.
+`callback` signature: `(error, consumers: Array<{ name, stream, identifier }>)`. With `autoStart = true`, every discovered consumer is opened via `getConsumer(stream, identifier)` before the callback runs.
 
 ---
 
@@ -303,15 +330,20 @@ Asynchronously scan all consumer state files and return their identifiers.
 
 ---
 
-### Static properties
+### Related exports
 
-| Property | Value | Description |
-|----------|-------|-------------|
-| `EventStore.ExpectedVersion.Any` | `-1` | Skip version check. |
-| `EventStore.ExpectedVersion.EmptyStream` | `0` | Assert the stream is new. |
-| `EventStore.OptimisticConcurrencyError` | `Error` | Thrown when an expected-version check fails. |
-| `EventStore.LOCK_THROW` | constant | Throw if storage lock is held (default). |
-| `EventStore.LOCK_RECLAIM` | constant | Forcefully reclaim storage lock on open. |
+These are named exports of the package (`import { ExpectedVersion } from 'event-storage'`), not properties of `EventStore`.
+
+| Export | Value | Description |
+|--------|-------|-------------|
+| `ExpectedVersion.Any` | `-1` | Skip version check. |
+| `ExpectedVersion.EmptyStream` | `0` | Assert the stream is new. |
+| `OptimisticConcurrencyError` | `Error` subclass | Thrown when an expected-version or `CommitCondition` check fails. |
+| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. |
+| `LOCK_THROW` | constant | Throw if storage lock is held (default). |
+| `LOCK_RECLAIM` | constant | Forcefully reclaim storage lock on open. |
+| `VERSION` | `string` | Package version (also available as `EventStore.VERSION`). |
+| `matches`, `buildRawBufferMatcher` | functions | Low-level matcher utilities. |
 
 ---
 
@@ -572,7 +604,7 @@ const reader = new Storage.ReadOnly('mystore', { dataDirectory: './data' });
 reader.open();
 ```
 
-`Storage` (writable) extends `Storage.ReadOnly` which in turn extends `EventEmitter`.
+`Storage` (writable) and `Storage.ReadOnly` both extend a shared readable base class, which extends `EventEmitter`.
 
 ### Constructor — `Storage` (writable)
 
@@ -594,11 +626,13 @@ Inherits all options from `Storage.ReadOnly` plus:
 | `config.maxWriteBufferDocuments` | `number` | `0` (unlimited) | Maximum number of buffered documents before an automatic flush. |
 | `config.syncOnFlush` | `boolean` | `false` | Call `fsync` on flush for strict durability. |
 | `config.dirtyReads` | `boolean` | `true` | Allow reading documents that are still in the write buffer. |
-| `config.partitioner` | `function(doc, seqNum)` | single partition | Returns the partition name for a document. |
+| `config.partitioner` | `function(doc, seqNum)` | single partition | Returns the partition name for a document. (`EventStore` passes `(doc) => doc.stream`, i.e. one partition per stream.) |
 | `config.indexOptions` | `object` | `{}` | Options forwarded to every index on construction. |
 | `config.hmacSecret` | `string` | `''` | Secret used to verify stored matcher HMACs. |
 | `config.metadata` | `object\|function(partitionName)` | `{}` | Metadata written to each partition header. |
 | `config.lock` | `LOCK_THROW\|LOCK_RECLAIM` | `LOCK_THROW` | How to handle an existing lock file on open. |
+| `config.maxOpenPartitions` | `number` | `1024` | Maximum number of open partition file descriptors (`0` = unlimited). See [Performance](performance.md#maxopenpartitions). |
+| `config.matcherProperties` | `string[]` | `['stream', 'payload.type']` | Document paths used for O(1) index routing on writes. See [Performance](performance.md#matcherproperties). |
 
 ### Constructor — `Storage.ReadOnly`
 
@@ -822,7 +856,6 @@ Return `true` when `filename` belongs to this storage instance (used internally 
 |-------|---------|-------------|
 | `'opened'` | — | Emitted after `open()` completes. |
 | `'closed'` | — | Emitted after `close()` completes. |
-| `'ready'` | — | Emitted after `open()` on the writable storage. |
 | `'wrote'` | `document, entry, indexPosition` | Emitted after each document is indexed. |
 | `'index-created'` | `name` | Emitted when a new secondary index is created. |
 | `'index-add'` | `name, length, document` | Emitted when a document is added to a secondary index. |

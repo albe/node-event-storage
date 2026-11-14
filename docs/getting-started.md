@@ -63,9 +63,13 @@ Use `eventstore.commit(streamName, events, [expectedVersion], [callback])` to ap
 eventstore.commit('orders', [{ type: 'OrderPlaced', orderId: 42 }]);
 
 // Append only if the stream is currently at version 3
-eventstore.commit('orders', [{ type: 'OrderShipped', orderId: 42 }], 3, (err) => {
-    if (err) console.error('Commit failed:', err.message);
-});
+try {
+    eventstore.commit('orders', [{ type: 'OrderShipped', orderId: 42 }], 3, (commit) => {
+        console.log('Persisted commit', commit.commitId);
+    });
+} catch (err) {
+    console.error('Commit failed:', err.message);
+}
 ```
 
 The `expectedVersion` can be:
@@ -74,7 +78,7 @@ The `expectedVersion` can be:
 - `ExpectedVersion.EmptyStream` (`0`) — only succeeds when the stream has no events yet.
 - Any positive integer — the stream must currently be at exactly that version.
 
-An `OptimisticConcurrencyError` is thrown when the stream version does not match. See [Optimistic Concurrency](streams.md#optimistic-concurrency) for more details.
+Validation and the concurrency check happen synchronously: an `OptimisticConcurrencyError` is thrown from `commit()` itself when the stream version does not match. The optional callback receives the `commit` object once all events have been flushed to disk. See [Optimistic Concurrency](streams.md#optimistic-concurrency) for more details.
 
 ## Reading Events
 

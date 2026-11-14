@@ -6,7 +6,7 @@ Version 1.0 migrates the entire library to native **ES Modules (ESM)**. If your 
 
 ## 1. Node.js version
 
-ESM support requires **Node.js 18 or later**. Check your version:
+Current releases require **Node.js 20 or later**. Check your version:
 
 ```bash
 node --version
@@ -62,12 +62,13 @@ All public exports from the package entry point:
 
 ```js
 import {
-  EventStore, ExpectedVersion, OptimisticConcurrencyError,
+  EventStore, ExpectedVersion, OptimisticConcurrencyError, CommitCondition,
   EventStream,
   Storage, StorageLockedError,
   Index,
   Consumer,
-  LOCK_THROW, LOCK_RECLAIM
+  LOCK_THROW, LOCK_RECLAIM,
+  VERSION, matches, buildRawBufferMatcher
 } from 'event-storage';
 ```
 
@@ -219,7 +220,7 @@ eventstore.scanConsumers((err, consumers) => {
     if (err) throw err;
     // autoStart=true opens all discovered consumers and registers them
     // (or call .getConsumer(stream, identifier) explicitly for each one)
-}, autoStart = true);
+}, true);
 ```
 
 ---
@@ -246,36 +247,23 @@ The `typeAccessor` (used when registering event types as streams) now **validate
 
 ### Before (1.0/1.1)
 
-Would silently accept any string from `typeAccessor`:
-
-```js
-const eventstore = new EventStore('my-store', {
-    typeAccessor: (e) => e.type
-});
-eventstore.commit('stream-1', [{ type: 'user created', payload: {} }], (err) => {
-    // 1.0: accepted "user created" (with space)
-    // 1.2: throws "Invalid stream name"
-});
-```
+Any value produced by `typeAccessor` was accepted as a stream name, including names with whitespace such as `'user created'`.
 
 ### After (1.2)
 
-Validates on each commit and raises a clear error if the stream name is invalid:
+Stream names derived from event types are validated on each commit, and `commit()` throws synchronously if a name is invalid:
 
 ```js
-// Before committing, ensure typeAccessor returns valid names:
 const eventstore = new EventStore('my-store', {
-    typeAccessor: (e) => e.type
-});
-eventstore.commit('stream-1', [{ type: 'user_created', payload: {} }], (err) => {
-    // 1.2: accepted (underscores are fine)
+    typeAccessor: 'type'   // dot-notation path into the event payload
 });
 
-// Or use separators like colon/dash instead of spaces:
-eventstore.commit('stream-1', [{ type: 'user:created', payload: {} }], (err) => {
-    // 1.2: accepted (colon is now allowed)
-});
+eventstore.commit('stream-1', [{ type: 'user created' }]);  // throws: invalid stream name
+eventstore.commit('stream-1', [{ type: 'user_created' }]);  // accepted
+eventstore.commit('stream-1', [{ type: 'user:created' }]);  // accepted
 ```
 
-**Action required:** If your `typeAccessor` returns names with spaces (or other disallowed chars), update it to use safe separators (`_`, `:`, `-`, `.`, etc.).
+**Action required:** If your event types contain spaces (or other disallowed chars), switch to safe separators (`_`, `:`, `-`, `.`, etc.).
+
+> Since 1.4, `typeAccessor` only accepts a dot-notation string path. If you used a function accessor, replace it with a path, or use `streamSources` with a custom `nameBuilder`.
 

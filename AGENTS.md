@@ -5,8 +5,6 @@
 Do not repeat yourself. Be concise and precise in your internal thoughts, but especially your answers. No paraphrasing of previous information unless specifically asked for. Only quote code you generated if less than 5 lines, otherwise just refer to the file and line number where it can be found. If you need to refer to a specific part of the code, quote only the relevant lines.
 If you run into a decision point, maybe because the instructions given were contradictory or incomplete, try to identify the underlying principle or intent and unless that is absolutely clear, ask for clarification and/or a decision. Explain the issue you stumbled upon and the options you see, and ask for guidance on how to proceed.
 The code and documentation language is English, even if the user is communicating in another language.
-Read the Platform.md file if it exists to know which platform you are running on and what capabilities you have, instead of trying to run linux tools on a Windows machine.
-Always try to use available tools through the MCP servers, which should provide tools to directly interact with the IDE, instead of using cat and grep.
 **Keep this file up-to-date**: after any code review that surfaces new architectural insights or a new principle, compact this file and integrate what was learned.
 
 ## Principles (in priority order)
@@ -28,10 +26,8 @@ Always try to use available tools through the MCP servers, which should provide 
 ### Code Quality standards
 
 - Keep it simple! Follow the KISS principle and avoid unnecessary abstractions or optimizations. Simple code is easier to read, test, and maintain and most of the time also more performant.
-- Keep cyclomatic complexity per method around 15 or below. If a method exceeds that, look for ways to break it down into smaller, clearly-named helper methods. Exceptions can be made for very performance-sensitive code paths, but prefer readability in general.
 - Keep number of return statements per method below 6. Multiple return points can be acceptable if they significantly improve readability, but watch for methods that become hard to follow due to too many exit points.
 - Avoid deep nesting of conditionals. If you find yourself nesting more than 3 levels deep, consider refactoring to flatten the structure, such as by using guard clauses or extracting nested logic into separate methods.
-- Use descriptive method and variable names to make the code self-documenting. Higher level methods should read like pseudo-code, delegating to well-named helpers that encapsulate specific logic or steps in the process.
 - In general, optimize the code for readability first, and only introduce complexity when there is a clear performance benefit that has been measured and justified.
 
 ## Architecture
@@ -44,9 +40,7 @@ EventStore  →  Storage  →  Partition (append-only data files)
 ```
 
 - **Storage/Index/Partition** each follow a 3-tier class hierarchy under `src/<Component>/`: `Readable*` → `ReadOnly*` → `Writable*`. The facade file `src/<Component>.js` re-exports the Writable + ReadOnly variants.
-- **EventStore** (`src/EventStore.js`) is the main entry point — owns a `Storage` instance, manages stream indexes in a `streams/` subdirectory, and provides `commit()` / `getEventStream()` / `query()` / `createConsumer()`.
-- **`event-storage-ui` prebuilt CLI** must start `react-router-serve` with the package directory as its working directory so `build/client` assets resolve from the installed package, not from the caller project's folder.
-- **`event-storage-ui` config file paths are config-relative** — relative `storeName` / `storesDirectory` values resolve from the config file's directory, not from `process.cwd()`, so packaged CLI execution remains stable after changing the server working directory.
+- **EventStore** (`src/EventStore.js`) is the main entry point — owns a `Storage` instance, manages stream indexes in a `streams/` subdirectory, and provides `commit()` / `getEventStream()` / `query()` / `getConsumer()`.
 - **DCB concurrency**: `query()` returns a `CommitCondition` capturing the global log position + type/matcher filter. Passing it as `expectedVersion` to `commit()` rejects only when matching events were appended since the query.
 - Streams are named indexes over a shared storage file; events are partitioned by `event.stream`. Category queries use `<category>-<id>` naming convention.
 
@@ -84,36 +78,25 @@ No build step; source is plain ESM consumed directly. No linter configured.
 - Tests create temp data in `test/data/` and clean with `fs-extra.emptyDirSync` in `beforeEach`.
 - Errors are custom classes exported alongside main classes (e.g. `OptimisticConcurrencyError`, `StorageLockedError`).
 - The `index.js` barrel re-exports only the public API — keep it in sync when adding exports.
-- **No underscore-prefixed names**; use descriptive public names even for internal helpers.
-- **Expressive names over comments** — prefer clear method names. Doc blocks only for the *why*, not the *how*.
 
-## File Layout
+## Non-obvious Code Locations
 
-| Path                                    | Purpose |
-|-----------------------------------------|---------|
-| `src/EventStore.js`                     | Core: commit, query (DCB), streams, consumers |
-| `src/Storage/Writable*.js`              | Append-only file storage with locking |
-| `src/Partition/Writable*.js`            | Binary partition files with headers/metadata |
-| `src/Index/Writable*.js`                | Persisted stream indexes |
-| `src/Consumer.js`                       | Durable consumer with position tracking and `progress` event |
-| `src/EventStream.js`                    | Iterator over a single stream; `predicate === true` activates raw (NDJSON buffer) mode |
-| `src/JoinEventStream.js`                | Merges multiple streams; ordering uses epoch-denormalized `time64` + `sequenceNumber` tiebreaker from binary header |
-| `src/Clock.js`                          | Monotonic microsecond clock |
-| `src/IndexEntry.js`                     | Index record serialization |
-| `src/IndexMatcher.js`                   | O(1) discriminant-based matcher classification |
-| `src/PartitionPool.js`                  | LRU-evicting pool for open partition handles |
-| `src/Watcher.js` / `src/WatchesFile.js` | Ref-counting directory watcher and mixin |
-| `src/utils/fsUtil.js`                   | `ensureDirectory`, `scanForFiles` |
-| `src/utils/apiHelpers.js`               | API-shaping helpers for top-level and internal class APIs (argument normalization, stream-name mapping, predicate/raw/revision coercion) |
-| `src/utils/util.js`                     | Shared primitives: `assert`, `assertEqual`, `binarySearch`, `kWayMerge`, `hash`, `alignTo`, `iterate`, `getPropertyAtPath` |
-| `src/utils/metadataUtil.js`             | Object and raw-buffer matching; operator syntax (`$gt`/`$gte`/`$lt`/`$lte`/`$eq`/`$ne`); HMAC-protected function matchers |
-| `src/utils/jsonUtil.js`                 | Low-level byte scanning for raw NDJSON buffers: `indexOfSameLevel` (depth-aware pattern search), `findJsonValueEnd`, `parseJsonValue` |
-| `bench/`                                | Benchmarks (not part of test suite) |
-| `stress-test/`                          | Crash-safety / recovery validation |
+- `src/EventStream.js`: `predicate === true` activates raw (NDJSON buffer) mode.
+- `src/JoinEventStream.js`: ordering uses epoch-denormalized `time64` + `sequenceNumber` tiebreaker from the binary header.
+- `src/IndexMatcher.js`: O(1) discriminant-based routing of written documents to secondary indexes.
+- `src/utils/apiHelpers.js`: argument normalization for public APIs (commit overloads, revision clamping, predicate/raw shorthand).
+- `src/utils/metadataUtil.js`: object/raw matcher compilation, operator syntax, HMAC-protected function matchers.
+- `bench/` holds benchmarks, `stress-test/` the crash-safety validation; neither is part of `npm test`.
+
+## Documentation
+
+- User docs live in `docs/` (MkDocs, built by Read the Docs per release tag). Write them for the current state only: no "since version x" notes; version history belongs in `docs/changelog.md` and `docs/upgrading.md`.
+- When a public API changes, update `docs/api.md`, `index.d.ts`, the relevant guide page and `docs/changelog.md` in the same change. Mark breaking changes as such in the changelog.
+- `concepts/` holds internal design drafts. Never link them from user docs; document only what was implemented.
 
 ## Testing Notes
 
 - Always call `eventstore.close()` in `afterEach` to release file locks.
-- Commits are async with callback: `eventstore.commit(stream, events, [expectedVersion], callback)`.
+- `eventstore.commit(stream, events, [expectedVersion], [metadata], [callback])` throws synchronously on validation/concurrency errors; the callback receives the `commit` object after the flush.
 - `EventStore` emits `'ready'` after opening — wrap test logic inside that event.
 - Prefer `once` over `on` for one-shot lifecycle events (`'opened'`, `'ready'`, `'index-created'`).

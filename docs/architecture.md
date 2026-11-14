@@ -16,11 +16,16 @@ This page describes the technical implementation and architecture of the `node-e
 | `WatchesFile.js` | Mixin that wires a file to a `Watcher` instance and re-reads it on change |
 | `Clock.js` | Monotonic microsecond clock for per-event timestamps |
 | `IndexEntry.js` | Binary layout of one index record (partition, position, size, sequence number) |
+| `IndexMatcher.js` | Discriminant lookup table that routes each written document to the matching secondary indexes in O(1) |
+| `FileHandlePool.js` | LRU pool of open file descriptors shared by partitions (bounded by `maxOpenPartitions`) |
 | `utils/util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
 | `utils/indexUtil.js` | Set operations on index-entry ranges (`union`, `intersect`) and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
 | `utils/apiHelpers.js` | Argument normalization helpers shared across the public API (revision clamping, commit overloads, predicate/raw shorthand) |
 | `utils/metadataUtil.js` | Object matcher evaluation, raw-buffer matcher compilation, and HMAC metadata helpers |
 | `utils/fsUtil.js` | File-system utilities: path resolution, directory creation, recursive file scanning |
+| `utils/dcbUtil.js` | Detects `DcbQuery` objects and compiles them into selector algebra |
+| `utils/jsonUtil.js` | Byte-level scanning of compact JSON buffers for raw-mode matchers |
+| `utils/deprecations.js` | Emits each deprecation warning once per process |
 | `Storage.js` | Facade — re-exports `WritableStorage` (default) and `ReadOnlyStorage` |
 | `Partition.js` | Facade — re-exports `WritablePartition` (default) and `ReadOnlyPartition` |
 | `Index.js` | Facade — re-exports `WritableIndex` (default) and `ReadOnlyIndex` |
@@ -176,7 +181,7 @@ This design keeps watch fan-out low, preserves canonical stream names across pla
 
 ### Synchronous API
 
-All write and read operations are synchronous. Node.js is single-threaded, and within a single thread synchronous I/O for small, sequential appends is significantly faster than going through the event-loop machinery required for async callbacks or Promises. Removing async boundaries also means the consistency model is simpler: a `commit()` call either succeeds or throws — there are no interleaved writes between awaited steps, and callers never need to reason about concurrent mutations of the same in-memory state.
+Reads and the decision part of a write are synchronous. `commit()` validates its arguments, runs the concurrency check and places the events into the write buffer without yielding to the event loop, so it either succeeds or throws and no other commit can interleave. Only persistence is deferred: the write buffer is flushed with synchronous file I/O when it is full or on the next tick, and the optional callback fires after that flush. Node.js is single-threaded, and for small sequential appends synchronous I/O is significantly faster than going through the async machinery for every write.
 
 ### Append-Only Log as the Primary Storage Primitive
 
