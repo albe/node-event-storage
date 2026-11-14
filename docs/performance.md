@@ -165,7 +165,7 @@ Interpretation:
 
 This benchmark is inspired by the excellent pyeventsourcing speedrun style: a compact scenario that makes architectural trade-offs visible under sustained write-then-read pressure.
 
-Benchmark setup in this repository:
+Benchmark setup (the script is not yet part of the repository):
 
 - scenario: course subscriptions with DCB read model rebuilding,
 - runtime: 3 seconds per mode,

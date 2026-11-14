@@ -197,7 +197,7 @@ Each store directory is protected by a lock directory (`storeName.lock`) that on
 
 ### Lightweight File-Position Indexes
 
-Rather than B+-trees or LSM structures, each stream's index is a flat binary array of `IndexEntry` records (partition ID + byte offset + size). Lookups use binary search (O(log n)); sequential reads are O(1) pointer follows into the data file. Because the index has no pointers and no free-list management, it can be created cheaply per stream, rebuilt from scratch from the data file in a single linear pass, and memory-mapped without concern for fragmentation.
+Rather than B+-trees or LSM structures, each stream's index is a flat binary array of `IndexEntry` records (partition ID + byte offset + size). Lookups by revision are array accesses, lookups by global position use binary search (O(log n)), and sequential reads follow positions into the data file. Because the index has no pointers and no free-list management, it can be created cheaply per stream and rebuilt from scratch from the data files in a single linear pass. The exact layout is described in [Storage Format](storage-format.md).
 
 ### Partition Per Stream
 
@@ -211,13 +211,13 @@ JSON is the default wire format because it is human-readable, requires no schema
 
 There is no built-in pessimistic locking or hidden retry mechanism. Callers pass an `expectedVersion` to `commit()`, and if the stream has advanced past that version the call throws `OptimisticConcurrencyError`. This is intentional: in a CQRS / event-sourcing context the caller already holds enough domain knowledge to decide whether to retry, reload state, or propagate a conflict error to the user. Hiding retries inside the store would make conflict rates invisible and would couple the retry policy to the persistence layer.
 
-### Monotonic Clock for Global Ordering
+### Sequence Numbers and a Monotonic Clock
 
-Every event is stamped with a `Clock` value that increments in microseconds and never goes backwards even when the system clock is adjusted. This ensures a strict total order within a single writer session without requiring a distributed timestamp oracle or a central sequence-number service.
+The global order of events is defined by the sequence number assigned by the single writer and recorded in the primary index. In addition, every event header carries a `Clock` value in microseconds that never goes backwards within a process, even when the system clock is adjusted. Together with the sequence number in the header this allows rebuilding the global order from the data files alone and merging streams from different partitions efficiently.
 
 ### Crash Recovery via Torn-Write Detection
 
-When a process is killed mid-commit, the last write to a partition file may be incomplete. On the next open, `ReadablePartition` detects the torn write by checking whether the `commitId` in the final document matches the expected `commitSize`. When a torn write is detected, `WritableStorage` delegates the actual file truncation to `WritablePartition`, which truncates the file to the position before the incomplete commit began. Combined with `LOCK_RECLAIM`, `WritableStorage` also detects when the primary index lags behind the data file and automatically calls `reindex()` before emitting `'ready'`. This gives bounded, predictable recovery with no manual intervention required.
+When a process is killed mid-commit, two things can be incomplete: the last document in a partition file (a *torn write*), and the last commit (only some of its events were written). A torn write is detected because every document repeats its size in a footer, so a document whose announced size extends beyond the end of the file is incomplete. An unfinished commit is detected by comparing `commitVersion` and `commitSize` of the last event in the log, and rolled back by `EventStore` on every writer open. When the store is opened with `LOCK_RECLAIM` after a crash, `WritableStorage` finds the torn-write boundary, lets each `WritablePartition` truncate to its last complete document (keeping the removed bytes in a `.branch` file), truncates the indexes accordingly and calls `reindex()` for index entries that lag behind the data, all before `'ready'` is emitted. This gives bounded, predictable recovery without manual intervention.
 
 ### Three-Tier Variant Design (Writable / Readable / ReadOnly)
 

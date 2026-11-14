@@ -1,118 +1,84 @@
 # Guarantees
 
-This page states what node-event-storage guarantees and under which conditions. All guarantees apply to a single store with a single writer process.
+This page states what node-event-storage guarantees, under which conditions, and where you can check it. All statements apply to one store with one writer process. node-event-storage does not build on a database engine; the mechanisms below are implemented directly on top of the file system, and the on-disk layout is documented in [Storage Format](storage-format.md).
 
-## ACID Properties
+## At a glance
 
-> All of the following applies to a single transaction boundary, which is a single write stream (storage partition).
+| Guarantee | Holds when | Evidence |
+|-----------|------------|----------|
+| A commit is all-or-nothing | Always, after the store was reopened by a writer | `test/EventStore.spec.js` ("repairs unfinished commits", "repairs torn writes"), `stress-test/` |
+| Only one process writes | Always; a second writer gets `StorageLockedError` | `WritableStorage.lock()`, `test/Storage.spec.js` ("allows only a single writer") |
+| `expectedVersion` and DCB conditions cannot be raced by another commit | Always (check and append happen in one synchronous call) | `EventStore.commit()`, `test/EventStore.spec.js` ("query" tests) |
+| Events have one total order | Always, via the global sequence number | primary index, `JoinEventStream` |
+| The writer reads its own writes | `dirtyReads: true` (default) | `test/Partition.spec.js` |
+| Acknowledged commits survive an OS crash or power loss | Only with `syncOnFlush: true` | `WritablePartition.flush()` |
+| Acknowledged commits survive a process crash | Always (data was handed to the OS) | `stress-test/` |
+| After a crash, the store repairs itself | Only when opened with `LOCK_RECLAIM` | `test/Storage.spec.js` ("auto-repairs …"), `stress-test/recovery.js` |
+| No event is ever modified | Always; files are opened in append mode, and repair only truncates the tail after a crash, keeping a copy of the removed bytes in a `.branch` file | `WritablePartition.truncate()` |
 
-### Atomicity
+"Acknowledged" means the `commit()` callback was called.
 
-A single event write is atomic at the JSON level — an incomplete write cannot be deserialized. For custom serialization formats (msgpack, protobuf, …) you should add a checksum to detect partial writes.
+## Atomicity
 
-A multi-event commit is atomic end-to-end: on startup the store checks whether the last `commitId` matches the `commitSize`. If not, the incomplete commit is rolled back by truncating the storage to the position before it started.
+A `commit()` call appends one or more events to a single stream. Every event carries `commitId`, `commitVersion` (0-based position within the commit) and `commitSize` in its metadata.
 
-Write-buffer batching also means logical atomicity can span multiple events. Control this with:
+When a writer opens the store, it reads the last event of the global log. If its `commitVersion` is not `commitSize - 1`, the commit was interrupted: the store emits `'unfinished-commit'` and truncates the log back to where that commit started. This check runs on every writer open. Truncated bytes are not discarded: they are copied to a `<partition>-truncated-<timestamp>-<position>.branch` file next to the partition for manual inspection.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `maxWriteBufferDocuments` | `number` | unlimited | Maximum number of events in the write buffer before an automatic flush. |
-| `writeBufferSize` | `number` | `16384` (16 KB) | Maximum byte size of the write buffer. |
+On a lower level, every document is framed by a header with its size and a footer that repeats it (see [Storage Format](storage-format.md#document-envelope)). A document whose end lies beyond the end of the file is a *torn write*; reading it throws instead of returning partial data, and the `LOCK_RECLAIM` repair truncates it.
 
-For optimal I/O, avoid limiting `maxWriteBufferDocuments` so that the buffer fills to the page size (typically 4 KB) before being flushed.
+A commit always targets one write stream. There is no atomic write across several streams; use one stream per consistency boundary, or [DCB](dcb.md) for consistency checks across streams.
 
-### Consistency
+## Concurrency control
 
-The append-only nature guarantees consistency for all successful writes. Torn writes (partial flushes caused by a crash) are detected on startup and truncated when the lock is reclaimed:
+**Single writer.** The writer creates a lock directory `<storeName>.lock` next to the data files with `mkdir`, which fails atomically if it already exists. A second writer receives `StorageLockedError`. The lock is removed on `close()`. If a writer crashed, the lock remains and must be reclaimed explicitly with `LOCK_RECLAIM`; the store does not detect whether the previous owner is still alive.
 
-```javascript
-import { EventStore, LOCK_RECLAIM } from 'event-storage';
+**Optimistic concurrency per stream.** `commit(stream, events, expectedVersion)` compares `expectedVersion` with the current length of the stream index and throws `OptimisticConcurrencyError` on mismatch. Because `commit()` runs synchronously from the check to the point where all events are in the write buffer, no other commit can interleave in between.
 
-const eventstore = new EventStore('my-event-store', {
-    storageConfig: { lock: LOCK_RECLAIM }
-});
-```
+**Dynamic Consistency Boundaries.** `query()` returns a `CommitCondition` that records the selector, the optional matcher and the global log length at query time. `commit(…, condition)` re-evaluates the selector over all events appended after that position and throws `OptimisticConcurrencyError` if at least one matches. Streams that did not exist at query time are included. Events appended before the query never cause a conflict. Like the version check, this happens synchronously inside `commit()`.
 
-> **Warning:** `LOCK_RECLAIM` bypasses the single-writer lock. Do not use it when two processes might write concurrently.
+Read-only instances cannot commit, so all concurrency control is local to the writer process.
 
-### Isolation
+## Isolation and visibility
 
-- Only a single writer is permitted per store (enforced by a lock directory).
-- Reads are always isolated: a read only sees writes that have already completed at the moment the stream is retrieved (MVCC).
-- *Dirty reads* (reading events from the write buffer before they are flushed) are enabled by default for writers. To disable:
+- An `EventStream` fixes its upper bound when it is created. Events appended later do not appear in it; use a [consumer](consumers.md) to follow new events.
+- The writer sees its own commits immediately, including events still in the write buffer (`dirtyReads: true`). With `dirtyReads: false` it only reads flushed data.
+- Read-only processes see events once the writer has flushed them to the data file and the index. Flushes happen independently per file, so a reader can observe a large multi-event commit partially while it is being written. Use `metadata.commitVersion` / `commitSize` if a reader must only act on complete commits.
 
-```javascript
-const eventstore = new EventStore('my-event-store', {
-    storageConfig: { dirtyReads: false }
-});
-```
+## Ordering
 
-Disabling dirty reads is only recommended for in-memory models that maintain their own uncommitted state.
+Every event receives a global, gap-free, 1-based sequence number from the primary index. Joined streams, categories and `getAllEvents()` return events in this order. Each event header additionally stores a microsecond timestamp from a per-partition monotonic clock (`process.hrtime` based, it never decreases within a process) and the sequence number, so the global order can be reconstructed from the data files alone, which is what `reindex()` does.
 
-### Durability
+## Durability
 
-Strict durability is intentionally traded for write performance:
+Writes go through two buffers:
 
-- Events are buffered in memory before being flushed to disk.
-- Flush does **not** call `fsync` by default, so OS/disk write-cache can still absorb and potentially lose recent writes on a crash.
+1. **Write buffer (per partition).** `commit()` serializes events into an in-memory buffer (`writeBufferSize`, default 16 KB). The buffer is written to the file when it is full, when `maxWriteBufferDocuments` is reached, or at the latest on the next tick of the event loop. The `commit()` callback fires after this write.
+2. **OS page cache.** By default the store does not call `fsync`. Data written to the file survives a crash of the Node.js process, but not necessarily an OS crash or power loss. With `syncOnFlush: true`, every flush of data and index files calls `fsync` before the callback fires.
 
-To enable strict durability (at significant performance cost):
+Index files are flushed with a short delay (100 ms by default) or when their buffer is full. A lagging index after a crash is not data loss: the repair rebuilds missing index entries from the data files.
 
-```javascript
-const eventstore = new EventStore('my-event-store', {
-    storageConfig: { syncOnFlush: true }
-});
-```
+Consumer state files are replaced atomically (write a temporary file, then rename) but are not `fsync`ed. After an OS crash a consumer may resume from an earlier position, which means at-least-once redelivery, never a state that does not match its position.
 
-## Global Order
+### What can be lost in a crash
 
-The storage maintains a global primary index that gives every event a monotonically increasing sequence number. This guarantees a consistent order when reading across multiple write streams (e.g. in joined streams or category streams).
+| Failure | Default settings | `syncOnFlush: true` |
+|---------|------------------|---------------------|
+| Process crash (e.g. `SIGKILL`) | Events committed in the current event-loop tick that were not yet written; at most one incomplete commit is rolled back | Same |
+| OS crash or power loss | Additionally, anything in the OS page cache that was not yet written to disk | Nothing that was acknowledged |
 
-Each event additionally carries a monotonic clock stamp and its global sequence number in its binary header, so a consistent global order can be reconstructed without the global index if needed.
+An upper bound for the default case per stream is `writeBufferSize / average event size` events plus the size of the interrupted commit, e.g. about 160 events plus one commit for 100-byte events and a 16 KB buffer. In practice the window is much smaller, because the buffer is flushed on the next tick. The [stress test](verify.md#crash-safety) checks this bound by killing a writer with `SIGKILL` and counting lost commits.
 
-## Reliability and Crash-Safety Guarantees
+## Crash recovery
 
-node-event-storage is designed to survive hard process crashes (e.g. `SIGKILL`, power failure) and recover with a bounded, predictable amount of data loss.
+Opening a writer runs these steps:
 
-### What is guaranteed
+1. With `LOCK_RECLAIM` and a leftover lock: remove the stale lock and take a new one. Without `LOCK_RECLAIM`, a leftover lock makes `open()` throw.
+2. With a reclaimed lock: scan all partitions for torn writes, truncate every partition and index to the last complete document, and rebuild lagging index entries from the data (`checkTornWrites()`, `reindex()`).
+3. Always: roll back an unfinished last commit (see [Atomicity](#atomicity)).
+4. Emit `'ready'`.
 
-| Guarantee | Details |
-|-----------|---------|
-| **No silent corruption** | Torn writes (partial page writes caused by a crash) are detected on startup and automatically truncated. The store will never surface a partially-written event. |
-| **Atomic commits** | A multi-event commit is all-or-nothing. If the process crashes mid-commit, the incomplete commit is rolled back on the next open. |
-| **Consistent reads after recovery** | Once `'ready'` fires after a `LOCK_RECLAIM` open, all indexes are fully consistent with the data files. |
-| **Bounded data loss** | Events that were in the in-memory write buffer at the time of the crash are lost. The maximum loss is deterministic and can be calculated from the buffer settings (see below). |
+See [Operations](operations.md#crash-recovery) for how to use this in practice.
 
-### Quantifying the data-loss window
+## What is not guaranteed
 
-Two factors bound how many events can be lost in a crash:
-
-1. **Partition write buffer** — each stream buffers up to `writeBufferSize` bytes or `maxWriteBufferDocuments` events before flushing. With a 16 KB buffer and ~100-byte events, that is at most ~160 events per stream.
-2. **In-flight commit** — at most one commit's worth of events (the number of events passed to that `commit()` call) may be torn.
-
-Index entries that were buffered but not yet flushed at the time of the crash are **not** lost: `LOCK_RECLAIM` automatically reindexes from the data files on the next open, making all on-disk events visible again.
-
-With the default settings and a single stream the worst-case data loss is roughly:
-
-```
-max_loss ≈ (writeBufferSize / avg_event_size) + events_per_commit
-         ≈ 160 + events_per_commit   (for 100-byte events and a 16 KB write buffer)
-```
-
-### The stress test
-
-The repository ships a crash-safety stress test in `stress-test/` that validates these guarantees empirically:
-
-1. **Writer** (`stress-test/writer.js`) — commits events to multiple streams in a tight loop with a small write buffer, persisting a snapshot of the commit counts after every successful flush.
-2. **Orchestrator** (`stress-test/run.sh`) — starts the writer, lets it run for a configurable number of seconds, then kills it with `SIGKILL` to simulate a hard crash.
-3. **Recovery** (`stress-test/recovery.js`) — reopens the store with `LOCK_RECLAIM`, verifies all streams are readable and writable, calculates the actual data loss, and asserts it is within the theoretical upper bound.
-
-Run it locally with:
-
-```bash
-cd stress-test
-npm install
-WRITE_DURATION=10 bash run.sh
-```
-
-The test exits with code `0` if data loss is within bounds and code `1` otherwise, making it suitable for CI. The GitHub Actions workflow (`.github/workflows/stress-test.yml`) runs it on every push.
+The design limits (single machine, file sizes, number ranges, file system requirements) are listed in [Limitations](limitations.md).
