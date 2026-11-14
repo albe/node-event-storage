@@ -25,16 +25,17 @@ On open, the store truncates an incomplete (torn) commit and, if the primary ind
 
 > **Warning:** `LOCK_RECLAIM` bypasses the single-writer lock. Only use it when you are sure no other process is writing to the store.
 
-For strict durability (no loss of acknowledged commits, at the cost of write throughput), combine it with `syncOnFlush`:
+## Durability
+
+By default, commits are acknowledged once they are handed to the operating system, which protects against process crashes but not against an OS crash or power loss. For strict durability (no loss of acknowledged commits, at the cost of write throughput), enable `syncOnFlush`:
 
 ```javascript
 const eventstore = new EventStore('my-event-store', {
-    storageConfig: {
-        lock: LOCK_RECLAIM,
-        syncOnFlush: true
-    }
+    storageConfig: { syncOnFlush: true }
 });
 ```
+
+See [Guarantees](guarantees.md#durability) for what each setting protects against.
 
 ## Reindexing
 

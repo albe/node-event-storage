@@ -75,7 +75,6 @@ This is a qualitative comparison of approaches, not a benchmark.
 | Option | Typical strengths | Choose node-event-storage instead when |
 |--------|-------------------|----------------------------------------|
 | A relational database (e.g. PostgreSQL or SQLite) with an events table | Familiar tooling, ad-hoc SQL queries, transactions across tables, replication | You want no database server or schema, cheap streams by the thousands, and a store tuned only for appends and sequential reads |
-| A dedicated event store server (e.g. KurrentDB, formerly EventStoreDB) | Clustering, network access from many languages, built-in subscriptions and projections at scale | Your application runs as one Node.js process (or one writer plus readers) and you want the store embedded in it |
-| node-eventstore with an embedded backend | Pluggable backends, long history | You need persisted indexes, fast startup on large stores, and events that belong to several streams |
+| A dedicated event store server (e.g. KurrentDB, formerly EventStoreDB) | Clustering, network access from many languages, built-in subscriptions and projections at scale | You do not want to run, maintain or pay for a separate database server, and your application runs as one Node.js process (or one writer plus readers) that can embed the store |
 
 Everything node-event-storage guarantees, and how it achieves that without a known database engine underneath, is documented under [Guarantees](guarantees.md) and [Implementation Architecture](architecture.md).
