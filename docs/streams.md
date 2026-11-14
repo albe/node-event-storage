@@ -191,7 +191,7 @@ Passing a negative `maxRevision` that is less than `minRevision` causes the stre
 
 ### Fluent API
 
-Since version 0.9 there is a more readable fluent builder:
+The fluent builder expresses the same ranges more readably:
 
 ```javascript
 // All events, newest first

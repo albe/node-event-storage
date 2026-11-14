@@ -92,6 +92,8 @@ No build step; source is plain ESM consumed directly. No linter configured.
 
 - User docs live in `docs/` (MkDocs, built by Read the Docs per release tag). Write them for the current state only: no "since version x" notes; version history belongs in `docs/changelog.md` and `docs/upgrading.md`.
 - When a public API changes, update `docs/api.md`, `index.d.ts`, the relevant guide page and `docs/changelog.md` in the same change. Mark breaking changes as such in the changelog.
+- Read the Docs builds one documentation version per release tag (`vX.Y.Z`, activated by an automation rule); `stable` is the latest tag, `latest` is `main`. Link docs as `/en/stable/` from README and package metadata.
+- Breaking changes get a page under `docs/upgrading/` and a row in its overview table.
 - `concepts/` holds internal design drafts. Never link them from user docs; document only what was implemented.
 
 ## Testing Notes

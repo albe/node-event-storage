@@ -22,4 +22,8 @@ nav:
   - API Reference: api.md
   - Implementation Architecture: architecture.md
   - Changelog: changelog.md
-  - Upgrading from 0.x to 1.0: upgrading.md
+  - Upgrading:
+    - Overview: upgrading/index.md
+    - 0.x to 1.0: upgrading/1.0.md
+    - To 1.2: upgrading/1.2.md
+    - To 1.4: upgrading/1.4.md

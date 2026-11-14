@@ -10,7 +10,7 @@
 
 An optimized embedded event store for modern node.js, written in ES6.
 
-📖 **[Full documentation on readthedocs.io](https://node-event-storage.readthedocs.io/en/latest/)**
+📖 **[Full documentation on readthedocs.io](https://node-event-storage.readthedocs.io/en/stable/)**
 
 ---
 
@@ -102,7 +102,7 @@ const complex = eventstore.fromStreams('view', [
 ]);
 ```
 
-See [Event Streams](https://node-event-storage.readthedocs.io/en/latest/streams/) for the full selector algebra, categories, and derived projection streams.
+See [Event Streams](https://node-event-storage.readthedocs.io/en/stable/streams/) for the full selector algebra, categories, and derived projection streams.
 
 ---
 
@@ -160,13 +160,13 @@ The package exposes NDJSON stream endpoints, durable consumer management, and an
 
 ## Documentation
 
-The full documentation is hosted at **<https://node-event-storage.readthedocs.io/en/latest/>** and covers:
+The full documentation is hosted at **<https://node-event-storage.readthedocs.io/en/stable/>** and covers:
 
-- [Getting Started](https://node-event-storage.readthedocs.io/en/latest/getting-started/) — installation, constructor options, basic usage.
-- [Event Streams](https://node-event-storage.readthedocs.io/en/latest/streams/) — writing, reading, optimistic concurrency, fluent API, joining streams, categories, and event metadata.
-- [Dynamic Consistency Boundaries (DCB)](https://node-event-storage.readthedocs.io/en/latest/dcb/) — `typeAccessor`, query matchers, consistency tokens, and the full DCB workflow.
-- [Consumers](https://node-event-storage.readthedocs.io/en/latest/consumers/) — at-least-once and exactly-once delivery, consumer state, consistency guards, and read-only mode.
-- [Advanced Topics](https://node-event-storage.readthedocs.io/en/latest/advanced/) — ACID properties, reliability and crash-safety guarantees, storage configuration, partitioning, custom serialization, compression, security, and access control hooks.
+- [Getting Started](https://node-event-storage.readthedocs.io/en/stable/getting-started/) — installation, constructor options, basic usage.
+- [Event Streams](https://node-event-storage.readthedocs.io/en/stable/streams/) — writing, reading, optimistic concurrency, fluent API, joining streams, categories, and event metadata.
+- [Dynamic Consistency Boundaries (DCB)](https://node-event-storage.readthedocs.io/en/stable/dcb/) — `typeAccessor`, query matchers, consistency tokens, and the full DCB workflow.
+- [Consumers](https://node-event-storage.readthedocs.io/en/stable/consumers/) — at-least-once and exactly-once delivery, consumer state, consistency guards, and read-only mode.
+- [Advanced Topics](https://node-event-storage.readthedocs.io/en/stable/advanced/) — ACID properties, reliability and crash-safety guarantees, storage configuration, partitioning, custom serialization, compression, security, and access control hooks.
 
 ---
 

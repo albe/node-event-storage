@@ -1,5 +1,7 @@
 # Changelog
 
+Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation for a released version is available through the version selector on Read the Docs.
+
 ## Unreleased
 
 - Fix consumer state with non-ASCII characters being truncated on persist, which reset the consumer to its initial state and position 0 after a restart.
