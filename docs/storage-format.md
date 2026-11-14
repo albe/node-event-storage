@@ -15,6 +15,7 @@ data/
   eventstore.user/                      partition directory for hierarchical names ("user/1", "user/2")
     1
     2
+  eventstore.account-8444~1             partition whose id collided with another one (see Index entries)
   eventstore.order-42-truncated-<time>-<pos>.branch   bytes removed by crash repair (only after a repair)
   streams/
     eventstore.index                    primary index: every event, in global order
@@ -78,7 +79,7 @@ After the header, an index file is an array of fixed 16-byte entries:
 | 0 | 4 | Global sequence number, 1-based (uint32 LE) |
 | 4 | 4 | Byte position of the document in its partition (uint32 LE) |
 | 8 | 4 | `dataSize` of the document, used to verify the read (uint32 LE) |
-| 12 | 4 | Partition id: a 32-bit hash of the partition file name (uint32 LE) |
+| 12 | 4 | Partition id: a 32-bit hash of the partition file name (uint32 LE). If two names have the same hash, the writer stores the second partition as `<name>~1`, so ids stay unique within a store |
 
 Entries are sorted by sequence number, so a lookup by revision is an array access and a lookup by global position is a binary search. Because entries have a fixed size, an index can be truncated to any entry and rebuilt from the partitions by scanning their document headers (`reindex()`).
 

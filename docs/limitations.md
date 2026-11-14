@@ -23,9 +23,9 @@ These limits follow from the design and the [storage format](storage-format.md).
 | Size of one partition file | 4 GiB | Positions in index entries are uint32. With one partition per stream this limits a single stream; use a custom `partitioner` (e.g. time-based) for larger volumes |
 | Size of one serialized event | 64 MB | Checked on write |
 | Partition metadata | 4 KB | Header limit, relevant for `streamMetadata` |
-| Distinct partitions | 32-bit hash ids | See below |
+| Partition names | Must not end in `~<number>` | Reserved for partition id collisions, see below |
 
-**Partition id collisions.** A partition is identified in index entries by a 32-bit hash of its file name. Two stream names with the same hash end up in the same partition file. Reads stay correct, because the index points to the exact position, but per-stream file locality is lost and both streams share the first stream's partition metadata, which matters for [access control hooks](customization.md#access-control-hooks). With randomly distributed names, a collision becomes likely somewhere around 100,000 partitions.
+**Partition id collisions.** Index entries reference a partition by a 32-bit hash of its file name. With randomly distributed names, two partitions with the same hash become likely somewhere above 50,000 partitions. When the writer creates a partition whose id is already taken by another file, it stores it in `<name>~1` instead (then `~2`, …), so every partition keeps its own file and metadata. Because of this, new partition names ending in `~<number>` are rejected.
 
 ## Data management
 
