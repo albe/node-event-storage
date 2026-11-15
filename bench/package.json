@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "bench:inverted": "node --expose-gc bench-inverted-index.js",
     "bench": "node bench-index.js && node bench-storage.js && node bench-eventstore.js && node bench-read-scenarios.js"
   },
   "dependencies": {

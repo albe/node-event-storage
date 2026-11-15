@@ -1,0 +1,129 @@
+import zlib from 'zlib';
+
+const TWO_POW_31 = 0x80000000;
+
+/**
+ * A growable byte buffer for sequentially encoding varints and raw bytes.
+ */
+class ByteWriter {
+
+    constructor(initialSize = 4096) {
+        this.buffer = Buffer.allocUnsafe(initialSize);
+        this.length = 0;
+    }
+
+    ensure(additional) {
+        const required = this.length + additional;
+        if (required <= this.buffer.length) {
+            return;
+        }
+        let size = this.buffer.length * 2;
+        while (size < required) size *= 2;
+        const grown = Buffer.allocUnsafe(size);
+        this.buffer.copy(grown, 0, 0, this.length);
+        this.buffer = grown;
+    }
+
+    /**
+     * Unsigned LEB128 for integers up to 2^53. Values below 2^31 take the bit-shift fast path.
+     *
+     * @param {number} value
+     */
+    varint(value) {
+        this.ensure(8);
+        const buffer = this.buffer;
+        let cursor = this.length;
+        while (value >= TWO_POW_31) {
+            buffer[cursor++] = (value % 128) | 128;
+            value = Math.floor(value / 128);
+        }
+        while (value >= 128) {
+            buffer[cursor++] = (value & 127) | 128;
+            value >>>= 7;
+        }
+        buffer[cursor++] = value;
+        this.length = cursor;
+    }
+
+    bytes(source, start = 0, end = source.length) {
+        this.ensure(end - start);
+        source.copy(this.buffer, this.length, start, end);
+        this.length += end - start;
+    }
+
+    doubleLE(value) {
+        this.ensure(8);
+        this.buffer.writeDoubleLE(value, this.length);
+        this.length += 8;
+    }
+
+    uint32LE(value) {
+        this.ensure(4);
+        this.buffer.writeUInt32LE(value >>> 0, this.length);
+        this.length += 4;
+    }
+
+    toBuffer() {
+        return this.buffer.subarray(0, this.length);
+    }
+}
+
+/**
+ * Sequential decoder over a buffer region.
+ */
+class ByteReader {
+
+    constructor(buffer, offset = 0) {
+        this.buffer = buffer;
+        this.offset = offset;
+    }
+
+    varint() {
+        const buffer = this.buffer;
+        let cursor = this.offset;
+        let byte = buffer[cursor++];
+        let value = byte & 127;
+        let shift = 7;
+        while (byte & 128) {
+            byte = buffer[cursor++];
+            value += (byte & 127) * 2 ** shift;
+            shift += 7;
+        }
+        this.offset = cursor;
+        return value;
+    }
+
+    bytes(length) {
+        const slice = this.buffer.subarray(this.offset, this.offset + length);
+        this.offset += length;
+        return slice;
+    }
+}
+
+let crcTable = null;
+
+function crc32Fallback(buffer) {
+    if (crcTable === null) {
+        crcTable = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) {
+            let c = n;
+            for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+            crcTable[n] = c >>> 0;
+        }
+    }
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < buffer.length; i++) crc = crcTable[(crc ^ buffer[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+/**
+ * zlib.crc32 is native but only exists from Node 20.15 / 22.2 on; the package supports Node >= 20.0.
+ *
+ * @param {Buffer} buffer
+ * @returns {number}
+ */
+function crc32(buffer) {
+    return typeof zlib.crc32 === 'function' ? zlib.crc32(buffer) >>> 0 : crc32Fallback(buffer);
+}
+
+export { ByteWriter, ByteReader, crc32, crc32Fallback };
