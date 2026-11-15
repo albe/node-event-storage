@@ -2,143 +2,197 @@ import { assert, compileAccessor } from './util.js';
 import { buildMatcherFn } from './metadataUtil.js';
 
 /**
- * Merge two sorted index-entry ranges into one sorted union without duplicates.
- * Assumes each range is sorted and contains no duplicates (by entry number).
- *
- * @param {Array<Array<number>>} left Sorted index-entry range.
- * @param {Array<Array<number>>} right Sorted index-entry range.
- * @returns {Array<Array<number>>} A new union range.
+ * Key of an exhausted cursor. Larger than every real key, so it never wins a minimum and ends every intersection.
  */
-function unionTwoIndexEntryRanges(left, right) {
-    if (left.length === 0) {
-        return right.slice();
+const EXHAUSTED = Infinity;
+
+/**
+ * Walks the entries of one index between two global sequence numbers, without creating entry objects.
+ *
+ * All cursors move by ascending `key`. Reading backwards uses the negated sequence number as key, so the
+ * union and intersection logic is the same in both directions.
+ */
+class IndexCursor {
+
+    /**
+     * @param {ReadableIndex} index
+     * @param {number} minNumber The lowest global sequence number to include.
+     * @param {number} maxNumber The highest global sequence number to include.
+     * @param {boolean} forwards
+     */
+    constructor(index, minNumber, maxNumber, forwards) {
+        this.index = index;
+        this.forwards = forwards;
+        this.step = forwards ? 1 : -1;
+        const first = index.find(minNumber, true);
+        const last = index.find(maxNumber);
+        const empty = first === 0 || last === 0 || first > last;
+        this.position = forwards ? first : last;
+        // One step past the last position to visit.
+        this.end = empty ? this.position : (forwards ? last : first) + this.step;
+        this.update();
     }
-    if (right.length === 0) {
-        return left.slice();
+
+    /**
+     * @private
+     * @param {number} offset Steps from the current position.
+     * @returns {number} The key of the entry at that offset.
+     */
+    keyAt(offset) {
+        const number = this.index.numberAt(this.position + offset * this.step - 1);
+        return this.forwards ? number : -number;
     }
 
-    const merged = new Array(left.length + right.length);
-    let leftIndex = 0;
-    let rightIndex = 0;
-    let count = 0;
+    /**
+     * @private
+     */
+    update() {
+        this.key = this.position === this.end ? EXHAUSTED : this.keyAt(0);
+    }
 
-    while (leftIndex < left.length && rightIndex < right.length) {
-        const leftEntry = left[leftIndex];
-        const rightEntry = right[rightIndex];
-        const leftNumber = leftEntry[0];
-        const rightNumber = rightEntry[0];
+    next() {
+        this.position += this.step;
+        this.update();
+    }
 
-        if (leftNumber < rightNumber) {
-            merged[count++] = leftEntry;
-            leftIndex++;
-        } else if (rightNumber < leftNumber) {
-            merged[count++] = rightEntry;
-            rightIndex++;
-        } else {
-            merged[count++] = leftEntry;
-            leftIndex++;
-            rightIndex++;
+    /**
+     * Move to the first entry whose key is at least `key`.
+     * Gallops from the current position before the binary search, so a nearby target costs only a few reads.
+     *
+     * @param {number} key
+     */
+    seek(key) {
+        if (key <= this.key) {
+            return;
         }
-    }
-
-    while (leftIndex < left.length) {
-        merged[count++] = left[leftIndex++];
-    }
-    while (rightIndex < right.length) {
-        merged[count++] = right[rightIndex++];
-    }
-
-    merged.length = count;
-    return merged;
-}
-
-/**
- * Merge multiple sorted index-entry ranges into one sorted union without duplicates.
- * Pairwise reduction via two-way merges, optimized for realistic data with moderate overlap.
- * Assumes each range is sorted and contains no duplicates (by entry number).
- *
- * @param {...Array<Array<number>>} ranges Sorted index-entry ranges.
- * @returns {Array<Array<number>>} A new union range.
- */
-function union(...ranges) {
-    if (ranges.length === 0) {
-        return [];
-    }
-    if (ranges.length === 1) {
-        return ranges[0].slice();
-    }
-
-    let merged = unionTwoIndexEntryRanges(ranges[0], ranges[1]);
-    for (let i = 2; i < ranges.length; i++) {
-        merged = unionTwoIndexEntryRanges(merged, ranges[i]);
-    }
-    return merged;
-}
-
-/**
- * Intersect two sorted index-entry ranges by global number.
- * Assumes each range is sorted and contains no duplicates (by entry number).
- *
- * @param {Array<Array<number>>} left Sorted index-entry range.
- * @param {Array<Array<number>>} right Sorted index-entry range.
- * @returns {Array<Array<number>>} A new intersection range.
- */
-function intersectTwoIndexEntryRanges(left, right) {
-    if (left.length === 0 || right.length === 0) {
-        return [];
-    }
-
-    const selected = new Array(Math.min(left.length, right.length));
-    let leftIndex = 0;
-    let rightIndex = 0;
-    let count = 0;
-
-    while (leftIndex < left.length && rightIndex < right.length) {
-        const leftEntry = left[leftIndex];
-        const rightEntry = right[rightIndex];
-        const leftNumber = leftEntry[0];
-        const rightNumber = rightEntry[0];
-
-        if (leftNumber < rightNumber) {
-            leftIndex++;
-        } else if (rightNumber < leftNumber) {
-            rightIndex++;
-        } else {
-            selected[count++] = leftEntry;
-            leftIndex++;
-            rightIndex++;
+        const remaining = (this.end - this.position) * this.step;
+        // Invariant: keyAt(low) < key and keyAt(high) >= key, where offset `remaining` counts as the end.
+        let low = 0;
+        let high = 1;
+        while (high < remaining && this.keyAt(high) < key) {
+            low = high;
+            high = Math.min(2 * high, remaining);
         }
+        while (high - low > 1) {
+            const mid = low + ((high - low) >> 1);
+            if (this.keyAt(mid) < key) {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        this.position += high * this.step;
+        this.update();
     }
 
-    selected.length = count;
-    return selected;
+    /**
+     * @returns {IndexCursor} The index cursor positioned on the current match.
+     */
+    leaf() {
+        return this;
+    }
 }
 
 /**
- * Intersect multiple sorted index-entry ranges by global number.
- * Pairwise reduction with size-order optimization, best for moderate to high overlap.
- * Assumes each range is sorted and contains no duplicates (by entry number).
- *
- * @param {...Array<Array<number>>} ranges Sorted index-entry ranges.
- * @returns {Array<Array<number>>} A new intersection range.
+ * Union of cursors: the smallest key of all children, each key only once.
  */
-function intersect(...ranges) {
-    if (ranges.length === 0) {
-        return [];
-    }
-    if (ranges.length === 1) {
-        return ranges[0].slice();
+class OrCursor {
+
+    /**
+     * @param {Array<IndexCursor|OrCursor|AndCursor>} children
+     */
+    constructor(children) {
+        this.children = children;
+        this.update();
     }
 
-    ranges.sort((a, b) => a.length - b.length);
-    if (ranges[0].length === 0) {
-        return [];
+    /**
+     * @private
+     */
+    update() {
+        let min = EXHAUSTED;
+        for (const child of this.children) {
+            min = Math.min(min, child.key);
+        }
+        this.key = min;
     }
-    let selected = intersectTwoIndexEntryRanges(ranges[0], ranges[1]);
-    for (let i = 2; i < ranges.length && selected.length > 0; i++) {
-        selected = intersectTwoIndexEntryRanges(selected, ranges[i]);
+
+    next() {
+        const key = this.key;
+        for (const child of this.children) {
+            if (child.key === key) {
+                child.next();
+            }
+        }
+        this.update();
     }
-    return selected;
+
+    /**
+     * @param {number} key
+     */
+    seek(key) {
+        for (const child of this.children) {
+            child.seek(key);
+        }
+        this.update();
+    }
+
+    leaf() {
+        return this.children.find(child => child.key === this.key).leaf();
+    }
+}
+
+/**
+ * Intersection of cursors: keys all children have. Children skip ahead to the largest key with seek(), so long
+ * stretches without a match cost a binary search instead of one step per entry.
+ */
+class AndCursor {
+
+    /**
+     * @param {Array<IndexCursor|OrCursor|AndCursor>} children
+     */
+    constructor(children) {
+        this.children = children;
+        this.align();
+    }
+
+    /**
+     * Seek all children to the largest key until they agree on one.
+     *
+     * @private
+     */
+    align() {
+        let key = this.children.length > 0 ? this.children[0].key : EXHAUSTED;
+        let agreed = false;
+        while (!agreed && key !== EXHAUSTED) {
+            agreed = true;
+            for (const child of this.children) {
+                child.seek(key);
+                if (child.key !== key) {
+                    key = child.key;
+                    agreed = false;
+                }
+            }
+        }
+        this.key = key;
+    }
+
+    next() {
+        this.children[0].next();
+        this.align();
+    }
+
+    /**
+     * @param {number} key
+     */
+    seek(key) {
+        this.children[0].seek(key);
+        this.align();
+    }
+
+    leaf() {
+        return this.children[0].leaf();
+    }
 }
 
 /**
@@ -218,8 +272,10 @@ function buildStreamSource(sourcePath, nameBuilder) {
 }
 
 export {
-    union,
-    intersect,
+    EXHAUSTED,
+    IndexCursor,
+    OrCursor,
+    AndCursor,
     normalizeSelector,
     buildStreamSource
 };

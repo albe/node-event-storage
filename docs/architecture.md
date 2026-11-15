@@ -19,7 +19,7 @@ This page describes the technical implementation and architecture of the `node-e
 | `IndexMatcher.js` | Discriminant lookup table that routes each written document to the matching secondary indexes in O(1) |
 | `FileHandlePool.js` | LRU pool of open file descriptors shared by partitions (bounded by `maxOpenPartitions`) |
 | `utils/util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
-| `utils/indexUtil.js` | Set operations on index-entry ranges (`union`, `intersect`) and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
+| `utils/indexUtil.js` | Index cursors for lazy union and intersection (`IndexCursor`, `OrCursor`, `AndCursor`) and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
 | `utils/apiHelpers.js` | Argument normalization helpers shared across the public API (revision clamping, commit overloads, predicate/raw shorthand) |
 | `utils/metadataUtil.js` | Object matcher evaluation, raw-buffer matcher compilation, and HMAC metadata helpers |
 | `utils/fsUtil.js` | File-system utilities: path resolution, directory creation, recursive file scanning |
@@ -115,7 +115,7 @@ graph TD
 
 ### JoinEventStream
 
-`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved to sorted index-entry ranges using `union` and `intersect` before any document is read. Used by `EventStore.fromStreams()` and `EventStore.query()` for multi-stream queries and DCB context reads.
+`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then turned into a tree of index cursors: an `IndexCursor` per stream index walks its revision-bounded entries, an `OrCursor` merges children without duplicates, and an `AndCursor` lets its children skip ahead to the largest sequence number (galloping, then binary search) until they agree. The cursors read only the sequence numbers from the index chunks, so no entry arrays or entry objects are built, and the first document is read as soon as the first match is found. Used by `EventStore.fromStreams()` and `EventStore.query()` for multi-stream queries and DCB context reads.
 
 ### Consumer
 

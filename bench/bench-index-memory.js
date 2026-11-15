@@ -38,6 +38,20 @@ function timed(fn) {
     return [Number(process.hrtime.bigint() - start) / 1e6, result];
 }
 
+/**
+ * Read entries through range() where the index still has it, otherwise position by position with get().
+ */
+function readRange(index, from, until) {
+    if (index.range) {
+        return index.range(from, until);
+    }
+    const entries = new Array(until - from + 1);
+    for (let position = from; position <= until; position++) {
+        entries[position - from] = index.get(position);
+    }
+    return entries;
+}
+
 const scenarios = {
     write(Index) {
         fs.rmSync(dataDirectory, { recursive: true, force: true });
@@ -56,7 +70,7 @@ const scenarios = {
         const index = new Index('bench.index', { dataDirectory });
         const [ms] = timed(() => {
             for (let i = 1; i <= entryCount; i += 1000) {
-                index.range(i, Math.min(entryCount, i + 999));
+                readRange(index, i, Math.min(entryCount, i + 999));
             }
         });
         const heap = memoryMB() - before;
@@ -75,7 +89,7 @@ const scenarios = {
     },
     get(Index) {
         const index = new Index('bench.index', { dataDirectory });
-        index.range(1, entryCount);
+        readRange(index, 1, entryCount);
         const random = mulberry32(7);
         const positions = Array.from({ length: 1000000 }, () => 1 + Math.floor(random() * entryCount));
         let checksum = 0;
@@ -85,12 +99,12 @@ const scenarios = {
     },
     range(Index) {
         const index = new Index('bench.index', { dataDirectory });
-        index.range(1, entryCount);
+        readRange(index, 1, entryCount);
         let checksum = 0;
         const [smallMs] = timed(() => {
-            for (let i = 1; i + 9 <= entryCount; i += 10) checksum += index.range(i, i + 9).length;
+            for (let i = 1; i + 9 <= entryCount; i += 10) checksum += readRange(index, i, i + 9).length;
         });
-        const [fullMs] = timed(() => { checksum += index.range(1, entryCount).length; });
+        const [fullMs] = timed(() => { checksum += readRange(index, 1, entryCount).length; });
         index.close();
         return { 'range 10er warm ms': smallMs, 'range all warm ms': fullMs, checksum };
     },

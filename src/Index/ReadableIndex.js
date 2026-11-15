@@ -361,7 +361,6 @@ class ReadableIndex extends events.EventEmitter {
     /**
      * Get the sequence number of an entry without creating an entry object for the default entry layout.
      *
-     * @private
      * @param {number} index The 0-based entry number.
      * @returns {number}
      */
@@ -370,20 +369,6 @@ class ReadableIndex extends events.EventEmitter {
             return this.entryAt(index).number;
         }
         return this.chunkFor(index).words[(index % CHUNK_CAPACITY) * this.wordsPerEntry];
-    }
-
-    /**
-     * Read all index entries. Equal to range(1, index.length) with the exception that this returns
-     * an empty array if the index is empty.
-     *
-     * @api
-     * @returns {Array<EntryInterface>} An array of all index entries.
-     */
-    all() {
-        if (this.length === 0) {
-            return [];
-        }
-        return this.range(1, this.length);
     }
 
     /**
@@ -411,44 +396,6 @@ class ReadableIndex extends events.EventEmitter {
      */
     peek(index) {
         return this.entryAt(index - 1, true);
-    }
-
-    /**
-     * Check if the given range is within the bounds of the index.
-     *
-     * @api
-     * @param {number} from The 1-based index position from where to get entries from (inclusive).
-     * @param {number} until The 1-based index position until where to get entries to (inclusive).
-     * @returns {boolean}
-     */
-    validRange(from, until) {
-        if (from < 1 || from > this.length) {
-            return false;
-        }
-        return (until >= from && until <= this.length);
-    }
-
-    /**
-     * Get a range of index entries.
-     *
-     * @api
-     * @param {number} from The 1-based index position from where to get entries from (inclusive). If < 0 will start at that position from end.
-     * @param {number} [until=-1] The 1-based index position until where to get entries to (inclusive). If < 0 will get until that position from the end. Defaults to this.length.
-     * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
-     */
-    range(from, until = -1) {
-        from = wrapAndCheck(from, this.length);
-        until = wrapAndCheck(until, this.length);
-
-        if (from <= 0 || until < from) {
-            return false;
-        }
-
-        const entries = new Array(until - from + 1);
-        for (let index = from; index <= until; index++) {
-            entries[index - from] = this.entryAt(index - 1);
-        }
-        return entries;
     }
 
     /**

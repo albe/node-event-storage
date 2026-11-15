@@ -1,151 +1,141 @@
 import expect from 'expect.js';
-import Entry from '../src/IndexEntry.js';
 import {
-    intersect,
-    union,
+    EXHAUSTED,
+    IndexCursor,
+    OrCursor,
+    AndCursor,
     normalizeSelector
 } from '../src/utils/indexUtil.js';
 
-function createEntry(number, position = number * 100, size = 10, partition = Math.floor(number / 10)) {
-    return new Entry(number, position, size, partition);
+/**
+ * Minimal stand-in for a ReadableIndex over the given ascending sequence numbers.
+ */
+function createIndex(numbers) {
+    return {
+        length: numbers.length,
+        numberAt: index => numbers[index],
+        find(number, min = false) {
+            if (min) {
+                const position = numbers.findIndex(value => value >= number) + 1;
+                return position;
+            }
+            let position = 0;
+            numbers.forEach((value, index) => { if (value <= number) position = index + 1; });
+            return position;
+        }
+    };
+}
+
+function cursor(numbers, forwards = true, min = 1, max = 1000) {
+    return new IndexCursor(createIndex(numbers), min, max, forwards);
+}
+
+function collect(cursor) {
+    const keys = [];
+    for (; cursor.key !== EXHAUSTED; cursor.next()) {
+        keys.push(Math.abs(cursor.key));
+    }
+    return keys;
 }
 
 describe('indexUtil', function() {
 
-    describe('union', function () {
+    describe('IndexCursor', function () {
 
-        it('returns empty when called without ranges', function () {
-            expect(union()).to.eql([]);
+        it('walks all numbers within the bounds forwards and backwards', function () {
+            expect(collect(cursor([1, 3, 5, 7, 9], true, 3, 7))).to.eql([3, 5, 7]);
+            expect(collect(cursor([1, 3, 5, 7, 9], false, 2, 8))).to.eql([7, 5, 3]);
         });
 
-        it('returns a shallow copy for a single range', function () {
-            const range = [createEntry(1), createEntry(2)];
-            const result = union(range);
-
-            expect(result).to.eql(range);
-            expect(result).not.to.be(range);
+        it('is exhausted for an empty or out of bounds range', function () {
+            expect(cursor([], true).key).to.be(EXHAUSTED);
+            expect(cursor([5, 6], true, 10, 20).key).to.be(EXHAUSTED);
+            expect(cursor([5, 6], false, 1, 4).key).to.be(EXHAUSTED);
         });
 
-        it('returns the sorted union of multiple ranges without duplicates', function () {
-            const merged = union(
-                [createEntry(1), createEntry(3), createEntry(5)],
-                [createEntry(2), createEntry(3), createEntry(6)],
-                [createEntry(3), createEntry(4), createEntry(6), createEntry(7)]
-            );
+        it('seeks to the first key at least the given key and never past the bounds', function () {
+            const forwards = cursor([1, 3, 5, 7, 9], true, 1, 7);
+            forwards.seek(4);
+            expect(forwards.key).to.be(5);
+            forwards.seek(2);
+            expect(forwards.key).to.be(5);
+            forwards.seek(8);
+            expect(forwards.key).to.be(EXHAUSTED);
 
-            expect(merged.map(entry => entry.number)).to.eql([1, 2, 3, 4, 5, 6, 7]);
+            const backwards = cursor([1, 3, 5, 7, 9], false, 3, 9);
+            backwards.seek(-6);
+            expect(backwards.key).to.be(-5);
+            backwards.seek(-2);
+            expect(backwards.key).to.be(EXHAUSTED);
         });
 
-        it('keeps the left entry when duplicate numbers exist in both ranges', function () {
-            const left = createEntry(4, 400, 10, 1);
-            const right = createEntry(4, 999, 99, 9);
-            const merged = union([left], [right]);
-
-            expect(merged.length).to.be(1);
-            expect(merged[0]).to.be(left);
+        it('finds far away keys by galloping and binary search', function () {
+            const numbers = Array.from({ length: 100 }, (_, i) => 2 * (i + 1));
+            const forwards = cursor(numbers, true, 1, 1000);
+            forwards.seek(75);
+            expect(forwards.key).to.be(76);
+            forwards.seek(201);
+            expect(forwards.key).to.be(EXHAUSTED);
+            const backwards = cursor(numbers, false, 1, 1000);
+            backwards.seek(-41);
+            expect(backwards.key).to.be(-40);
         });
 
-        it('supports chaining with returned arrays', function () {
-            const merged = union(
-                union([createEntry(1), createEntry(3)], [createEntry(2), createEntry(3)]),
-                [createEntry(3), createEntry(4)]
-            );
-
-            expect(merged.map(entry => entry.number)).to.eql([1, 2, 3, 4]);
+        it('exposes the index and position of the current entry', function () {
+            const indexCursor = cursor([2, 4, 6]);
+            indexCursor.next();
+            expect(indexCursor.leaf().position).to.be(2);
         });
-
-        it('handles empty ranges inside variadic input', function () {
-            const merged = union(
-                [],
-                [createEntry(2), createEntry(4)],
-                []
-            );
-
-            expect(merged.map(entry => entry.number)).to.eql([2, 4]);
-        });
-
     });
 
-    describe('intersect', function () {
+    describe('OrCursor', function () {
 
-        it('returns empty when called without ranges', function () {
-            expect(intersect()).to.eql([]);
+        it('returns the sorted union without duplicates', function () {
+            const union = new OrCursor([cursor([1, 4, 7]), cursor([2, 4, 8]), cursor([])]);
+            expect(collect(union)).to.eql([1, 2, 4, 7, 8]);
         });
 
-        it('returns empty when any range is empty', function () {
-            const selected = intersect(
-                [createEntry(1), createEntry(2)],
-                [],
-                [createEntry(1), createEntry(2)]
-            );
-
-            expect(selected).to.eql([]);
+        it('returns the union in reverse order when reading backwards', function () {
+            const union = new OrCursor([cursor([1, 4, 7], false), cursor([2, 4, 8], false)]);
+            expect(collect(union)).to.eql([8, 7, 4, 2, 1]);
         });
 
-        it('returns a shallow copy for a single range', function () {
-            const range = [createEntry(10), createEntry(20)];
-            const result = intersect(range);
-
-            expect(result).to.eql(range);
-            expect(result).not.to.be(range);
+        it('is exhausted without children', function () {
+            expect(new OrCursor([]).key).to.be(EXHAUSTED);
         });
 
-        it('returns only entries that occur in every range', function () {
-            const selected = intersect(
-                [createEntry(1), createEntry(3), createEntry(5), createEntry(7)],
-                [createEntry(2), createEntry(3), createEntry(5), createEntry(8)],
-                [createEntry(3), createEntry(4), createEntry(5), createEntry(9)]
-            );
-
-            expect(selected.map(entry => entry.number)).to.eql([3, 5]);
+        it('points its leaf to a child holding the current key', function () {
+            const second = cursor([2, 4]);
+            const union = new OrCursor([cursor([3]), second]);
+            expect(union.leaf()).to.be(second);
         });
-
-        it('works independent of input order and range sizes', function () {
-            const selected = intersect(
-                [createEntry(1), createEntry(2), createEntry(3), createEntry(4), createEntry(5), createEntry(6)],
-                [createEntry(3), createEntry(4)],
-                [createEntry(2), createEntry(3), createEntry(4), createEntry(8)]
-            );
-
-            expect(selected.map(entry => entry.number)).to.eql([3, 4]);
-        });
-
-        it('returns empty when ranges are disjoint', function () {
-            const selected = intersect(
-                [createEntry(1), createEntry(2)],
-                [createEntry(3), createEntry(4)],
-                [createEntry(5), createEntry(6)]
-            );
-
-            expect(selected).to.eql([]);
-        });
-
-        it('supports chaining merge and select operations', function () {
-            const selected = intersect(
-                union([createEntry(1), createEntry(4)], [createEntry(2), createEntry(4)]),
-                union([createEntry(2), createEntry(4)], [createEntry(3), createEntry(4)]),
-                [createEntry(4), createEntry(5)]
-            );
-
-            expect(selected.map(entry => entry.number)).to.eql([4]);
-        });
-
     });
 
-    describe('immutability guarantees', function () {
+    describe('AndCursor', function () {
 
-        it('does not mutate source arrays when intersect sorts ranges by length', function () {
-            const a = [createEntry(1), createEntry(2), createEntry(3)];
-            const b = [createEntry(2)];
-            const c = [createEntry(2), createEntry(3)];
-
-            intersect(a, b, c);
-
-            expect(a.map(entry => entry.number)).to.eql([1, 2, 3]);
-            expect(b.map(entry => entry.number)).to.eql([2]);
-            expect(c.map(entry => entry.number)).to.eql([2, 3]);
+        it('returns only keys contained in all children', function () {
+            const intersection = new AndCursor([cursor([1, 2, 4, 6, 8, 10]), cursor([2, 3, 4, 8, 11]), cursor([0, 2, 8, 9])]);
+            expect(collect(intersection)).to.eql([2, 8]);
         });
 
+        it('intersects in reverse order when reading backwards', function () {
+            const intersection = new AndCursor([cursor([1, 2, 4, 8], false), cursor([2, 4, 5, 8], false)]);
+            expect(collect(intersection)).to.eql([8, 4, 2]);
+        });
+
+        it('is exhausted when a child is empty or there are no children', function () {
+            expect(new AndCursor([cursor([1, 2]), cursor([])]).key).to.be(EXHAUSTED);
+            expect(new AndCursor([]).key).to.be(EXHAUSTED);
+        });
+
+        it('nests with union cursors', function () {
+            // (a AND (b OR c))
+            const nested = new AndCursor([cursor([1, 2, 3, 4, 5, 6]), new OrCursor([cursor([2, 9]), cursor([4, 6])])]);
+            expect(collect(nested)).to.eql([2, 4, 6]);
+            const seeking = new OrCursor([new AndCursor([cursor([1, 3, 5]), cursor([3, 5])]), cursor([4])]);
+            seeking.seek(4);
+            expect(collect(seeking)).to.eql([4, 5]);
+        });
     });
 
     describe('normalizeSelector', function () {

@@ -1,6 +1,6 @@
 import EventStream from './EventStream.js';
-import {assert, iterate} from './utils/util.js';
-import {intersect, normalizeSelector, union} from './utils/indexUtil.js';
+import {assert} from './utils/util.js';
+import {EXHAUSTED, IndexCursor, OrCursor, AndCursor, normalizeSelector} from './utils/indexUtil.js';
 import {normalizeRevision} from './utils/apiHelpers.js';
 
 /**
@@ -40,117 +40,67 @@ class JoinEventStream extends EventStream {
         this.maxRevision = normalizeRevision(maxRevision, eventStore.length);
         this.version = this.streamIndex.length;
 
-        this._combinedRanges = null;
-
         this.fetch = () => this.iterateDocuments();
         this._iterator = null;
     }
 
 
     /**
-     * Resolve and cache the combined index-entry ranges for the full selector.
-     *
-     * @private
-     * @returns {Array<Array<number>>}
-     */
-    resolveCombinedRanges() {
-        if (this._combinedRanges) {
-            return this._combinedRanges;
-        }
-
-        this._combinedRanges = this.resolveSelectorRanges(this.selector);
-        return this._combinedRanges;
-    }
-
-    /**
-     * Resolve one selector node into a sorted index-entry range.
-     * Selector is already normalized and optimized from constructor, so we just traverse and collect ranges.
+     * Build a cursor over the matching index entries for one selector node.
+     * Selector is already normalized and optimized from constructor, so we just traverse it.
      *
      * @private
      * @param {string|Array<string|Array>} selectorNode
      * @param {number} [depth=0]
-     * @returns {Array<Array<number>>}
+     * @returns {IndexCursor|OrCursor|AndCursor}
      */
-    resolveSelectorRanges(selectorNode, depth = 0) {
+    buildCursor(selectorNode, depth = 0) {
         if (typeof selectorNode === 'string') {
             const index = this.eventStore.streams[selectorNode]?.index;
-            return this.resolveIndexRange(index);
+            return this.buildIndexCursor(index);
         }
 
-        const childRanges = selectorNode.map(node => this.resolveSelectorRanges(node, depth + 1));
-        return depth % 2 === 0 ? union(...childRanges) : intersect(...childRanges);
+        const children = selectorNode.map(node => this.buildCursor(node, depth + 1));
+        return depth % 2 === 0 ? new OrCursor(children) : new AndCursor(children);
     }
 
     /**
-     * Resolve one stream index to the global revision-bounded entry range.
+     * Build a cursor over one stream index, bounded by the global revisions.
      *
      * @private
-     * @param {object|undefined} index
-     * @returns {Array<Array<number>>}
+     * @param {ReadableIndex|undefined} index
+     * @returns {IndexCursor|OrCursor}
      */
-    resolveIndexRange(index) {
+    buildIndexCursor(index) {
         if (!index || index.length === 0) {
-            return [];
+            return new OrCursor([]);
         }
-
-        const ascending = this.minRevision <= this.maxRevision;
-        const from = index.find(this.minRevision, ascending);
-        const until = index.find(this.maxRevision, !ascending);
-        if (
-            from === 0 ||
-            until === 0 ||
-            (ascending ? from > until : from < until)
-        ) {
-            return [];
-        }
-
-        const rangeFrom = ascending ? from : until;
-        const rangeUntil = ascending ? until : from;
-        return index.range(rangeFrom, rangeUntil) || [];
-    }
-
-    /**
-     * Iterate matching index entries in requested direction.
-     *
-     * @private
-     * @returns {Generator<Array<number>>}
-     */
-    * iterateEntries() {
-        const entries = this.resolveCombinedRanges();
         const forwards = this.minRevision <= this.maxRevision;
-        yield* iterate(entries, forwards);
+        const minNumber = Math.min(this.minRevision, this.maxRevision);
+        const maxNumber = Math.max(this.minRevision, this.maxRevision);
+        return new IndexCursor(index, minNumber, maxNumber, forwards);
     }
 
     /**
-     * Iterate storage documents lazily from combined index entries.
+     * Iterate storage documents lazily, in the requested direction, by walking the selector cursor.
      *
      * @private
      * @returns {Generator<object|{ buffer: Buffer, time64: number, sequenceNumber: number }>}
      */
     * iterateDocuments() {
         const forwards = this.minRevision <= this.maxRevision;
-        for (const entry of this.iterateEntries()) {
-            const event = this.eventStore.storage.readFrom(
-                entry.partition,
-                entry.position,
-                entry.size,
-                this.raw,
-                !forwards
-            );
+        const cursor = this.buildCursor(this.selector);
+        for (; cursor.key !== EXHAUSTED; cursor.next()) {
+            const { index, position } = cursor.leaf();
+            const entry = index.peek(position);
+            if (!entry) {
+                return;
+            }
+            const event = this.eventStore.storage.readFrom(entry.partition, entry.position, entry.size, this.raw, !forwards);
             if (event) {
                 yield event;
             }
         }
-    }
-
-    /**
-     * Reset fetch state and cached selector ranges when stream boundaries changed.
-     *
-     * @returns {JoinEventStream}
-     */
-    reset() {
-        this._combinedRanges = null;
-        return super.reset();
     }
 }
 

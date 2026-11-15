@@ -4,7 +4,9 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
-- Keep index entries in memory as chunks of raw entry bytes instead of one object per entry. A fully read index now needs about 16 bytes per entry instead of about 90, opening a large index no longer allocates an array of its full length, and `find()` no longer creates entry objects. `get()` and `range()` still return entry objects, but create them on each call, so the same position no longer returns the identical object twice.
+- Keep index entries in memory as chunks of raw entry bytes instead of one object per entry. A fully read index now needs about 16 bytes per entry instead of about 90, opening a large index no longer allocates an array of its full length, and `find()` no longer creates entry objects. `get()` still returns entry objects, but creates them on each call, so the same position no longer returns the identical object twice.
+- `fromStreams()`/`query()` now evaluate the selector with index cursors instead of building merged entry arrays: the first event is available immediately, memory no longer grows with the number of matches, and intersections skip non-matching entries with a binary search.
+- **Breaking:** Removed `Index.range()`, `Index.all()` and `Index.validRange()`. Read entries by position with `index.get(position)` for `1 <= position <= index.length`. The `union()` and `intersect()` helpers in `utils/indexUtil.js` were replaced by the index cursors.
 - Fix consumer state with non-ASCII characters being truncated on persist, which reset the consumer to its initial state and position 0 after a restart.
 - Fix partitions whose names hash to the same 32-bit partition id sharing one file and its metadata. A colliding partition is now stored in a file with a `~<n>` suffix (e.g. `eventstore.account-8444~1`). Documents written into a shared file by earlier versions stay readable there. Partition names ending in `~<number>` are reserved and rejected for new partitions.
 
