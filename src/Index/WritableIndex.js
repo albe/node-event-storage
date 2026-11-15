@@ -1,5 +1,5 @@
 import fs from 'fs';
-import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC } from './ReadableIndex.js';
+import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC, CHUNK_CAPACITY, createChunk } from './ReadableIndex.js';
 import { assert, assertEqual } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
@@ -190,10 +190,10 @@ class WritableIndex extends ReadableIndex {
         assertEqual(entry.constructor.name, this.EntryClass.name, `Wrong entry object.`);
         assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size.`);
 
-        const dataLen = this.data.length;
-        assert(dataLen === 0 || this.data.numberAt(dataLen - 1) < entry.number, 'Consistency error. Tried to add an index that should come before existing last entry.');
+        const dataLen = this.length;
+        assert(dataLen === 0 || this.numberAt(dataLen - 1) < entry.number, 'Consistency error. Tried to add an index that should come before existing last entry.');
 
-        this.data.push(entry);
+        this.appendToChunk(entry);
 
         if (this.writeBufferCursor === 0) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
@@ -206,6 +206,26 @@ class WritableIndex extends ReadableIndex {
         }
 
         return this.length;
+    }
+
+    /**
+     * Write the entry into the last in-memory chunk, growing it or starting a new one when it is full.
+     *
+     * @private
+     * @param {EntryInterface} entry
+     */
+    appendToChunk(entry) {
+        const chunkIndex = Math.floor(this.length / CHUNK_CAPACITY);
+        const position = this.length - chunkIndex * CHUNK_CAPACITY;
+        let chunk = position > 0 ? this.chunkFor(this.length - 1) : createChunk(this.EntryClass.size, 1);
+        assert(chunk, 'Can not append to the index, because its last entries could not be read.');
+        if (chunk.capacity === position) {
+            chunk = createChunk(this.EntryClass.size, position + 1, chunk);
+        }
+        this.chunks[chunkIndex] = chunk;
+        entry.toBuffer(chunk.buffer, position * this.EntryClass.size);
+        chunk.filled = position + 1;
+        this.entryCount++;
     }
 
     /**
@@ -229,7 +249,7 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
-        this.data.truncate(after);
+        this.truncateChunks(after);
     }
 }
 

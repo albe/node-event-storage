@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
-import { CHUNK_CAPACITY } from '../src/Index/EntryChunks.js';
+import { CHUNK_CAPACITY } from '../src/Index/ReadableIndex.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
