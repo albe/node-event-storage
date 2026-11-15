@@ -6,6 +6,7 @@ import { ensureDirectory } from './utils/fsUtil.js';
 import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
+const TMP_FILE_SUFFIX = /^\d+\.tmp$/;
 
 /**
  * Safely unlink a file and ignore if it doesn't exist.
@@ -65,7 +66,9 @@ class Consumer extends stream.Readable {
     }
 
     /**
-     * Iterate over all files in the directory of this consumer and unlink any file that starts with the filename followed by a dot.
+     * Unlink temporary files of this consumer that were left behind by an interrupted persist.
+     * Only `<fileName>.<position>.tmp` files are removed, so the state files of other consumers whose
+     * identifier or stream name extends this one (e.g. `orders` and `orders.archive`) stay untouched.
      * @private
      */
     cleanUpFailedWrites() {
@@ -73,7 +76,7 @@ class Consumer extends stream.Readable {
         const consumerDirectory = path.dirname(this.fileName);
         const files = fs.readdirSync(consumerDirectory);
         for (let file of files) {
-            if (file.startsWith(consumerNamePrefix)) {
+            if (file.startsWith(consumerNamePrefix) && TMP_FILE_SUFFIX.test(file.slice(consumerNamePrefix.length))) {
                 safeUnlink(path.join(consumerDirectory, file));
             }
         }
@@ -166,7 +169,7 @@ class Consumer extends stream.Readable {
             const consumerData = Buffer.allocUnsafe(4 + Buffer.byteLength(consumerState, 'utf8'));
             consumerData.writeInt32LE(this.position, 0);
             consumerData.write(consumerState, 4, 'utf8');
-            const tmpFile = this.fileName + '.' + this.position;
+            const tmpFile = this.fileName + '.' + this.position + '.tmp';
             this.persisting = null;
             /* c8 ignore next 3 */
             if (fs.existsSync(tmpFile)) {

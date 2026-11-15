@@ -6,6 +6,7 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 - Fix consumer state with non-ASCII characters being truncated on persist, which reset the consumer to its initial state and position 0 after a restart.
 - Fix partitions whose names hash to the same 32-bit partition id sharing one file and its metadata. A colliding partition is now stored in a file with a `~<n>` suffix (e.g. `eventstore.account-8444~1`). Documents written into a shared file by earlier versions stay readable there. Partition names ending in `~<number>` are reserved and rejected for new partitions.
+- Fix a consumer deleting the persisted state of other consumers whose file name extends its own (e.g. identifier `orders` vs. `orders.archive`, or stream `foo` vs. `foo.bar`). Temporary persist files are now named `<consumer>.<position>.tmp`, and only those are cleaned up on start.
 
 ## 1.4.1
 
