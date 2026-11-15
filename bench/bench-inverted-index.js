@@ -22,10 +22,15 @@ const STUDENT_TYPES = ['type:StudentRegistered', 'type:StudentSubscribedToCourse
 const QUERIES = 2000;
 const MAX_OPEN_INDEXES = 1024;
 
+/**
+ * mulberry32: a small seeded PRNG whose consecutive values are not correlated modulo small numbers.
+ */
 function createRandom(seed) {
     return (n) => {
-        seed = (seed * 1103515245 + 12345) % 2147483648;
-        return seed % n;
+        seed = (seed + 0x6D2B79F5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return (((t ^ (t >>> 14)) >>> 0) / 4294967296 * n) | 0;
     };
 }
 
@@ -142,7 +147,11 @@ class FilePerTermIndex {
     }
 
     close() {
-        for (const index of this.indexes.values()) index.close();
+        // Flush explicitly: WritableIndex.close() drops buffered entries when the pool already evicted its handle.
+        for (const index of this.indexes.values()) {
+            index.flush();
+            index.close();
+        }
         this.indexes.clear();
     }
 }
