@@ -2,25 +2,10 @@ import stream from 'stream';
 import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
-import { ensureDirectory } from './utils/fsUtil.js';
+import { ensureDirectory, isSameOrParentDirectory, safeUnlink, writeFileAtomic } from './utils/fsUtil.js';
 import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
-
-/**
- * Safely unlink a file and ignore if it doesn't exist.
- * @param {string} filename
- */
-const safeUnlink = (filename) => {
-    /* c8 ignore next */
-    try {
-        fs.unlinkSync(filename);
-    } catch (e) {
-        if (e.code !== "ENOENT") {
-            throw e;
-        }
-    }
-};
 
 /**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
@@ -59,7 +44,10 @@ class Consumer extends stream.Readable {
         this.indexName = indexName;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
-        if (ensureDirectory(consumerDirectory)) {
+        assert(isSameOrParentDirectory(consumerDirectory, path.dirname(this.fileName)),
+            `Consumer "${identifier}" for index "${indexName}" would be stored outside of the consumers directory.`);
+        // Hierarchical stream names (e.g. "tags/course/c1") place the consumer file in a subdirectory.
+        if (ensureDirectory(path.dirname(this.fileName))) {
             this.cleanUpFailedWrites();
         }
     }
@@ -173,13 +161,11 @@ class Consumer extends stream.Readable {
                 throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
             }
             try {
-                fs.writeFileSync(tmpFile, consumerData);
-                // If the write fails (half-way), the consumer state file will not be corrupted
-                fs.renameSync(tmpFile, this.fileName);
+                writeFileAtomic(this.fileName, consumerData, tmpFile);
                 this.emit('persisted', consumerState);
+            /* c8 ignore next 3 */
             } catch (e) {
-                /* c8 ignore next */
-                safeUnlink(tmpFile);
+                // The previous state file is still intact; the next persist will try again.
             }
         });
     }

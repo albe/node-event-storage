@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
 import { iterate, compileAccessor } from '../src/utils/util.js';
-import { scanForFiles } from '../src/utils/fsUtil.js';
+import { safeUnlink, scanForFiles, writeFileAtomic } from '../src/utils/fsUtil.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -88,6 +88,53 @@ describe('util', function() {
                 expect(err).to.be.an(Error);
                 done();
             });
+        });
+
+    });
+
+    describe('writeFileAtomic', function() {
+
+        beforeEach(function() {
+            fs.emptyDirSync(testDir);
+        });
+
+        after(function() {
+            fs.removeSync(testDir);
+        });
+
+        it('replaces the target file and removes the temporary file', function() {
+            const target = path.join(testDir, 'state');
+            fs.writeFileSync(target, 'old');
+            writeFileAtomic(target, 'new', target + '.1');
+            expect(fs.readFileSync(target, 'utf8')).to.be('new');
+            expect(fs.existsSync(target + '.1')).to.be(false);
+        });
+
+        it('keeps the previous target and cleans up when the rename fails', function() {
+            const target = path.join(testDir, 'state');
+            fs.writeFileSync(target, 'old');
+            fs.mkdirSync(path.join(testDir, 'blocker'));
+            fs.writeFileSync(path.join(testDir, 'blocker', 'file'), '');
+            const tmp = path.join(testDir, 'state.tmp');
+            // Renaming a file over a non-empty directory fails.
+            expect(() => writeFileAtomic(path.join(testDir, 'blocker'), 'new', tmp)).to.throwError();
+            expect(fs.existsSync(tmp)).to.be(false);
+            expect(fs.readFileSync(target, 'utf8')).to.be('old');
+        });
+
+        it('defaults the temporary file name to target + .tmp', function() {
+            const target = path.join(testDir, 'state');
+            writeFileAtomic(target, 'data');
+            expect(fs.readFileSync(target, 'utf8')).to.be('data');
+            expect(fs.existsSync(target + '.tmp')).to.be(false);
+        });
+
+    });
+
+    describe('safeUnlink', function() {
+
+        it('ignores missing files', function() {
+            expect(() => safeUnlink(path.join(testDir, 'does-not-exist'))).to.not.throwError();
         });
 
     });
