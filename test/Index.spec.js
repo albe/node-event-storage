@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
+import { CHUNK_CAPACITY } from '../src/Index/EntryChunks.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -533,6 +534,101 @@ describe('Index', function() {
             expect(index.flush()).to.be(false);
         });
 
+    });
+
+    describe('chunked entries', function() {
+
+        const entryCount = 2 * CHUNK_CAPACITY + 10;
+
+        it('reads entries across chunk boundaries after reopening', function() {
+            index = setupIndexWithEntries(entryCount, i => 3 * i);
+            index.close();
+            index.open();
+            expect(index.get(CHUNK_CAPACITY + 1).number).to.be(3 * (CHUNK_CAPACITY + 1));
+            expect(index.get(1).number).to.be(3);
+            const entries = index.range(CHUNK_CAPACITY - 1, CHUNK_CAPACITY + 2);
+            expect(entries.map(entry => entry.number)).to.eql([CHUNK_CAPACITY - 1, CHUNK_CAPACITY, CHUNK_CAPACITY + 1, CHUNK_CAPACITY + 2].map(i => 3 * i));
+            expect(index.all().length).to.be(entryCount);
+            expect(index.lastEntry.number).to.be(3 * entryCount);
+        });
+
+        it('finds numbers across chunk boundaries without loading the whole index first', function() {
+            index = setupIndexWithEntries(entryCount, i => 2 * i);
+            index.close();
+            index.open();
+            expect(index.find(2 * (CHUNK_CAPACITY + 5))).to.be(CHUNK_CAPACITY + 5);
+            expect(index.find(2 * (CHUNK_CAPACITY + 5) + 1)).to.be(CHUNK_CAPACITY + 5);
+            expect(index.find(2 * (CHUNK_CAPACITY + 5) + 1, true)).to.be(CHUNK_CAPACITY + 6);
+        });
+
+        it('appends to a reopened index whose last chunk was not read yet', function() {
+            index = setupIndexWithEntries(CHUNK_CAPACITY + 3);
+            index.close();
+            index.open();
+            index.add(new IndexEntry(CHUNK_CAPACITY + 4, 0));
+            index.flush();
+            index.close();
+            index.open();
+            expect(index.length).to.be(CHUNK_CAPACITY + 4);
+            expect(index.range(CHUNK_CAPACITY + 2).map(entry => entry.number)).to.eql([CHUNK_CAPACITY + 2, CHUNK_CAPACITY + 3, CHUNK_CAPACITY + 4]);
+        });
+
+        it('truncates across chunk boundaries and appends again', function() {
+            index = setupIndexWithEntries(entryCount);
+            index.truncate(CHUNK_CAPACITY - 2);
+            expect(index.length).to.be(CHUNK_CAPACITY - 2);
+            expect(index.lastEntry.number).to.be(CHUNK_CAPACITY - 2);
+            for (let i = CHUNK_CAPACITY - 1; i <= CHUNK_CAPACITY + 2; i++) {
+                index.add(new IndexEntry(i, 100 + i));
+            }
+            index.flush();
+            expect(index.get(CHUNK_CAPACITY + 1).position).to.be(100 + CHUNK_CAPACITY + 1);
+            index.close();
+            index.open();
+            expect(index.length).to.be(CHUNK_CAPACITY + 2);
+            expect(index.get(CHUNK_CAPACITY + 1).position).to.be(100 + CHUNK_CAPACITY + 1);
+        });
+
+        it('supports custom entry classes with a different layout', function() {
+            class WideEntry extends IndexEntry {
+                static get size() {
+                    return 20;
+                }
+                static fromBuffer(buffer, offset = 0) {
+                    return new this(buffer.readUInt32LE(offset + 4), buffer.readUInt32LE(offset + 8));
+                }
+                toBuffer(buffer, offset) {
+                    buffer.writeUInt32LE(0xffffffff, offset);
+                    buffer.writeUInt32LE(this.number, offset + 4);
+                    buffer.writeUInt32LE(this.position, offset + 8);
+                    buffer.fill(0, offset + 12, offset + 20);
+                    return WideEntry.size;
+                }
+            }
+            index = createIndex('wide.index', { EntryClass: WideEntry, writeBufferSize: 100 * WideEntry.size });
+            for (let i = 1; i <= CHUNK_CAPACITY + 5; i++) {
+                index.add(new WideEntry(2 * i, i));
+            }
+            index.flush();
+            index.close();
+            index.open();
+            expect(index.get(CHUNK_CAPACITY + 2)).to.be.a(WideEntry);
+            expect(index.get(CHUNK_CAPACITY + 2).position).to.be(CHUNK_CAPACITY + 2);
+            expect(index.find(2 * (CHUNK_CAPACITY + 3))).to.be(CHUNK_CAPACITY + 3);
+        });
+
+        it('lets a reader see entries appended into an already read chunk', function(done) {
+            index = setupIndexWithEntries(5);
+            const reader = createReader(index.name);
+            expect(reader.get(5).number).to.be(5);
+            reader.on('append', (prevLength, newLength) => {
+                expect(reader.range(prevLength + 1, newLength).map(entry => entry.number)).to.eql([6, 7]);
+                done();
+            });
+            index.add(new IndexEntry(6, 6));
+            index.add(new IndexEntry(7, 7));
+            index.flush();
+        });
     });
 
     describe('ReadOnly', function(){

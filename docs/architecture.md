@@ -38,6 +38,7 @@ This page describes the technical implementation and architecture of the `node-e
 | `Index/WritableIndex.js` | Builds and persists a binary position-list index; detects index/data divergence |
 | `Index/ReadableIndex.js` | Positional range lookups with binary search; loads and verifies stored matchers |
 | `Index/ReadOnlyIndex.js` | Read-only index variant that polls for appended entries via `WatchesFile` |
+| `Index/EntryChunks.js` | In-memory entry store of an index: raw entry bytes in fixed-size chunks, read lazily from the index file |
 
 ---
 
@@ -149,7 +150,7 @@ graph TD
 
 | Class | Purpose |
 |-------|---------|
-| `ReadableIndex` | Loads a binary position-list file into memory; provides O(log n) `find()` and O(1) range iteration; verifies persisted matcher HMACs. |
+| `ReadableIndex` | Reads a binary position-list file lazily into memory as chunks of raw entry bytes (`EntryChunks`, about 16 bytes per entry instead of one object each); provides O(log n) `find()` without creating entry objects and O(1) range iteration; verifies persisted matcher HMACs. |
 | `WritableIndex` | Extends `ReadableIndex`; appends new `IndexEntry` records on every commit and detects divergence between the index and its data partition on open. |
 | `ReadOnlyIndex` | Extends `ReadableIndex`; uses `WatchesFile` to pick up entries appended by a remote writer and emits an `append` event for `ReadOnlyStorage`. |
 

@@ -3,7 +3,7 @@ import path from 'path';
 import events from 'events';
 import { ReadOnly as ReadOnlyPartition } from '../Partition.js';
 import { ReadOnly as ReadOnlyIndex } from '../Index.js';
-import { assert, wrapAndCheck, iterate, kWayMerge } from '../utils/util.js';
+import { assert, wrapAndCheck, kWayMerge } from '../utils/util.js';
 import { resolvePath, scanForFiles } from '../utils/fsUtil.js';
 import { createHmac, matches, buildMetadataForMatcher } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
@@ -384,11 +384,11 @@ class ReadableStorage extends events.EventEmitter {
 
         const idx = index || this.index;
         const forwards = from <= until;
-        const lo = Math.min(from, until);
-        const hi = Math.max(from, until);
-        const entries = idx.range(lo, hi);
-        if (!entries) return;
-        for (const entry of iterate(entries, forwards)) {
+        if (!idx.validRange(Math.min(from, until), Math.max(from, until))) return;
+        // Walk the positions instead of materializing the range, so no entry object is created per document.
+        const step = forwards ? 1 : -1;
+        for (let position = from; position !== until + step && position <= idx.length; position += step) {
+            const entry = idx.peek(position);
             yield this.readFrom(entry.partition, entry.position, entry.size, raw, !forwards);
         }
     }

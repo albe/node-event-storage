@@ -2,6 +2,7 @@ import fs from 'fs';
 import events from 'events';
 import Entry, { assertValidEntryClass } from '../IndexEntry.js';
 import FileHandlePool from '../FileHandlePool.js';
+import EntryChunks from './EntryChunks.js';
 import { assert, wrapAndCheck, binarySearch } from '../utils/util.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import { resolvePath } from "../utils/fsUtil.js";
@@ -66,15 +67,13 @@ class ReadableIndex extends events.EventEmitter {
      * @param {object} options
      */
     initialize(options) {
-        /* @type Array<Entry> */
-        this.data = [];
+        this.data = new EntryChunks(options.EntryClass, (buffer, offset, length, entryNumber) => this.readEntries(buffer, offset, length, entryNumber));
         this.opened = false;
         this.fileMode = 'r';
         this.fileHandlePool = options.fileHandlePool || new FileHandlePool();
         this.EntryClass = options.EntryClass;
         this.dataDirectory = options.dataDirectory;
         this.fileName = resolvePath(options.dataDirectory, this.name);
-        this.readBuffer = Buffer.allocUnsafe(Math.max(options.EntryClass.size, options.writeBufferSize > 0 ? options.writeBufferSize : 4096));
 
         if (options.metadata) {
             this.metadata = Object.assign({entryClass: options.EntryClass.name, entrySize: options.EntryClass.size}, options.metadata);
@@ -168,14 +167,9 @@ class ReadableIndex extends events.EventEmitter {
         }
         this.opened = this.getFileHandle() !== null;
 
-        this.readUntil = -1;
-
         const length = this.readFileLength();
-        if (length > 0) {
-            this.data = new Array(length);
-            // Read last item to get the index started
-            this.read(length);
-        }
+        this.data.clear();
+        this.data.setLength(length);
 
         return true;
     }
@@ -251,71 +245,23 @@ class ReadableIndex extends events.EventEmitter {
      * @api
      */
     close() {
-        this.data = [];
-        this.readUntil = -1;
-        this.readBuffer.fill(0);
+        this.data.clear();
         this.fileHandlePool.evict(this, false);
         this.opened = false;
     }
 
     /**
-     * Read a single index entry from the given index position.
-     * Will prevent reading if the entry has already been read sequentially from the start.
+     * Read raw entries from the index file.
      *
      * @private
-     * @param {number} index
-     * @returns {Entry} The index entry at the given position.
+     * @param {Buffer} buffer The buffer to read into.
+     * @param {number} offset The buffer offset to read into.
+     * @param {number} length The amount of bytes to read.
+     * @param {number} entryNumber The 0-based number of the first entry to read.
+     * @returns {number} The amount of bytes read.
      */
-    read(index) {
-        index = Number(index) - 1;
-
-        const fd = this.getFileHandle();
-        fs.readSync(fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
-        if (index === this.readUntil + 1) {
-            this.readUntil++;
-        }
-        this.data[index] = this.EntryClass.fromBuffer(this.readBuffer);
-
-        return this.data[index];
-    }
-
-    /**
-     * Read a range of entries from disk. This method will not do any range checks.
-     * It will however optimize to prevent reading entries that have already been read sequentially from start.
-     *
-     * @private
-     * @param {number} from The 1-based index position from where to read from (inclusive).
-     * @param {number} until The 1-based index position until which to read to (inclusive).
-     * @returns {Array<Entry>|boolean} An array of the index entries in the given range or false on error.
-     */
-    readRange(from, until) {
-        if (until === from) {
-            return [this.read(from)];
-        }
-
-        from--;
-        until--;
-
-        const readFrom = Math.max(this.readUntil + 1, from);
-        const amount = (until - readFrom + 1);
-
-        const bufferSize = amount * this.EntryClass.size;
-        const readBuffer = bufferSize <= this.readBuffer.byteLength
-            ? this.readBuffer
-            : Buffer.allocUnsafe(bufferSize);
-        const fd = this.getFileHandle();
-        let readSize = fs.readSync(fd, readBuffer, 0, bufferSize, this.headerSize + readFrom * this.EntryClass.size);
-        let index = 0;
-        while (index < amount && readSize > 0) {
-            this.data[index + readFrom] = this.EntryClass.fromBuffer(readBuffer, index * this.EntryClass.size);
-            readSize -= this.EntryClass.size;
-            index++;
-        }
-        if (from <= this.readUntil + 1) {
-            this.readUntil = Math.max(this.readUntil, until);
-        }
-
-        return this.data.slice(from, until + 1);
+    readEntries(buffer, offset, length, entryNumber) {
+        return fs.readSync(this.getFileHandle(), buffer, offset, length, this.headerSize + entryNumber * this.EntryClass.size);
     }
 
     /**
@@ -345,11 +291,18 @@ class ReadableIndex extends events.EventEmitter {
             return false;
         }
 
-        if (this.data[index - 1]) {
-            return this.data[index - 1];
-        }
+        return this.data.get(index - 1);
+    }
 
-        return this.read(index);
+    /**
+     * Get a single index entry without the boundary checks of get(). The returned object may be reused by the next
+     * call, so only read its fields right away and never keep it.
+     *
+     * @param {number} index The 1-based index position, which must be within the index bounds.
+     * @returns {Entry|boolean} The entry at the given index position or false if it could not be read.
+     */
+    peek(index) {
+        return this.data.peek(index - 1);
     }
 
     /**
@@ -383,16 +336,6 @@ class ReadableIndex extends events.EventEmitter {
             return false;
         }
 
-        const readFrom = Math.max(this.readUntil + 1, from);
-        let readUntil = until;
-        while (readUntil >= readFrom && this.data[readUntil - 1]) {
-            readUntil--;
-        }
-
-        if (readFrom <= readUntil) {
-            this.readRange(readFrom, readUntil);
-        }
-
         return this.data.slice(from - 1, until);
     }
 
@@ -414,7 +357,7 @@ class ReadableIndex extends events.EventEmitter {
             return 0;
         }
         // We only need to search until the searched number because entry.number is always >= position
-        const [low, high] = binarySearch(number, Math.min(this.length, number), index => this.get(index).number);
+        const [low, high] = binarySearch(number, Math.min(this.length, number), index => this.data.numberAt(index - 1));
         return min ? low : high;
     }
 }

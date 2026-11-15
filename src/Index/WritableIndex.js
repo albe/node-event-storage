@@ -191,12 +191,9 @@ class WritableIndex extends ReadableIndex {
         assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size.`);
 
         const dataLen = this.data.length;
-        assert(dataLen === 0 || this.data.at(-1).number < entry.number, 'Consistency error. Tried to add an index that should come before existing last entry.');
+        assert(dataLen === 0 || this.data.numberAt(dataLen - 1) < entry.number, 'Consistency error. Tried to add an index that should come before existing last entry.');
 
-        if (this.readUntil === dataLen - 1) {
-            this.readUntil++;
-        }
-        this.data[dataLen] = entry;
+        this.data.push(entry);
 
         if (this.writeBufferCursor === 0) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
@@ -232,8 +229,7 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
-        this.data.splice(after);
-        this.readUntil = Math.min(this.readUntil, after);
+        this.data.truncate(after);
     }
 }
 
