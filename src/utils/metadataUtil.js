@@ -11,6 +11,7 @@ import {
 
 const compiledMatcherCache = new WeakMap();
 const rawBufferMatcherCache = new WeakMap();
+const ORDERING_OPERATORS = new Set(['$gt', '$gte', '$lt', '$lte', '$eq', '$ne']);
 
 /**
  * @param {any} value Value to classify.
@@ -139,6 +140,10 @@ function buildOperatorChecks(operatorObj) {
                 break;
             case '$hasAny':
                 checks.push(value => Array.isArray(value) && expectedValue.some(v => value.includes(v)));
+                break;
+            case '$startsWith':
+                assert(typeof expectedValue === 'string', '$startsWith expects a string prefix.', TypeError);
+                checks.push(value => typeof value === 'string' && value.startsWith(expectedValue));
                 break;
             default:
                 throw new TypeError(`Unknown operator: ${operator}`);
@@ -369,6 +374,11 @@ function buildMatcherTreeChild(key, value) {
             const hasAnyPatterns = value['$hasAny'].map(v => Buffer.from(JSON.stringify(v), 'utf8'));
             child.matches = (buffer, valueStart) =>
                 hasAnyPatterns.some(vp => indexOfSameLevel(buffer, vp, valueStart) !== -1);
+        } else if (isLoneStartsWith(value)) {
+            // The serialized prefix without its closing quote is a byte prefix of every JSON string
+            // that starts with it, so the key/value pattern alone decides the match.
+            child.isKeyPattern = true;
+            child.pattern = Buffer.concat([keyPrefix, Buffer.from(JSON.stringify(value['$startsWith']).slice(0, -1), 'utf8')]);
         } else if (isOperatorObject(value)) {
             child.isKeyPattern = true;
             child.pattern = keyPrefix;
@@ -382,6 +392,18 @@ function buildMatcherTreeChild(key, value) {
         child.pattern = buildKeyValuePattern(keyPrefix, value);
     }
     return child;
+}
+
+/**
+ * A prefix ending in a lone surrogate serializes as an escape sequence, while a document string
+ * continuing the surrogate pair serializes as raw UTF-8, so only well-formed prefixes are byte prefixes.
+ *
+ * @param {object} value Operator object.
+ * @returns {boolean} True when `value` is `{ $startsWith: string }` that can be matched as a byte prefix.
+ */
+function isLoneStartsWith(value) {
+    const prefix = value['$startsWith'];
+    return typeof prefix === 'string' && prefix.isWellFormed() && Object.keys(value).length === 1;
 }
 
 /**
@@ -497,7 +519,7 @@ function matchesOrdering(operator, ordering) {
 function buildNumericOperatorComparisons(entries) {
     const comparisons = [];
     for (const [operator, expectedValue] of entries) {
-        if (typeof expectedValue !== 'number') {
+        if (typeof expectedValue !== 'number' || !ORDERING_OPERATORS.has(operator)) {
             return null;
         }
         const expectedStr = JSON.stringify(expectedValue);

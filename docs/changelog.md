@@ -4,6 +4,7 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
+- Added the `$startsWith` matcher operator for string prefixes: `{ payload: { type: { $startsWith: 'Order' } } }`. In raw mode a lone `$startsWith` compiles to a single byte-pattern check without parsing the value. It can be combined with the scalar comparison operators.
 - Keep index entries in memory as chunks of raw entry bytes instead of one object per entry. A fully read index now needs about 16 bytes per entry instead of about 90, opening a large index no longer allocates an array of its full length, and `find()` no longer creates entry objects. `get()` still returns entry objects, but creates them on each call, so the same position no longer returns the identical object twice.
 - `fromStreams()`/`query()` now evaluate the selector lazily over the indexes instead of building merged entry arrays: the first event is available immediately, memory no longer grows with the number of matches, and intersections skip non-matching entries with a binary search.
 - **Breaking:** `Index.range()` now returns a lazy iterator instead of an array. `from > until` iterates backwards instead of returning `false`, out of bounds positions give an empty iteration, and one entry object is reused during the iteration, so copy what you need to keep. `Index.all()` returns the same kind of iterator over all entries. Removed `Index.validRange()`. `union()` and `intersect()` in `utils/indexUtil.js` now combine two such ranges lazily instead of entry arrays.
