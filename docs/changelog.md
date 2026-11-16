@@ -4,8 +4,14 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
+- Keep index entries in memory as chunks of raw entry bytes instead of one object per entry. A fully read index now needs about 16 bytes per entry instead of about 90, opening a large index no longer allocates an array of its full length, and `find()` no longer creates entry objects. `get()` still returns entry objects, but creates them on each call, so the same position no longer returns the identical object twice.
+- `fromStreams()`/`query()` now evaluate the selector lazily over the indexes instead of building merged entry arrays: the first event is available immediately, memory no longer grows with the number of matches, and intersections skip non-matching entries with a binary search.
+- **Breaking:** `Index.range()` now returns a lazy iterator instead of an array. `from > until` iterates backwards instead of returning `false`, out of bounds positions give an empty iteration, and one entry object is reused during the iteration, so copy what you need to keep. `Index.all()` returns the same kind of iterator over all entries. Removed `Index.validRange()`. `union()` and `intersect()` in `utils/indexUtil.js` now combine two such ranges lazily instead of entry arrays.
 - Fix consumer state with non-ASCII characters being truncated on persist, which reset the consumer to its initial state and position 0 after a restart.
 - Fix partitions whose names hash to the same 32-bit partition id sharing one file and its metadata. A colliding partition is now stored in a file with a `~<n>` suffix (e.g. `eventstore.account-8444~1`). Documents written into a shared file by earlier versions stay readable there. Partition names ending in `~<number>` are reserved and rejected for new partitions.
+- Fix consumers of hierarchical streams (e.g. tag streams like `tags/course/c1`) never persisting their state, because the subdirectory for the consumer file was not created.
+- Reject consumer identifiers that would place the consumer file outside of the `consumers` directory (e.g. `../../x`).
+- Fix a consumer deleting the persisted state of other consumers whose file name extends its own (e.g. identifier `orders` vs. `orders.archive`, or stream `foo` vs. `foo.bar`). Temporary persist files are now named `<consumer>.<position>.tmp`, and only those are cleaned up on start.
 
 ## 1.4.1
 

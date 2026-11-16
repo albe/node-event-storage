@@ -1,144 +1,90 @@
 import { assert, compileAccessor } from './util.js';
 import { buildMatcherFn } from './metadataUtil.js';
 
-/**
- * Merge two sorted index-entry ranges into one sorted union without duplicates.
- * Assumes each range is sorted and contains no duplicates (by entry number).
+/*
+ * `union` and `intersect` combine two lazy ranges of index entries, as returned by `index.range()`, into a new
+ * lazy range in the same direction. A range may reuse its entry object, so an entry is only read before the range
+ * that yielded it is advanced.
  *
- * @param {Array<Array<number>>} left Sorted index-entry range.
- * @param {Array<Array<number>>} right Sorted index-entry range.
- * @returns {Array<Array<number>>} A new union range.
+ * Calling `next(number)` on a range skips ahead to the first entry that does not come before `number`.
+ * `intersect` uses that to jump over long stretches without a match instead of stepping through them.
  */
-function unionTwoIndexEntryRanges(left, right) {
-    if (left.length === 0) {
-        return right.slice();
+
+/**
+ * @param {boolean} forwards
+ * @returns {function(number, number): boolean} Whether the first number comes before the second in that direction.
+ */
+function comesBefore(forwards) {
+    return forwards ? (left, right) => left < right : (left, right) => left > right;
+}
+
+/**
+ * Continue yielding the entries of a range, passing skip targets through.
+ *
+ * @param {IteratorResult} current The current, not yet yielded result of the range.
+ * @param {Generator} range
+ */
+function* drain(current, range) {
+    while (!current.done) {
+        current = range.next(yield current.value);
     }
-    if (right.length === 0) {
-        return left.slice();
-    }
+}
 
-    const merged = new Array(left.length + right.length);
-    let leftIndex = 0;
-    let rightIndex = 0;
-    let count = 0;
-
-    while (leftIndex < left.length && rightIndex < right.length) {
-        const leftEntry = left[leftIndex];
-        const rightEntry = right[rightIndex];
-        const leftNumber = leftEntry[0];
-        const rightNumber = rightEntry[0];
-
-        if (leftNumber < rightNumber) {
-            merged[count++] = leftEntry;
-            leftIndex++;
-        } else if (rightNumber < leftNumber) {
-            merged[count++] = rightEntry;
-            rightIndex++;
-        } else {
-            merged[count++] = leftEntry;
-            leftIndex++;
-            rightIndex++;
+/**
+ * Merge two ranges into one ordered range without duplicates.
+ *
+ * @param {Generator} left
+ * @param {Generator} right
+ * @param {boolean} [forwards=true]
+ * @returns {Generator}
+ */
+function* union(left, right, forwards = true) {
+    const before = comesBefore(forwards);
+    let a = left.next();
+    let b = right.next();
+    while (!a.done && !b.done) {
+        const leftNumber = a.value.number;
+        const rightNumber = b.value.number;
+        const leftFirst = !before(rightNumber, leftNumber);
+        const rightFirst = !before(leftNumber, rightNumber);
+        const target = yield leftFirst ? a.value : b.value;
+        // Advance the side that was yielded, and also the other side when a skip target leaves it behind.
+        if (leftFirst || (target !== undefined && before(leftNumber, target))) {
+            a = left.next(target);
+        }
+        if (rightFirst || (target !== undefined && before(rightNumber, target))) {
+            b = right.next(target);
         }
     }
-
-    while (leftIndex < left.length) {
-        merged[count++] = left[leftIndex++];
-    }
-    while (rightIndex < right.length) {
-        merged[count++] = right[rightIndex++];
-    }
-
-    merged.length = count;
-    return merged;
+    yield* drain(a, left);
+    yield* drain(b, right);
 }
 
 /**
- * Merge multiple sorted index-entry ranges into one sorted union without duplicates.
- * Pairwise reduction via two-way merges, optimized for realistic data with moderate overlap.
- * Assumes each range is sorted and contains no duplicates (by entry number).
+ * Yield the entries that are contained in both ranges.
  *
- * @param {...Array<Array<number>>} ranges Sorted index-entry ranges.
- * @returns {Array<Array<number>>} A new union range.
+ * @param {Generator} left
+ * @param {Generator} right
+ * @param {boolean} [forwards=true]
+ * @returns {Generator}
  */
-function union(...ranges) {
-    if (ranges.length === 0) {
-        return [];
-    }
-    if (ranges.length === 1) {
-        return ranges[0].slice();
-    }
-
-    let merged = unionTwoIndexEntryRanges(ranges[0], ranges[1]);
-    for (let i = 2; i < ranges.length; i++) {
-        merged = unionTwoIndexEntryRanges(merged, ranges[i]);
-    }
-    return merged;
-}
-
-/**
- * Intersect two sorted index-entry ranges by global number.
- * Assumes each range is sorted and contains no duplicates (by entry number).
- *
- * @param {Array<Array<number>>} left Sorted index-entry range.
- * @param {Array<Array<number>>} right Sorted index-entry range.
- * @returns {Array<Array<number>>} A new intersection range.
- */
-function intersectTwoIndexEntryRanges(left, right) {
-    if (left.length === 0 || right.length === 0) {
-        return [];
-    }
-
-    const selected = new Array(Math.min(left.length, right.length));
-    let leftIndex = 0;
-    let rightIndex = 0;
-    let count = 0;
-
-    while (leftIndex < left.length && rightIndex < right.length) {
-        const leftEntry = left[leftIndex];
-        const rightEntry = right[rightIndex];
-        const leftNumber = leftEntry[0];
-        const rightNumber = rightEntry[0];
-
-        if (leftNumber < rightNumber) {
-            leftIndex++;
-        } else if (rightNumber < leftNumber) {
-            rightIndex++;
+function* intersect(left, right, forwards = true) {
+    const before = comesBefore(forwards);
+    let a = left.next();
+    let b = right.next();
+    while (!a.done && !b.done) {
+        const leftNumber = a.value.number;
+        const rightNumber = b.value.number;
+        if (leftNumber === rightNumber) {
+            const target = yield a.value;
+            a = left.next(target);
+            b = right.next(target);
+        } else if (before(leftNumber, rightNumber)) {
+            a = left.next(rightNumber);
         } else {
-            selected[count++] = leftEntry;
-            leftIndex++;
-            rightIndex++;
+            b = right.next(leftNumber);
         }
     }
-
-    selected.length = count;
-    return selected;
-}
-
-/**
- * Intersect multiple sorted index-entry ranges by global number.
- * Pairwise reduction with size-order optimization, best for moderate to high overlap.
- * Assumes each range is sorted and contains no duplicates (by entry number).
- *
- * @param {...Array<Array<number>>} ranges Sorted index-entry ranges.
- * @returns {Array<Array<number>>} A new intersection range.
- */
-function intersect(...ranges) {
-    if (ranges.length === 0) {
-        return [];
-    }
-    if (ranges.length === 1) {
-        return ranges[0].slice();
-    }
-
-    ranges.sort((a, b) => a.length - b.length);
-    if (ranges[0].length === 0) {
-        return [];
-    }
-    let selected = intersectTwoIndexEntryRanges(ranges[0], ranges[1]);
-    for (let i = 2; i < ranges.length && selected.length > 0; i++) {
-        selected = intersectTwoIndexEntryRanges(selected, ranges[i]);
-    }
-    return selected;
 }
 
 /**

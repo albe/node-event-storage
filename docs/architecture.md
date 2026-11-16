@@ -20,7 +20,7 @@ This page describes the technical implementation and architecture of the `node-e
 | `InvertedIndex/` | Inverted index mapping terms (stream, type, tag) to ascending global positions in a few immutable segment files plus a memtable. Standalone building block; `EventStore` does not use it yet |
 | `FileHandlePool.js` | LRU pool of open file descriptors shared by partitions (bounded by `maxOpenPartitions`) |
 | `utils/util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
-| `utils/indexUtil.js` | Set operations on index-entry ranges (`union`, `intersect`) and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
+| `utils/indexUtil.js` | Two-way lazy `union` and `intersect` over `index.range()` iterators and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
 | `utils/apiHelpers.js` | Argument normalization helpers shared across the public API (revision clamping, commit overloads, predicate/raw shorthand) |
 | `utils/metadataUtil.js` | Object matcher evaluation, raw-buffer matcher compilation, and HMAC metadata helpers |
 | `utils/fsUtil.js` | File-system utilities: path resolution, directory creation, recursive file scanning |
@@ -116,7 +116,7 @@ graph TD
 
 ### JoinEventStream
 
-`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved to sorted index-entry ranges using `union` and `intersect` before any document is read. Used by `EventStore.fromStreams()` and `EventStore.query()` for multi-stream queries and DCB context reads.
+`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved into one lazy range: each stream index becomes an `index.range()` iterator over its revision-bounded entries, and the ranges of a selector level are combined pairwise with `union` or `intersect`. A range fills one reused entry object, and `intersect` lets the lagging side skip ahead to the other side's number (binary search), so no entry arrays or per-entry objects are built and the first document is read as soon as the first match is found. Used by `EventStore.fromStreams()` and `EventStore.query()` for multi-stream queries and DCB context reads.
 
 ### Consumer
 
@@ -150,7 +150,7 @@ graph TD
 
 | Class | Purpose |
 |-------|---------|
-| `ReadableIndex` | Loads a binary position-list file into memory; provides O(log n) `find()` and O(1) range iteration; verifies persisted matcher HMACs. |
+| `ReadableIndex` | Reads a binary position-list file lazily into memory as chunks of raw entry bytes (about 16 bytes per entry instead of one object each); provides O(log n) `find()` without creating entry objects and lazy `range()` iteration; verifies persisted matcher HMACs. |
 | `WritableIndex` | Extends `ReadableIndex`; appends new `IndexEntry` records on every commit and detects divergence between the index and its data partition on open. |
 | `ReadOnlyIndex` | Extends `ReadableIndex`; uses `WatchesFile` to pick up entries appended by a remote writer and emits an `append` event for `ReadOnlyStorage`. |
 

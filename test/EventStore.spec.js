@@ -1445,6 +1445,29 @@ describe('EventStore', function() {
 
     describe('getConsumer', function() {
 
+        it('persists consumers of hierarchical streams in a subdirectory', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.on('ready', () => {
+                eventstore.commit('tags/course/c1', { n: 1 });
+                const consumer = eventstore.getConsumer('tags/course/c1', 'course-reader', { n: 0 });
+                consumer.on('data', () => consumer.setState({ n: 1 }));
+                consumer.once('persisted', () => {
+                    expect(fs.existsSync(consumer.fileName)).to.be(true);
+                    done();
+                });
+            });
+        });
+
+        it('rejects consumer identifiers that escape the consumers directory', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo', { n: 1 });
+            expect(() => eventstore.getConsumer('foo', '../../../outside')).to.throwError(/outside of the consumers directory/);
+        });
+
         it('returns a Consumer instance', function() {
             eventstore = new EventStore({
                 storageDirectory

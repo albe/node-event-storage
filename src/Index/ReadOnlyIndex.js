@@ -23,7 +23,7 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
      */
     watchFileFilter(filename) {
         if (!filename) {
-            return this.syncOnMissingWatchFilename && this.readFileLength() !== this.data.length;
+            return this.syncOnMissingWatchFilename && this.readFileLength() !== this.length;
         }
         return filename === this.name;
     }
@@ -37,9 +37,9 @@ class ReadOnlyIndex extends watchesFile(ReadableIndex) {
         if (!this.isOpen()) {
             return;
         }
-        const prevLength = this.data.length;
+        const prevLength = this.length;
         const newLength = this.readFileLength();
-        this.data.length = newLength;
+        this.setLength(newLength);
         if (newLength > prevLength) {
             this.emit('append', prevLength, newLength);
         }

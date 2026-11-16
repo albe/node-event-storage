@@ -26,17 +26,7 @@ import { EventStore } from 'event-storage';
 new EventStore([storeName], [config])
 ```
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `storeName` | `string` | `'eventstore'` | Prefix used for all storage files. |
-| `config.storageDirectory` | `string` | `'./data'` | Directory where data files are stored. |
-| `config.streamsDirectory` | `string` | `'{storageDirectory}/streams'` | Directory for stream index files. |
-| `config.storageConfig` | `object` | `{}` | Options forwarded to the underlying `Storage` backend. |
-| `config.readOnly` | `boolean` | `false` | Mount the store in read-only mode. |
-| `config.streamMetadata` | `object\|function` | — | Metadata stored once per stream partition at creation time. Either a `{ streamName: metaObj }` map or a function `(streamName) => object`. |
-| `config.typeAccessor` | `string` | — | Dot-notation path to the event type (e.g. `'type'`). Maintains one stream per type value and enables `types` in `DcbQuery`. |
-| `config.tagsAccessor` | `string` | — | Dot-notation path to an array of tag strings. Maintains one stream `tags/<tag>` per tag value and enables `tags` in `DcbQuery`. |
-| `config.streamSources` | `Array<{ path, nameBuilder }>` | `[]` | Generic automatically maintained stream indexes; see [Dynamic Stream Indexing](advanced.md#dynamic-stream-indexing). |
+All options are listed in [Configuration](configuration.md#eventstore-options).
 
 ### Methods
 
@@ -166,7 +156,7 @@ Create a new named stream backed by an index that includes every event matching 
 
 `reindex` (default `true`) scans existing events to populate the new index; pass `false` when no existing event can match.
 
-For the full object-matcher syntax and raw-mode caveats, see [Event Streams -> Object Matcher Syntax](streams.md#object-matcher-syntax).
+For the full matcher syntax, see [Matchers](matchers.md).
 
 Returns an `EventStream` over the pre-existing matching events.
 
@@ -560,31 +550,7 @@ Return the next event object from the iterator, or `false` when the stream is ex
 
 ### Raw Streaming (NDJSON)
 
-Use raw mode when you want to stream events directly over sockets/HTTP without deserializing and re-serializing every event in userland.
-
-```javascript
-const stream = eventstore.getEventStream('orders', 1, -1, { payload: { type: 'OrderPlaced' } }, true);
-stream.pipe(httpResponse);
-```
-
-Matcher behavior differs by mode:
-
-- **Object mode (`raw=false`)**
-  - Function matcher: `(payload, metadata) => boolean`
-  - Object matcher: evaluated against `{ stream, payload, metadata }`
-- **Raw mode (`raw=true`)**
-  - Function matcher: `(buffer) => boolean` where `buffer` is one compact JSON document
-  - Object matcher: byte-level raw matcher over compact JSON bytes (lazy-built at first stream consumption)
-
-Object matchers support nested equality, array values with OR semantics, scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), array-containment via `$has`, and any-of array-containment via `$hasAny`. Multiple operators on the same field are combined with AND semantics; `$has` and `$hasAny` must each be used on their own.
-
-For repeated queries on hot paths, prefer reusing the same matcher object reference instead of recreating equivalent objects so compiled matcher/cache optimization paths can be reused.
-
-Prefer plain equality over `$eq` when possible (`{ type: 'Foo' }` instead of `{ type: { $eq: 'Foo' } }`).
-
-Operator matching (comparison operators) is intended for scalar values. For array containment use `$has` (e.g. `{ tags: { $has: 'featured' } }`) or `$hasAny` to match any of several values (e.g. `{ tags: { $hasAny: ['featured', 'new'] } }`); for other array/object shapes or custom raw encodings, use a function matcher.
-
-The raw object matcher requires the default compact JSON serializer format. If you use a custom serializer (including pretty-printed or transformed JSON), object matchers in raw mode are not guaranteed to work; use a function matcher in that case.
+All stream-reading methods accept `raw = true` to emit NDJSON `Buffer` chunks; see [Writing and Reading Events](reading-writing.md#raw-mode-ndjson-for-network-streaming). Matcher semantics in both modes are described in [Matchers](matchers.md).
 
 ---
 
@@ -612,27 +578,7 @@ reader.open();
 new Storage([storageName], [config])
 ```
 
-Inherits all options from `Storage.ReadOnly` plus:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `storageName` | `string` | `'storage'` | Base name for all storage files. |
-| `config.dataDirectory` | `string` | `'.'` | Directory for data files. |
-| `config.indexDirectory` | `string` | `config.dataDirectory` | Directory for index files. |
-| `config.indexFile` | `string` | `'{storageName}.index'` | File name of the primary index. |
-| `config.serializer` | `object` | JSON | Object with `serialize(doc)` and `deserialize(data)` methods. |
-| `config.readBufferSize` | `number` | `4096` | Read buffer size in bytes. |
-| `config.writeBufferSize` | `number` | `16384` | Write buffer size in bytes. |
-| `config.maxWriteBufferDocuments` | `number` | `0` (unlimited) | Maximum number of buffered documents before an automatic flush. |
-| `config.syncOnFlush` | `boolean` | `false` | Call `fsync` on flush for strict durability. |
-| `config.dirtyReads` | `boolean` | `true` | Allow reading documents that are still in the write buffer. |
-| `config.partitioner` | `function(doc, seqNum)` | single partition | Returns the partition name for a document. (`EventStore` passes `(doc) => doc.stream`, i.e. one partition per stream.) |
-| `config.indexOptions` | `object` | `{}` | Options forwarded to every index on construction. |
-| `config.hmacSecret` | `string` | `''` | Secret used to verify stored matcher HMACs. |
-| `config.metadata` | `object\|function(partitionName)` | `{}` | Metadata written to each partition header. |
-| `config.lock` | `LOCK_THROW\|LOCK_RECLAIM` | `LOCK_THROW` | How to handle an existing lock file on open. |
-| `config.maxOpenPartitions` | `number` | `1024` | Maximum number of open partition file descriptors (`0` = unlimited). See [Performance](performance.md#maxopenpartitions). |
-| `config.matcherProperties` | `string[]` | `['stream', 'payload.type']` | Document paths used for O(1) index routing on writes. See [Performance](performance.md#matcherproperties). |
+All options are listed in [Configuration](configuration.md#storage-options).
 
 ### Constructor — `Storage.ReadOnly`
 
@@ -640,9 +586,7 @@ Inherits all options from `Storage.ReadOnly` plus:
 new Storage.ReadOnly([storageName], [config])
 ```
 
-Accepts the same options as `Storage` (writable) except for write-specific fields (`writeBufferSize`, `maxWriteBufferDocuments`, `syncOnFlush`, `dirtyReads`, `partitioner`, `lock`).  In addition to the read API it watches the data directory for new partitions and index files created by a concurrent writer.
-
-> **Note:** Read-only live change detection relies on reliable **recursive** `fs.watch` support in Node.js. This is currently available on Windows, macOS, and Linux (Node.js runtime support required).
+Accepts the same options except the write-specific ones. In addition to the read API it watches the data directory for new partitions and index files created by a concurrent writer (see [Multiple Processes](multi-process.md)).
 
 ### Shared methods (readable and writable)
 

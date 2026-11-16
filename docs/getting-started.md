@@ -1,100 +1,95 @@
 # Getting Started
 
+This tutorial builds a tiny order system in one file: it writes events, reads them back, handles a concurrent change and keeps a projection up to date. It takes about ten minutes.
+
 ## Installation
 
-Install the package from npm:
+Requires Node.js 20 or later.
 
 ```bash
 npm install event-storage
 ```
 
 !!! note "CommonJS users"
-    Version 1.0 is ESM-only (`import` syntax). If your project uses `require()` and migrating to ESM is not currently an option, the **0.x series** is functionally equivalent and retains full CJS support:
+    Version 1.0 is ESM-only (`import` syntax). If your project uses `require()` and migrating to ESM is not currently an option, the **0.x series** (last release 0.9.1) still supports CommonJS, but lacks the features added in 1.x such as DCB queries, matchers and raw streaming:
 
     ```bash
     npm install event-storage@0
     ```
 
+## The complete example
 
+Save this as `app.mjs` and run `node app.mjs`:
 
 ```javascript
-import { EventStore } from 'event-storage';
+import { EventStore, ExpectedVersion, OptimisticConcurrencyError } from 'event-storage';
 
-const eventstore = new EventStore('my-event-store', { storageDirectory: './data' });
+const eventstore = new EventStore('shop', { storageDirectory: './data' });
 
 eventstore.on('ready', () => {
-    // Write events
-    eventstore.commit('my-stream', [{ type: 'UserRegistered', userId: 1, email: 'user@example.com' }], 0, () => {
-        console.log('Events written!');
-    });
+    // 1. Write: open a new order stream
+    eventstore.commit('order-42', [
+        { type: 'OrderPlaced', orderId: 42, customer: 'alice' },
+        { type: 'ItemAdded', orderId: 42, sku: 'book', price: 12 }
+    ], ExpectedVersion.EmptyStream);
 
-    // Read events
-    const stream = eventstore.getEventStream('my-stream');
+    // 2. Read: rebuild the current state of the order
+    const stream = eventstore.getEventStream('order-42');
+    let total = 0;
     for (const event of stream) {
-        console.log(event);
+        if (event.type === 'ItemAdded') total += event.price;
     }
+    console.log(`order-42 is at version ${stream.version}, total ${total}`);
+
+    // 3. Decide with optimistic concurrency
+    try {
+        eventstore.commit('order-42', [{ type: 'ItemAdded', orderId: 42, sku: 'pen', price: 2 }], stream.version);
+        eventstore.commit('order-42', [{ type: 'OrderShipped', orderId: 42 }], stream.version); // stale version
+    } catch (e) {
+        if (e instanceof OptimisticConcurrencyError) {
+            console.log('Conflict: someone else changed order-42, reload and retry');
+        }
+    }
+
+    // 4. Project: a durable consumer over all events
+    const revenue = eventstore.getConsumer('_all', 'revenue', { total: 0 });
+    revenue.on('data', ({ payload }) => {
+        if (payload.type === 'ItemAdded') {
+            revenue.setState((state) => ({ total: state.total + payload.price }));
+        }
+    });
+    revenue.on('caught-up', () => {
+        console.log('Revenue so far:', revenue.state.total);
+        eventstore.close();
+    });
 });
 ```
 
-The `EventStore` constructor takes an optional store name and a configuration object.
-Emits `'ready'` once the store has opened and all indexes are consistent — you should always wait for this event before performing any reads or writes.
+Output:
 
-## Constructor Options
-
-```javascript
-new EventStore(storeName, config)
+```
+order-42 is at version 2, total 12
+Conflict: someone else changed order-42, reload and retry
+Revenue so far: 14
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `storeName` | `string` | `'eventstore'` | Name of the store, used as a prefix for storage files. |
-| `config.storageDirectory` | `string` | `'./data'` | Directory where all data files are stored. |
-| `config.streamsDirectory` | `string` | `'{storageDirectory}/streams'` | Directory for stream index files. |
-| `config.storageConfig` | `object` | `{}` | Lower-level options forwarded to the `Storage` backend. See [Advanced Options](advanced.md#storage-configuration). |
-| `config.readOnly` | `boolean` | `false` | Open the store in read-only mode. See [Read-Only Mode](consumers.md#read-only-mode). |
-| `config.streamMetadata` | `object\|function` | — | Metadata attached to each stream at creation time. Accepts a plain `{ streamName: metadataObj }` map or a function `(streamName) => object`. See [Access Control](advanced.md#access-control-hooks). |
+Running it a second time throws an `OptimisticConcurrencyError` at step 1, because `order-42` is no longer empty. Delete the `data` directory to start over.
 
-## Writing Events
+## What happens
 
-Use `eventstore.commit(streamName, events, [expectedVersion], [callback])` to append events to a stream.
+**Opening the store.** `new EventStore('shop', { storageDirectory: './data' })` creates or opens the store. Always wait for `'ready'` before reading or writing. All options are listed in [Configuration](configuration.md).
 
-```javascript
-// Append with no concurrency check (default)
-eventstore.commit('orders', [{ type: 'OrderPlaced', orderId: 42 }]);
+**1. Writing.** `commit(streamName, events, expectedVersion)` appends events atomically. The stream is created on its first commit. `ExpectedVersion.EmptyStream` makes the commit fail if the stream already has events. Errors are thrown synchronously; an optional last argument `(commit) => {}` is called once the events are flushed to disk.
 
-// Append only if the stream is currently at version 3
-try {
-    eventstore.commit('orders', [{ type: 'OrderShipped', orderId: 42 }], 3, (commit) => {
-        console.log('Persisted commit', commit.commitId);
-    });
-} catch (err) {
-    console.error('Commit failed:', err.message);
-}
-```
+**2. Reading.** `getEventStream()` returns an iterable over the event payloads. `stream.version` is the number of events it covers, which is what you pass as `expectedVersion` for the next decision.
 
-The `expectedVersion` can be:
+**3. Concurrency.** The second commit passes the same, now outdated version, so it is rejected with `OptimisticConcurrencyError`. In a real application you reload the state and retry or report the conflict. See [Writing and Reading Events](reading-writing.md#optimistic-concurrency).
 
-- `ExpectedVersion.Any` (`-1`) — no check (the default).
-- `ExpectedVersion.EmptyStream` (`0`) — only succeeds when the stream has no events yet.
-- Any positive integer — the stream must currently be at exactly that version.
+**4. Projection.** A consumer delivers every event of a stream (here `_all`, i.e. all events) to its `'data'` handler as a document `{ stream, payload, metadata }`, remembers its position across restarts and persists its state together with the position via `setState()`. `'caught-up'` fires once it has processed everything that exists. See [Consumers](consumers.md).
 
-Validation and the concurrency check happen synchronously: an `OptimisticConcurrencyError` is thrown from `commit()` itself when the stream version does not match. The optional callback receives the `commit` object once all events have been flushed to disk. See [Optimistic Concurrency](streams.md#optimistic-concurrency) for more details.
+## Next steps
 
-## Reading Events
-
-Use `eventstore.getEventStream(streamName, [minRevision], [maxRevision])` to get a stream and iterate it.
-
-```javascript
-const stream = eventstore.getEventStream('orders');
-for (const event of stream) {
-    console.log(event.type, event.orderId);
-}
-```
-
-For details on range queries, reverse iteration, fluent API and more, see [Event Streams](streams.md).
-
-## Running Tests
-
-```bash
-npm test
-```
+- [Writing and Reading Events](reading-writing.md): ranges, reverse reads, metadata, raw NDJSON streaming.
+- [Organizing Streams](organizing-streams.md): categories, joined and derived streams.
+- [Dynamic Consistency Boundaries](dcb.md): consistency checks across streams.
+- [Guarantees](guarantees.md): what exactly is guaranteed after a crash.

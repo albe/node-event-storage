@@ -515,12 +515,8 @@ class WritableStorage extends ReadableStorage {
             return;
         }
 
-        const entries = this.index.range(after + 1);  // We need the first entry that is cut off
-        if (entries === false || entries.length === 0) {
-            return;
-        }
-
-        this.forEachDistinctPartitionOf(entries, entry => this.getPartition(entry.partition).truncate(entry.position));
+        // We need the first entry that is cut off in each partition.
+        this.forEachDistinctPartitionOf(this.index.range(after + 1), entry => this.getPartition(entry.partition).truncate(entry.position));
     }
 
     /**
