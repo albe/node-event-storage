@@ -1,9 +1,8 @@
 import expect from 'expect.js';
 import {
-    EXHAUSTED,
-    IndexCursor,
-    OrCursor,
-    AndCursor,
+    indexRange,
+    union,
+    intersect,
     normalizeSelector
 } from '../src/utils/indexUtil.js';
 
@@ -16,8 +15,7 @@ function createIndex(numbers) {
         numberAt: index => numbers[index],
         find(number, min = false) {
             if (min) {
-                const position = numbers.findIndex(value => value >= number) + 1;
-                return position;
+                return numbers.findIndex(value => value >= number) + 1;
             }
             let position = 0;
             numbers.forEach((value, index) => { if (value <= number) position = index + 1; });
@@ -26,115 +24,83 @@ function createIndex(numbers) {
     };
 }
 
-function cursor(numbers, forwards = true, min = 1, max = 1000) {
-    return new IndexCursor(createIndex(numbers), min, max, forwards);
+function range(numbers, forwards = true, min = 1, max = 1000) {
+    return indexRange(createIndex(numbers), min, max, forwards);
 }
 
-function collect(cursor) {
-    const keys = [];
-    for (; cursor.key !== EXHAUSTED; cursor.next()) {
-        keys.push(Math.abs(cursor.key));
-    }
-    return keys;
+function collect(range) {
+    return Array.from(range, hit => hit.number);
 }
 
 describe('indexUtil', function() {
 
-    describe('IndexCursor', function () {
+    describe('indexRange', function () {
 
-        it('walks all numbers within the bounds forwards and backwards', function () {
-            expect(collect(cursor([1, 3, 5, 7, 9], true, 3, 7))).to.eql([3, 5, 7]);
-            expect(collect(cursor([1, 3, 5, 7, 9], false, 2, 8))).to.eql([7, 5, 3]);
+        it('yields all numbers within the bounds forwards and backwards', function () {
+            expect(collect(range([1, 3, 5, 7, 9], true, 3, 7))).to.eql([3, 5, 7]);
+            expect(collect(range([1, 3, 5, 7, 9], false, 2, 8))).to.eql([7, 5, 3]);
         });
 
-        it('is exhausted for an empty or out of bounds range', function () {
-            expect(cursor([], true).key).to.be(EXHAUSTED);
-            expect(cursor([5, 6], true, 10, 20).key).to.be(EXHAUSTED);
-            expect(cursor([5, 6], false, 1, 4).key).to.be(EXHAUSTED);
+        it('is empty for an empty or out of bounds range', function () {
+            expect(collect(range([]))).to.eql([]);
+            expect(collect(range([5, 6], true, 10, 20))).to.eql([]);
+            expect(collect(range([5, 6], false, 1, 4))).to.eql([]);
         });
 
-        it('seeks to the first key at least the given key and never past the bounds', function () {
-            const forwards = cursor([1, 3, 5, 7, 9], true, 1, 7);
-            forwards.seek(4);
-            expect(forwards.key).to.be(5);
-            forwards.seek(2);
-            expect(forwards.key).to.be(5);
-            forwards.seek(8);
-            expect(forwards.key).to.be(EXHAUSTED);
-
-            const backwards = cursor([1, 3, 5, 7, 9], false, 3, 9);
-            backwards.seek(-6);
-            expect(backwards.key).to.be(-5);
-            backwards.seek(-2);
-            expect(backwards.key).to.be(EXHAUSTED);
-        });
-
-        it('finds far away keys by galloping and binary search', function () {
+        it('skips ahead to a target given to next()', function () {
             const numbers = Array.from({ length: 100 }, (_, i) => 2 * (i + 1));
-            const forwards = cursor(numbers, true, 1, 1000);
-            forwards.seek(75);
-            expect(forwards.key).to.be(76);
-            forwards.seek(201);
-            expect(forwards.key).to.be(EXHAUSTED);
-            const backwards = cursor(numbers, false, 1, 1000);
-            backwards.seek(-41);
-            expect(backwards.key).to.be(-40);
+            const forwards = range(numbers);
+            forwards.next();
+            expect(forwards.next(75).value.number).to.be(76);
+            expect(forwards.next(78).value.number).to.be(78);
+            expect(forwards.next(201).done).to.be(true);
+
+            const backwards = range(numbers, false);
+            backwards.next();
+            expect(backwards.next(41).value.number).to.be(40);
+            expect(backwards.next(1).done).to.be(true);
         });
 
-        it('exposes the index and position of the current entry', function () {
-            const indexCursor = cursor([2, 4, 6]);
-            indexCursor.next();
-            expect(indexCursor.leaf().position).to.be(2);
+        it('yields the index and position of each entry', function () {
+            const hits = Array.from(range([2, 4, 6]), hit => hit.position);
+            expect(hits).to.eql([1, 2, 3]);
         });
     });
 
-    describe('OrCursor', function () {
+    describe('union', function () {
 
         it('returns the sorted union without duplicates', function () {
-            const union = new OrCursor([cursor([1, 4, 7]), cursor([2, 4, 8]), cursor([])]);
-            expect(collect(union)).to.eql([1, 2, 4, 7, 8]);
+            expect(collect(union(union(range([1, 4, 7]), range([2, 4, 8])), range([])))).to.eql([1, 2, 4, 7, 8]);
         });
 
         it('returns the union in reverse order when reading backwards', function () {
-            const union = new OrCursor([cursor([1, 4, 7], false), cursor([2, 4, 8], false)]);
-            expect(collect(union)).to.eql([8, 7, 4, 2, 1]);
-        });
-
-        it('is exhausted without children', function () {
-            expect(new OrCursor([]).key).to.be(EXHAUSTED);
-        });
-
-        it('points its leaf to a child holding the current key', function () {
-            const second = cursor([2, 4]);
-            const union = new OrCursor([cursor([3]), second]);
-            expect(union.leaf()).to.be(second);
+            expect(collect(union(range([1, 4, 7], false), range([2, 4, 8], false), false))).to.eql([8, 7, 4, 2, 1]);
         });
     });
 
-    describe('AndCursor', function () {
+    describe('intersect', function () {
 
-        it('returns only keys contained in all children', function () {
-            const intersection = new AndCursor([cursor([1, 2, 4, 6, 8, 10]), cursor([2, 3, 4, 8, 11]), cursor([0, 2, 8, 9])]);
-            expect(collect(intersection)).to.eql([2, 8]);
+        it('returns only numbers contained in both ranges', function () {
+            const both = intersect(intersect(range([1, 2, 4, 6, 8, 10]), range([2, 3, 4, 8, 11])), range([0, 2, 8, 9]));
+            expect(collect(both)).to.eql([2, 8]);
         });
 
         it('intersects in reverse order when reading backwards', function () {
-            const intersection = new AndCursor([cursor([1, 2, 4, 8], false), cursor([2, 4, 5, 8], false)]);
-            expect(collect(intersection)).to.eql([8, 4, 2]);
+            expect(collect(intersect(range([1, 2, 4, 8], false), range([2, 4, 5, 8], false), false))).to.eql([8, 4, 2]);
         });
 
-        it('is exhausted when a child is empty or there are no children', function () {
-            expect(new AndCursor([cursor([1, 2]), cursor([])]).key).to.be(EXHAUSTED);
-            expect(new AndCursor([]).key).to.be(EXHAUSTED);
+        it('is empty when one range is empty', function () {
+            expect(collect(intersect(range([1, 2]), range([])))).to.eql([]);
         });
 
-        it('nests with union cursors', function () {
-            // (a AND (b OR c))
-            const nested = new AndCursor([cursor([1, 2, 3, 4, 5, 6]), new OrCursor([cursor([2, 9]), cursor([4, 6])])]);
-            expect(collect(nested)).to.eql([2, 4, 6]);
-            const seeking = new OrCursor([new AndCursor([cursor([1, 3, 5]), cursor([3, 5])]), cursor([4])]);
-            seeking.seek(4);
-            expect(collect(seeking)).to.eql([4, 5]);
+        it('nests with unions and passes skip targets through them', function () {
+            // a AND (b OR c)
+            const nested = intersect(range([1, 2, 3, 4, 5, 6, 30]), union(range([2, 9, 30]), range([4, 6])));
+            expect(collect(nested)).to.eql([2, 4, 6, 30]);
+            // (b OR c) AND a, with long stretches to skip on both sides
+            const many = Array.from({ length: 200 }, (_, i) => i + 1);
+            const skipping = intersect(union(range([5, 150]), range([100])), range(many));
+            expect(collect(skipping)).to.eql([5, 100, 150]);
         });
     });
 

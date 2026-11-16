@@ -202,8 +202,8 @@ class ReadableIndex extends events.EventEmitter {
         this.opened = this.getFileHandle() !== null;
 
         const length = this.readFileLength();
-        this.chunks = [];
-        this.entryCount = length;
+        this.setLength(0);
+        this.setLength(length);
 
         return true;
     }
@@ -279,8 +279,7 @@ class ReadableIndex extends events.EventEmitter {
      * @api
      */
     close() {
-        this.chunks = [];
-        this.entryCount = 0;
+        this.setLength(0);
         this.fileHandlePool.evict(this, false);
         this.opened = false;
     }
@@ -312,19 +311,44 @@ class ReadableIndex extends events.EventEmitter {
     }
 
     /**
-     * Drop all in-memory entries from the given length on.
+     * Set the amount of entries in the index. Additional entries are read from the file on access,
+     * entries beyond the new length are dropped from memory.
      *
      * @protected
-     * @param {number} length The amount of entries to keep.
+     * @param {number} length
      */
-    truncateChunks(length) {
-        this.entryCount = Math.min(this.entryCount, length);
-        const chunkCount = Math.ceil(this.entryCount / CHUNK_CAPACITY);
+    setLength(length) {
+        if (length >= this.entryCount) {
+            this.entryCount = length;
+            return;
+        }
+        this.entryCount = length;
+        const chunkCount = Math.ceil(length / CHUNK_CAPACITY);
         this.chunks.length = Math.min(this.chunks.length, chunkCount);
         const lastChunk = this.chunks[chunkCount - 1];
         if (lastChunk) {
-            lastChunk.filled = Math.min(lastChunk.filled, this.entryCount - (chunkCount - 1) * CHUNK_CAPACITY);
+            lastChunk.filled = Math.min(lastChunk.filled, length - (chunkCount - 1) * CHUNK_CAPACITY);
         }
+    }
+
+    /**
+     * Append an entry to the in-memory entries, before it is written to the file.
+     *
+     * @protected
+     * @param {EntryInterface} entry
+     */
+    appendInMemory(entry) {
+        const chunkIndex = Math.floor(this.length / CHUNK_CAPACITY);
+        const position = this.length - chunkIndex * CHUNK_CAPACITY;
+        let chunk = position > 0 ? this.chunkFor(this.length - 1) : createChunk(this.EntryClass.size, 1);
+        assert(chunk, 'Can not append to the index, because its last entries could not be read.');
+        if (chunk.capacity === position) {
+            chunk = createChunk(this.EntryClass.size, position + 1, chunk);
+        }
+        this.chunks[chunkIndex] = chunk;
+        entry.toBuffer(chunk.buffer, position * this.EntryClass.size);
+        chunk.filled = position + 1;
+        this.entryCount++;
     }
 
     /**
@@ -422,4 +446,4 @@ class ReadableIndex extends events.EventEmitter {
 }
 
 export default ReadableIndex;
-export { Entry, HEADER_MAGIC, CorruptedIndexError, CHUNK_CAPACITY, createChunk };
+export { Entry, HEADER_MAGIC, CorruptedIndexError, CHUNK_CAPACITY };

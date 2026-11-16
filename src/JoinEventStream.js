@@ -1,6 +1,6 @@
 import EventStream from './EventStream.js';
 import {assert} from './utils/util.js';
-import {EXHAUSTED, IndexCursor, OrCursor, AndCursor, normalizeSelector} from './utils/indexUtil.js';
+import {indexRange, intersect, normalizeSelector, union} from './utils/indexUtil.js';
 import {normalizeRevision} from './utils/apiHelpers.js';
 
 /**
@@ -46,52 +46,43 @@ class JoinEventStream extends EventStream {
 
 
     /**
-     * Build a cursor over the matching index entries for one selector node.
+     * Resolve one selector node into a lazy range of matching index entries.
      * Selector is already normalized and optimized from constructor, so we just traverse it.
      *
      * @private
      * @param {string|Array<string|Array>} selectorNode
      * @param {number} [depth=0]
-     * @returns {IndexCursor|OrCursor|AndCursor}
+     * @returns {Generator<{index: ReadableIndex, position: number, number: number}>}
      */
-    buildCursor(selectorNode, depth = 0) {
+    resolveSelectorRange(selectorNode, depth = 0) {
+        const forwards = this.minRevision <= this.maxRevision;
         if (typeof selectorNode === 'string') {
             const index = this.eventStore.streams[selectorNode]?.index;
-            return this.buildIndexCursor(index);
+            if (!index || index.length === 0) {
+                return [][Symbol.iterator]();
+            }
+            const minNumber = Math.min(this.minRevision, this.maxRevision);
+            const maxNumber = Math.max(this.minRevision, this.maxRevision);
+            return indexRange(index, minNumber, maxNumber, forwards);
         }
 
-        const children = selectorNode.map(node => this.buildCursor(node, depth + 1));
-        return depth % 2 === 0 ? new OrCursor(children) : new AndCursor(children);
+        const ranges = selectorNode.map(node => this.resolveSelectorRange(node, depth + 1));
+        if (ranges.length === 0) {
+            return [][Symbol.iterator]();
+        }
+        const combine = depth % 2 === 0 ? union : intersect;
+        return ranges.reduce((left, right) => combine(left, right, forwards));
     }
 
     /**
-     * Build a cursor over one stream index, bounded by the global revisions.
-     *
-     * @private
-     * @param {ReadableIndex|undefined} index
-     * @returns {IndexCursor|OrCursor}
-     */
-    buildIndexCursor(index) {
-        if (!index || index.length === 0) {
-            return new OrCursor([]);
-        }
-        const forwards = this.minRevision <= this.maxRevision;
-        const minNumber = Math.min(this.minRevision, this.maxRevision);
-        const maxNumber = Math.max(this.minRevision, this.maxRevision);
-        return new IndexCursor(index, minNumber, maxNumber, forwards);
-    }
-
-    /**
-     * Iterate storage documents lazily, in the requested direction, by walking the selector cursor.
+     * Iterate storage documents lazily from the matching index entries.
      *
      * @private
      * @returns {Generator<object|{ buffer: Buffer, time64: number, sequenceNumber: number }>}
      */
     * iterateDocuments() {
         const forwards = this.minRevision <= this.maxRevision;
-        const cursor = this.buildCursor(this.selector);
-        for (; cursor.key !== EXHAUSTED; cursor.next()) {
-            const { index, position } = cursor.leaf();
+        for (const { index, position } of this.resolveSelectorRange(this.selector)) {
             const entry = index.peek(position);
             if (!entry) {
                 return;

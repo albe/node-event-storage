@@ -1,197 +1,120 @@
 import { assert, compileAccessor } from './util.js';
 import { buildMatcherFn } from './metadataUtil.js';
 
-/**
- * Key of an exhausted cursor. Larger than every real key, so it never wins a minimum and ends every intersection.
- */
-const EXHAUSTED = Infinity;
-
-/**
- * Walks the entries of one index between two global sequence numbers, without creating entry objects.
+/*
+ * An index range is a generator over the index entries of one stream, in the order of the requested direction.
+ * It yields a hit `{ index, position, number }` per entry. A hit object is reused for the whole range and only
+ * changes when the range is advanced, so read it before calling `next()` again.
  *
- * All cursors move by ascending `key`. Reading backwards uses the negated sequence number as key, so the
- * union and intersection logic is the same in both directions.
+ * Calling `next(target)` with a sequence number skips ahead to the first entry that does not come before `target`.
+ * `intersect` uses that to jump over long stretches without a match instead of stepping through them.
  */
-class IndexCursor {
 
-    /**
-     * @param {ReadableIndex} index
-     * @param {number} minNumber The lowest global sequence number to include.
-     * @param {number} maxNumber The highest global sequence number to include.
-     * @param {boolean} forwards
-     */
-    constructor(index, minNumber, maxNumber, forwards) {
-        this.index = index;
-        this.forwards = forwards;
-        this.step = forwards ? 1 : -1;
-        const first = index.find(minNumber, true);
-        const last = index.find(maxNumber);
-        const empty = first === 0 || last === 0 || first > last;
-        this.position = forwards ? first : last;
-        // One step past the last position to visit.
-        this.end = empty ? this.position : (forwards ? last : first) + this.step;
-        this.update();
+/**
+ * @param {boolean} forwards
+ * @returns {function(number, number): boolean} Whether the first number comes before the second in that direction.
+ */
+function comesBefore(forwards) {
+    return forwards ? (left, right) => left < right : (left, right) => left > right;
+}
+
+/**
+ * Iterate the entries of an index between two global sequence numbers.
+ *
+ * @param {ReadableIndex} index
+ * @param {number} minNumber The lowest global sequence number to include.
+ * @param {number} maxNumber The highest global sequence number to include.
+ * @param {boolean} [forwards=true]
+ * @returns {Generator<{index: ReadableIndex, position: number, number: number}>}
+ */
+function* indexRange(index, minNumber, maxNumber, forwards = true) {
+    const first = index.find(minNumber, true);
+    const last = index.find(maxNumber);
+    if (first === 0 || last === 0 || first > last) {
+        return;
     }
-
-    /**
-     * @private
-     * @param {number} offset Steps from the current position.
-     * @returns {number} The key of the entry at that offset.
-     */
-    keyAt(offset) {
-        const number = this.index.numberAt(this.position + offset * this.step - 1);
-        return this.forwards ? number : -number;
-    }
-
-    /**
-     * @private
-     */
-    update() {
-        this.key = this.position === this.end ? EXHAUSTED : this.keyAt(0);
-    }
-
-    next() {
-        this.position += this.step;
-        this.update();
-    }
-
-    /**
-     * Move to the first entry whose key is at least `key`.
-     * Gallops from the current position before the binary search, so a nearby target costs only a few reads.
-     *
-     * @param {number} key
-     */
-    seek(key) {
-        if (key <= this.key) {
-            return;
+    const step = forwards ? 1 : -1;
+    const end = (forwards ? last : first) + step;
+    const before = comesBefore(forwards);
+    const hit = { index, position: forwards ? first : last, number: 0 };
+    while (hit.position !== end) {
+        hit.number = index.numberAt(hit.position - 1);
+        const target = yield hit;
+        hit.position += step;
+        if (target !== undefined && hit.position !== end && before(index.numberAt(hit.position - 1), target)) {
+            // The next entry is not enough, so binary search for the target.
+            const found = forwards ? index.find(target, true) : index.find(target);
+            hit.position = found === 0 || (found - end) * step >= 0 ? end : found;
         }
-        const remaining = (this.end - this.position) * this.step;
-        // Invariant: keyAt(low) < key and keyAt(high) >= key, where offset `remaining` counts as the end.
-        let low = 0;
-        let high = 1;
-        while (high < remaining && this.keyAt(high) < key) {
-            low = high;
-            high = Math.min(2 * high, remaining);
-        }
-        while (high - low > 1) {
-            const mid = low + ((high - low) >> 1);
-            if (this.keyAt(mid) < key) {
-                low = mid;
-            } else {
-                high = mid;
-            }
-        }
-        this.position += high * this.step;
-        this.update();
-    }
-
-    /**
-     * @returns {IndexCursor} The index cursor positioned on the current match.
-     */
-    leaf() {
-        return this;
     }
 }
 
 /**
- * Union of cursors: the smallest key of all children, each key only once.
+ * Continue yielding the hits of a range, passing skip targets through.
+ *
+ * @param {IteratorResult} current The current, not yet yielded result of the range.
+ * @param {Generator} range
  */
-class OrCursor {
-
-    /**
-     * @param {Array<IndexCursor|OrCursor|AndCursor>} children
-     */
-    constructor(children) {
-        this.children = children;
-        this.update();
-    }
-
-    /**
-     * @private
-     */
-    update() {
-        let min = EXHAUSTED;
-        for (const child of this.children) {
-            min = Math.min(min, child.key);
-        }
-        this.key = min;
-    }
-
-    next() {
-        const key = this.key;
-        for (const child of this.children) {
-            if (child.key === key) {
-                child.next();
-            }
-        }
-        this.update();
-    }
-
-    /**
-     * @param {number} key
-     */
-    seek(key) {
-        for (const child of this.children) {
-            child.seek(key);
-        }
-        this.update();
-    }
-
-    leaf() {
-        return this.children.find(child => child.key === this.key).leaf();
+function* drain(current, range) {
+    while (!current.done) {
+        current = range.next(yield current.value);
     }
 }
 
 /**
- * Intersection of cursors: keys all children have. Children skip ahead to the largest key with seek(), so long
- * stretches without a match cost a binary search instead of one step per entry.
+ * Merge two ranges into one ordered range without duplicates.
+ *
+ * @param {Generator} left
+ * @param {Generator} right
+ * @param {boolean} [forwards=true]
+ * @returns {Generator}
  */
-class AndCursor {
-
-    /**
-     * @param {Array<IndexCursor|OrCursor|AndCursor>} children
-     */
-    constructor(children) {
-        this.children = children;
-        this.align();
-    }
-
-    /**
-     * Seek all children to the largest key until they agree on one.
-     *
-     * @private
-     */
-    align() {
-        let key = this.children.length > 0 ? this.children[0].key : EXHAUSTED;
-        let agreed = false;
-        while (!agreed && key !== EXHAUSTED) {
-            agreed = true;
-            for (const child of this.children) {
-                child.seek(key);
-                if (child.key !== key) {
-                    key = child.key;
-                    agreed = false;
-                }
-            }
+function* union(left, right, forwards = true) {
+    const before = comesBefore(forwards);
+    let a = left.next();
+    let b = right.next();
+    while (!a.done && !b.done) {
+        const leftNumber = a.value.number;
+        const rightNumber = b.value.number;
+        const leftFirst = !before(rightNumber, leftNumber);
+        const rightFirst = !before(leftNumber, rightNumber);
+        const target = yield leftFirst ? a.value : b.value;
+        // Advance the side that was yielded, and also the other side when a skip target leaves it behind.
+        if (leftFirst || (target !== undefined && before(leftNumber, target))) {
+            a = left.next(target);
         }
-        this.key = key;
+        if (rightFirst || (target !== undefined && before(rightNumber, target))) {
+            b = right.next(target);
+        }
     }
+    yield* drain(a, left);
+    yield* drain(b, right);
+}
 
-    next() {
-        this.children[0].next();
-        this.align();
-    }
-
-    /**
-     * @param {number} key
-     */
-    seek(key) {
-        this.children[0].seek(key);
-        this.align();
-    }
-
-    leaf() {
-        return this.children[0].leaf();
+/**
+ * Yield the entries that are contained in both ranges.
+ *
+ * @param {Generator} left
+ * @param {Generator} right
+ * @param {boolean} [forwards=true]
+ * @returns {Generator}
+ */
+function* intersect(left, right, forwards = true) {
+    const before = comesBefore(forwards);
+    let a = left.next();
+    let b = right.next();
+    while (!a.done && !b.done) {
+        const leftNumber = a.value.number;
+        const rightNumber = b.value.number;
+        if (leftNumber === rightNumber) {
+            const target = yield a.value;
+            a = left.next(target);
+            b = right.next(target);
+        } else if (before(leftNumber, rightNumber)) {
+            a = left.next(rightNumber);
+        } else {
+            b = right.next(leftNumber);
+        }
     }
 }
 
@@ -272,10 +195,9 @@ function buildStreamSource(sourcePath, nameBuilder) {
 }
 
 export {
-    EXHAUSTED,
-    IndexCursor,
-    OrCursor,
-    AndCursor,
+    indexRange,
+    union,
+    intersect,
     normalizeSelector,
     buildStreamSource
 };
