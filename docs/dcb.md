@@ -320,6 +320,37 @@ store.commit(`semester-${semesterId}`, [subscription], model.appendCondition.wit
 - The types are removed from each query item; an item with no types left is dropped. The tags stay.
 - It throws when no type would be left (commit without a condition instead), for query items without `types` (they match every type), and for conditions created from a selector instead of a `DcbQuery`.
 
+### Read models
+
+A read model is the same projection, kept up to date for queries instead of for one decision. `createReadModel(store, projections, options)` catches up through the stream indexes and then applies every new matching event synchronously as it is written:
+
+```javascript
+import { createProjection, createReadModel } from 'event-storage/projections';
+
+const CourseOverview = createProjection({
+    initialState: {},
+    handlers: {
+        CourseDefined: (state, e) => ({ ...state, [e.id]: { capacity: e.capacity, subscribed: 0 } }),
+        StudentSubscribedToCourse: (state, e) => ({
+            ...state,
+            [e.courseId]: { ...state[e.courseId], subscribed: state[e.courseId].subscribed + 1 }
+        })
+    }
+});
+
+const overview = createReadModel(store, CourseOverview, { name: 'course-overview', persist: true, version: 1 });
+
+overview.state;     // current state
+overview.position;  // global position of the last event it has seen
+overview.on('change', (state, position) => { /* e.g. invalidate an HTTP cache */ });
+overview.close();   // stop following, write a pending persist
+```
+
+- **Decision model vs. read model:** both are a projection's state at a global position. A decision model is narrow (its query is the consistency boundary) and updated on demand right before a decision. A read model is usually broad (e.g. all courses), follows the store by itself and may be read at any time. Deciding on a broad read model works, but any change within its query causes a conflict.
+- **Persistence (optional):** with `persist: true` and a `name`, state and position are written atomically to `<indexDirectory>/readmodels/`. After a restart only the events committed since are read. The state must be JSON-serializable. Change `version` when the handlers change; a persisted state of another version, or of another query, is rebuilt.
+- **Read-only processes:** a read model in a store opened with `readOnly: true` follows the events written by the writer process.
+- **Warm decision model:** `readModel.decisionModel()` returns a `DecisionModel` from the read model's current state, so a narrow read model kept up to date anyway can serve decisions without replaying its events.
+
 ### Mapping to the dcb.events specification
 
 event-storage implements the semantics of the [DCB specification](https://dcb.events/specification/) but keeps its own API names. The translation:

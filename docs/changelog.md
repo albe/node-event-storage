@@ -4,6 +4,7 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
+- Added `createReadModel()` in `event-storage/projections`: the same projections as read models that follow the store, optionally persisted, also in read-only processes.
 - Added `CommitCondition#without(...types)` to narrow a condition created from a `DcbQuery`, so that new events of those types no longer cause a conflict.
 - Added `event-storage/projections` with `createProjection`, `composeProjections` and `buildDecisionModel`, implementing the [dcb.events](https://dcb.events/topics/projections/) projection format for DCB decision models on top of `query()` and `commit()`. `model.update()` applies only the events committed since a decision model was built, e.g. after a conflict or to keep a model in memory. `model.since()` returns the events that block a commit.
 - Keep index entries in memory as chunks of raw entry bytes instead of one object per entry. A fully read index now needs about 16 bytes per entry instead of about 90, opening a large index no longer allocates an array of its full length, and `find()` no longer creates entry objects. `get()` still returns entry objects, but creates them on each call, so the same position no longer returns the identical object twice.

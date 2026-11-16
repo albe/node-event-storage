@@ -337,7 +337,7 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 
 ### Projections subpath
 
-`import { createProjection, composeProjections, buildDecisionModel } from 'event-storage/projections'` (not yet stable).
+`import { createProjection, composeProjections, buildDecisionModel, createReadModel } from 'event-storage/projections'` (not yet stable).
 
 | Export | Description |
 |--------|-------------|
@@ -346,6 +346,7 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `buildDecisionModel(store, projectionOrMap)` | Reads the matching events and returns an immutable `DecisionModel` with `state` and `appendCondition`; pass `appendCondition` to `commit()`. |
 | `DecisionModel#since([condition])` | `EventStream` of the events matching the condition (default `appendCondition`) committed after the model was built, i.e. those that block a commit. |
 | `DecisionModel#update()` | Returns a new model with only the events committed since applied (or the same model when nothing is new). |
+| `createReadModel(store, projectionOrMap, { name?, persist?, version? })` | Returns a `ReadModel` that follows the store: `state`, `position`, `'change'` event, `update()`, `decisionModel()`, `close()`. With `persist`, state and position survive restarts. |
 
 See [DCB → Projections and Decision Models](dcb.md#projections-and-decision-models).
 
