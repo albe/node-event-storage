@@ -481,6 +481,20 @@ describe('Index', function() {
             expect(entriesOf(index, CHUNK_CAPACITY + 2).map(entry => entry.number)).to.eql([CHUNK_CAPACITY + 2, CHUNK_CAPACITY + 3, CHUNK_CAPACITY + 4]);
         });
 
+        it('flushes unwritten entries that span several chunks', function() {
+            index = createIndex('large-buffer.index', { writeBufferSize: 4 * CHUNK_CAPACITY * IndexEntry.size });
+            const count = CHUNK_CAPACITY + 100;
+            for (let i = 1; i <= count; i++) {
+                index.add(new IndexEntry(i, i));
+            }
+            expect(index.flush()).to.be(true);
+            index.close();
+            index.open();
+            expect(index.length).to.be(count);
+            expect(entriesOf(index, CHUNK_CAPACITY - 1, CHUNK_CAPACITY + 2).map(entry => entry.position)).to.eql([CHUNK_CAPACITY - 1, CHUNK_CAPACITY, CHUNK_CAPACITY + 1, CHUNK_CAPACITY + 2]);
+            expect(index.lastEntry.number).to.be(count);
+        });
+
         it('truncates across chunk boundaries and appends again', function() {
             index = setupIndexWithEntries(entryCount);
             index.truncate(CHUNK_CAPACITY - 2);
@@ -513,7 +527,7 @@ describe('Index', function() {
                     return WideEntry.size;
                 }
             }
-            index = createIndex('wide.index', { EntryClass: WideEntry, writeBufferSize: 100 * WideEntry.size });
+            index = createIndex('wide.index', { EntryClass: WideEntry });
             for (let i = 1; i <= CHUNK_CAPACITY + 5; i++) {
                 index.add(new WideEntry(2 * i, i));
             }
