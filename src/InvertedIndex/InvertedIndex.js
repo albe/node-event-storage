@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { writeSegment, SegmentReader } from './Segment.js';
-import { SegmentPostings, BufferedPostings, TermCursor, OrCursor, AndCursor, EXHAUSTED } from './cursors.js';
+import { segmentPostings, bufferedPostings, chainPostings } from './postings.js';
+import { resolveSelector } from '../utils/indexUtil.js';
 import { assert } from '../utils/util.js';
 import { ensureDirectory, resolvePath } from '../utils/fsUtil.js';
 
@@ -30,16 +31,6 @@ class PostingBuffer {
 
     get last() {
         return this.length > 0 ? this.data[this.length - 1] : 0;
-    }
-
-    appendFrom(from, target) {
-        let low = 0, high = this.length;
-        while (low < high) {
-            const mid = (low + high) >>> 1;
-            if (this.data[mid] < from) low = mid + 1; else high = mid;
-        }
-        for (let i = low; i < this.length; i++) target.push(this.data[i]);
-        return target;
     }
 }
 
@@ -263,23 +254,26 @@ class InvertedIndex {
     }
 
     /**
+     * Iterate the positions indexed under a term, without loading them all at once.
+     * Yields one reused `{ number }` object in ascending order. Calling `next(number)` on the iterator skips ahead
+     * to the first position >= number, so ranges combine with `union` and `intersect` from `utils/indexUtil.js`.
+     *
      * @param {string} term
-     * @param {number} [from=1] Only return positions >= from.
-     * @returns {number[]} Ascending positions.
+     * @param {number} [from=1] The lowest position to yield.
+     * @returns {Generator<{ number: number }>}
      */
-    get(term, from = 1) {
+    range(term, from = 1) {
         assert(this.opened, 'Inverted index is not open.');
-        const result = [];
+        const parts = [];
         const termBuffer = Buffer.from(term, 'utf8');
         for (const segment of this.segments) {
             if (segment.to < from) continue;
             const entry = segment.lookup(termBuffer);
-            if (entry !== null && entry.lastPosition >= from) {
-                segment.readPostings(entry, from, result);
-            }
+            if (entry !== null) parts.push(start => segmentPostings(segment, entry, start));
         }
-        this.memtable.get(term)?.appendFrom(from, result);
-        return result;
+        const buffered = this.memtable.get(term);
+        if (buffered !== undefined) parts.push(start => bufferedPostings(buffered.data, buffered.length, start));
+        return chainPostings(parts, from);
     }
 
     /**
@@ -315,59 +309,18 @@ class InvertedIndex {
     }
 
     /**
-     * @param {string} term
-     * @param {number} from
-     * @returns {TermCursor}
-     */
-    termCursor(term, from) {
-        const parts = [];
-        const termBuffer = Buffer.from(term, 'utf8');
-        for (const segment of this.segments) {
-            if (segment.to < from) continue;
-            const entry = segment.lookup(termBuffer);
-            if (entry !== null && entry.lastPosition >= from) parts.push(new SegmentPostings(segment, entry));
-        }
-        const buffered = this.memtable.get(term);
-        if (buffered !== undefined) parts.push(new BufferedPostings(buffered.data, buffered.length));
-        return new TermCursor(parts);
-    }
-
-    /**
-     * Build a cursor tree for a selector with the same algebra as `EventStore.fromStreams()`: arrays alternate
-     * between OR (even depth, starting at the top level) and AND (odd depth); strings are terms.
-     * AND nodes intersect by leapfrogging, so only the blocks of long posting lists that can contain a match
+     * Iterate the positions matching a selector, with the same algebra as `EventStore.fromStreams()`: arrays
+     * alternate between OR (even depth, starting at the top level) and AND (odd depth); strings are terms.
+     * AND skips ahead with the skip tables, so only the blocks of long posting lists that can contain a match
      * get decoded.
      *
-     * @param {Array|string} node
-     * @param {number} from
-     * @param {number} [depth=0]
-     * @returns {{ advance: function(number): number }}
-     */
-    cursor(node, from, depth = 0) {
-        assert(this.opened, 'Inverted index is not open.');
-        if (typeof node === 'string') {
-            return this.termCursor(node, from);
-        }
-        assert(Array.isArray(node), 'Selector nodes must be strings or arrays.');
-        const children = node.map(child => this.cursor(child, from, depth + 1));
-        if (children.length === 1) {
-            return children[0];
-        }
-        return depth % 2 === 0 ? new OrCursor(children) : new AndCursor(children);
-    }
-
-    /**
-     * @param {Array|string} selector See cursor().
-     * @param {number} [from=1]
-     * @returns {number[]} Ascending positions.
+     * @param {Array|string} selector
+     * @param {number} [from=1] The lowest position to yield.
+     * @returns {Iterator<{ number: number }>}
      */
     query(selector, from = 1) {
-        const root = this.cursor(selector, from);
-        const result = [];
-        for (let position = root.advance(from); position !== EXHAUSTED; position = root.advance(position + 1)) {
-            result.push(position);
-        }
-        return result;
+        assert(this.opened, 'Inverted index is not open.');
+        return resolveSelector(selector, term => this.range(term, from));
     }
 
     /**
@@ -375,7 +328,7 @@ class InvertedIndex {
      * Segments that end at or before `after` are never touched, so a recent condition is answered from
      * memory, and the search stops at the first match.
      *
-     * @param {Array|string} selector See cursor().
+     * @param {Array|string} selector See query().
      * @param {number} after
      * @returns {boolean}
      */
@@ -383,7 +336,7 @@ class InvertedIndex {
         if (after >= this.lastAdded) {
             return false;
         }
-        return this.cursor(selector, after + 1).advance(after + 1) !== EXHAUSTED;
+        return !this.query(selector, after + 1).next().done;
     }
 
     /**

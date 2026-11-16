@@ -1,6 +1,6 @@
 import EventStream from './EventStream.js';
 import {assert} from './utils/util.js';
-import {intersect, normalizeSelector, union} from './utils/indexUtil.js';
+import {normalizeSelector, resolveSelector} from './utils/indexUtil.js';
 import {normalizeRevision} from './utils/apiHelpers.js';
 
 /**
@@ -46,35 +46,20 @@ class JoinEventStream extends EventStream {
 
 
     /**
-     * Resolve one selector node into a lazy range of matching index entries.
-     * Selector is already normalized and optimized from constructor, so we just traverse it.
+     * Get the range of index entries of one stream, bounded by the global revisions.
      *
      * @private
-     * @param {string|Array<string|Array>} selectorNode
-     * @param {number} [depth=0]
+     * @param {string} streamName
      * @returns {Iterator<Entry>}
      */
-    resolveSelectorRange(selectorNode, depth = 0) {
-        const forwards = this.minRevision <= this.maxRevision;
-        if (typeof selectorNode === 'string') {
-            const index = this.eventStore.streams[selectorNode]?.index;
-            if (!index || index.length === 0) {
-                return [][Symbol.iterator]();
-            }
-            const first = index.find(Math.min(this.minRevision, this.maxRevision), true);
-            const last = index.find(Math.max(this.minRevision, this.maxRevision));
-            if (first === 0 || last === 0 || first > last) {
-                return [][Symbol.iterator]();
-            }
-            return forwards ? index.range(first, last) : index.range(last, first);
-        }
-
-        const ranges = selectorNode.map(node => this.resolveSelectorRange(node, depth + 1));
-        if (ranges.length === 0) {
+    streamRange(streamName) {
+        const index = this.eventStore.streams[streamName]?.index;
+        const first = index ? index.find(Math.min(this.minRevision, this.maxRevision), true) : 0;
+        const last = index ? index.find(Math.max(this.minRevision, this.maxRevision)) : 0;
+        if (first === 0 || last === 0 || first > last) {
             return [][Symbol.iterator]();
         }
-        const combine = depth % 2 === 0 ? union : intersect;
-        return ranges.reduce((left, right) => combine(left, right, forwards));
+        return this.minRevision <= this.maxRevision ? index.range(first, last) : index.range(last, first);
     }
 
     /**
@@ -85,7 +70,7 @@ class JoinEventStream extends EventStream {
      */
     * iterateDocuments() {
         const forwards = this.minRevision <= this.maxRevision;
-        for (const entry of this.resolveSelectorRange(this.selector)) {
+        for (const entry of resolveSelector(this.selector, name => this.streamRange(name), forwards)) {
             const event = this.eventStore.storage.readFrom(entry.partition, entry.position, entry.size, this.raw, !forwards);
             if (event) {
                 yield event;

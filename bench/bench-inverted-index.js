@@ -12,7 +12,7 @@ import { fileURLToPath } from 'url';
 import Index from '../src/Index.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import InvertedIndex from '../src/InvertedIndex.js';
-import { union, intersect } from '../src/utils/indexUtil.js';
+import { resolveSelector } from '../src/utils/indexUtil.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const dataRoot = path.join(path.dirname(__filename), 'data', 'inverted-bench');
@@ -121,24 +121,17 @@ class FilePerTermIndex {
 
     range(term, from) {
         const index = this.get(term, false);
-        if (index === null) return [];
-        const start = index.find(from, true);
-        if (start < 1 || start > index.length) return [];
-        return index.range(start) || [];
-    }
-
-    evaluate(node, from, depth = 0) {
-        if (typeof node === 'string') return this.range(node, from);
-        const ranges = node.map(child => this.evaluate(child, from, depth + 1));
-        return depth % 2 === 0 ? union(...ranges) : intersect(...ranges);
+        const start = index === null ? 0 : index.find(from, true);
+        if (start < 1 || start > index.length) return [][Symbol.iterator]();
+        return index.range(start);
     }
 
     query(selector, from = 1) {
-        return this.evaluate(selector, from).map(entry => entry.number);
+        return Array.from(resolveSelector(selector, term => this.range(term, from)), entry => entry.number);
     }
 
     hasMatchAfter(selector, after) {
-        return this.evaluate(selector, after + 1).length > 0;
+        return !resolveSelector(selector, term => this.range(term, after + 1)).next().done;
     }
 
     startup() {
@@ -164,7 +157,7 @@ class InvertedVariant {
     }
 
     add(position, terms) { this.index.add(position, terms); }
-    query(selector, from = 1) { return this.index.query(selector, from); }
+    query(selector, from = 1) { return Array.from(this.index.query(selector, from), hit => hit.number); }
     hasMatchAfter(selector, after) { return this.index.hasMatchAfter(selector, after); }
     startup() { return this.index.stats().segments; }
     close() { this.index.close(); }

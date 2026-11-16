@@ -21,6 +21,14 @@ describe('InvertedIndex', function() {
         index = null;
     });
 
+    function get(term, from) {
+        return Array.from(index.range(term, from), hit => hit.number);
+    }
+
+    function query(selector, from) {
+        return Array.from(index.query(selector, from), hit => hit.number);
+    }
+
     function createIndex(options = {}) {
         index = new InvertedIndex('test', { dataDirectory, syncOnFlush: false, ...options });
         index.open();
@@ -58,9 +66,9 @@ describe('InvertedIndex', function() {
         index.add(1, ['type:A', 'tag:x']);
         index.add(2, ['type:B']);
         index.add(5, ['type:A']);
-        expect(index.get('type:A')).to.eql([1, 5]);
-        expect(index.get('type:A', 2)).to.eql([5]);
-        expect(index.get('unknown')).to.eql([]);
+        expect(get('type:A')).to.eql([1, 5]);
+        expect(get('type:A', 2)).to.eql([5]);
+        expect(get('unknown')).to.eql([]);
         expect(index.count('type:A')).to.be(2);
         expect(index.lastPosition('type:A')).to.be(5);
         expect(index.length).to.be(5);
@@ -69,7 +77,7 @@ describe('InvertedIndex', function() {
     it('ignores a term repeated for the same position', function() {
         createIndex();
         index.add(1, ['tag:x', 'tag:x']);
-        expect(index.get('tag:x')).to.eql([1]);
+        expect(get('tag:x')).to.eql([1]);
     });
 
     it('rejects positions that are not ascending', function() {
@@ -89,8 +97,8 @@ describe('InvertedIndex', function() {
         expect(index.stats().segments).to.be(1);
         expect(index.stats().persistedUntil).to.be(1000);
         expect(index.count('all')).to.be(1000);
-        expect(index.get('odd').length).to.be(500);
-        expect(index.get('mod7:3', 990)).to.eql([990, 997]);
+        expect(get('odd').length).to.be(500);
+        expect(get('mod7:3', 990)).to.eql([990, 997]);
         expect(index.lastPosition('even')).to.be(1000);
         expect(index.verify()).to.be(true);
     });
@@ -101,8 +109,8 @@ describe('InvertedIndex', function() {
             index.add(position, ['all']);
         }
         expect(index.stats().segments).to.be(9);
-        expect(index.get('all')).to.eql(Array.from({ length: 95 }, (_, i) => i + 1));
-        expect(index.get('all', 50).length).to.be(46);
+        expect(get('all')).to.eql(Array.from({ length: 95 }, (_, i) => i + 1));
+        expect(get('all', 50).length).to.be(46);
     });
 
     it('uses the skip table to start in the middle of a long posting list', function() {
@@ -111,9 +119,9 @@ describe('InvertedIndex', function() {
             index.add(position * 3, ['all']);
         }
         reopen();
-        expect(index.get('all', 29998)).to.eql([29999, 30000].filter(p => p % 3 === 0));
-        expect(index.get('all', 15000).length).to.be(5001);
-        expect(index.get('all', 1)[0]).to.be(3);
+        expect(get('all', 29998)).to.eql([29999, 30000].filter(p => p % 3 === 0));
+        expect(get('all', 15000).length).to.be(5001);
+        expect(get('all', 1)[0]).to.be(3);
     });
 
     it('supports positions beyond 32 bit', function() {
@@ -122,7 +130,7 @@ describe('InvertedIndex', function() {
         index.add(big, ['a']);
         index.add(big + 1, ['a']);
         reopen();
-        expect(index.get('a')).to.eql([big, big + 1]);
+        expect(get('a')).to.eql([big, big + 1]);
     });
 
     it('reports the persisted position so unflushed documents can be re-added', function() {
@@ -133,9 +141,9 @@ describe('InvertedIndex', function() {
         const crashed = index;
         index = new InvertedIndex('test', { dataDirectory, syncOnFlush: false });
         expect(index.open()).to.be(2);
-        expect(index.get('a')).to.eql([1, 2]);
+        expect(get('a')).to.eql([1, 2]);
         index.add(3, ['a']);
-        expect(index.get('a')).to.eql([1, 2, 3]);
+        expect(get('a')).to.eql([1, 2, 3]);
         crashed.segments.forEach(segment => segment.close());
     });
 
@@ -166,11 +174,11 @@ describe('InvertedIndex', function() {
             expected[term].push(position);
         }
         expect(index.stats().segments).to.be.below(4);
-        expect(index.get('a')).to.eql(expected.a);
-        expect(index.get('b')).to.eql(expected.b);
-        expect(index.get('tag:7').length).to.be(20);
+        expect(get('a')).to.eql(expected.a);
+        expect(get('b')).to.eql(expected.b);
+        expect(get('tag:7').length).to.be(20);
         reopen({ flushThreshold: 5, mergeFactor: 3 });
-        expect(index.get('a')).to.eql(expected.a);
+        expect(get('a')).to.eql(expected.a);
         expect(segmentFiles().length).to.be(index.stats().segments);
         expect(index.verify()).to.be(true);
     });
@@ -187,13 +195,27 @@ describe('InvertedIndex', function() {
         ];
         events.forEach((terms, i) => index.add(i + 1, terms));
 
-        expect(index.query(['type:CourseDefined', 'type:StudentRegistered'])).to.eql([1, 2, 4]);
-        expect(index.query([['tag:course/1', 'tag:student/1']])).to.eql([3]);
-        expect(index.query([
+        expect(query(['type:CourseDefined', 'type:StudentRegistered'])).to.eql([1, 2, 4]);
+        expect(query([['tag:course/1', 'tag:student/1']])).to.eql([3]);
+        expect(query([
             ['tag:course/1', ['type:CourseDefined', 'type:CourseCapacityChanged']],
             ['tag:student/1', 'type:StudentSubscribed']
         ])).to.eql([1, 3, 5, 6]);
-        expect(index.query('tag:course/2', 5)).to.eql([5]);
+        expect(query('tag:course/2', 5)).to.eql([5]);
+    });
+
+    it('skips ahead when next() is called with a target position', function() {
+        createIndex({ flushThreshold: 300 });
+        for (let position = 1; position <= 1000; position++) {
+            index.add(position, position % 2 === 0 ? ['even'] : ['odd']);
+        }
+        const range = index.range('even');
+        expect(range.next().value.number).to.be(2);
+        expect(range.next(551).value.number).to.be(552);
+        expect(range.next(553).value.number).to.be(554);
+        expect(range.next(999).value.number).to.be(1000);
+        expect(range.next().done).to.be(true);
+        expect(get('odd', 899).slice(0, 2)).to.eql([899, 901]);
     });
 
     it('checks DCB conditions only against positions after the given one', function() {
@@ -235,7 +257,7 @@ describe('InvertedIndex', function() {
         for (const selector of selectors) {
             for (const from of [1, 500, 4000]) {
                 const expected = docs.filter(d => d.position >= from && matches(selector, d.terms)).map(d => d.position);
-                expect(index.query(selector, from)).to.eql(expected);
+                expect(query(selector, from)).to.eql(expected);
                 expect(index.hasMatchAfter(selector, from - 1)).to.be(expected.length > 0);
             }
         }
@@ -258,8 +280,8 @@ describe('InvertedIndex', function() {
         terms.push('tag:straße', 'tag:日本', 'tag:😀');
         terms.forEach((term, i) => index.add(i + 1, [term]));
         reopen();
-        terms.forEach((term, i) => expect(index.get(term)).to.eql([i + 1]));
-        expect(index.get('tag:entity/5000')).to.eql([]);
+        terms.forEach((term, i) => expect(get(term)).to.eql([i + 1]));
+        expect(get('tag:entity/5000')).to.eql([]);
         expect(index.terms('tag:entity/49').length).to.be(11);
     });
 
