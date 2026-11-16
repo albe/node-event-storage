@@ -92,7 +92,7 @@ const { stream, condition } = store.query(
 );
 ```
 
-The matcher can be a predicate function or the object-matcher syntax (see [Event Streams → Object Matcher Syntax](streams.md#object-matcher-syntax)). Unrelated events of the same type (e.g. a different order) never cause spurious conflicts.
+The matcher can be a predicate function or the object-matcher syntax (see [Matchers](matchers.md)). Unrelated events of the same type (e.g. a different order) never cause spurious conflicts.
 
 > **Note:** streams listed in the query that do not exist yet are still checked correctly at commit time — a stream created by another writer between `query()` and `commit()` is included in the conflict check.
 
@@ -235,49 +235,11 @@ Rule of thumb:
 - higher write load / lower read selectivity pressure → matcher-only is often better,
 - lower write load / high tag diversity with many matcher misses → tag streams are often better.
 
-### Benchmark findings and practical recommendation
-
-This benchmark section is inspired by the excellent pyeventsourcing speedrun style: a compact scenario that makes architectural trade-offs visible under sustained write-then-read pressure.
-
-Benchmark setup in this repository:
-
-- scenario: course subscriptions with DCB read model rebuilding,
-- runtime: 3 seconds per mode,
-- per iteration: 10 student registrations, 10 course registrations, 100 enrollments (120 operations total),
-- each mode runs against a fresh data directory.
-
-Recent measurements with that setup produced the following excerpt:
-
-| Mode                    | Ops/s | us/op | Relative vs matcher-only |
-|-------------------------|------:|------:|-------------------------:|
-| Matcher-only            |   372 |  2690 |                    1.00x |
-| Tag-streams             |  1241 |   806 |                    3.34x |
-| Semester-bounded stream |  3606 |   277 |                    9.69x |
-
-Mode definitions and how to apply them in practice:
-
-- **Matcher-only**: query by event types and evaluate tags only via matcher logic at read time. Practical setup: keep type streams, avoid tag streams, call `query(types, matcher)`.
-- **Tag-streams**: materialize tags as dedicated streams and build DCB context from stream selectors. Practical setup: configure `tagsAccessor` and use `DcbQuery` or nested selector algebra via `query()`.
-- **Semester-bounded stream**: write all decision-relevant events for a semester into `semesters/{id}` so the read context stays naturally bounded. Practical setup: choose business-bounded write streams first, then query only within that boundary.
-
-This demonstrates three important points:
-
-- pure matcher-only DCB can degrade when the scanned context grows without a hard domain boundary,
-- DCB according to the full types+tags specification is usually fast enough with tag streams, but this can create many streams and extra index writes,
-- the best long-term approach is often domain partitioning (bounded write streams), so reads are naturally selective even without additional tag/type streams.
-
-Compared to generic SQL-backed event-store speedruns (including the pyeventsourcing benchmark context), this indicates that event-storage can outperform when stream boundaries reflect real domain limits, not only technical entity ownership.
-
-For the semester case specifically, realistic systems typically need one more filter/intersection for enrollment-relevant types because a semester stream may contain many unrelated events. Two common options are:
-
-- keep one semester stream and intersect with enrollment-related event types during context read,
-- split into `semester/{id}/students`, `semester/{id}/courses`, and `semester/{id}/enrolments`, then build the DCB context from the join of those three streams.
-
----
+Measurements for the three approaches are on the [Performance](performance.md#dcb-scenarios) page.
 
 ## Selector Algebra (Advanced)
 
-`DcbQuery` compiles each item to the nested selector algebra that `query()` and `fromStreams()` understand natively. The algebra uses alternating OR/AND depth semantics (see [Joining Streams](streams.md#joining-streams)):
+`DcbQuery` compiles each item to the nested selector algebra that `query()` and `fromStreams()` understand natively. The algebra uses alternating OR/AND depth semantics (see [Joining Streams](organizing-streams.md#joining-streams)):
 
 - depth 0 (top-level array): OR across query items
 - depth 1 (per-item array): AND — tag stream intersected with the type-group stream
@@ -294,4 +256,4 @@ const { stream, condition } = store.query([
 
 Selection happens at the index level: only events at the intersection of the tag stream and the relevant type streams are yielded, without deserializing unrelated documents.
 
-You can pass the nested array form directly to `query()` when the query shape cannot be expressed as a flat list of `{ types, tags }` items, or when you want full control over which streams are joined. A flat `['TypeA', 'TypeB']` is a top-level OR join over those streams. `query()` also supports raw mode — see [Event Streams → Reading Streams](streams.md#reading-streams).
+You can pass the nested array form directly to `query()` when the query shape cannot be expressed as a flat list of `{ types, tags }` items, or when you want full control over which streams are joined. A flat `['TypeA', 'TypeB']` is a top-level OR join over those streams. `query()` also supports raw mode — see [Writing and Reading Events](reading-writing.md#raw-mode-ndjson-for-network-streaming).

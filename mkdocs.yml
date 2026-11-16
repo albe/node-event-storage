@@ -10,20 +10,41 @@ markdown_extensions:
 plugins:
   - search
   - mermaid2
+  - redirects:
+      redirect_maps:
+        streams.md: reading-writing.md
+        advanced.md: customization.md
+        upgrading.md: upgrading/index.md
+
+validation:
+  links:
+    anchors: warn
 
 nav:
   - Overview: index.md
-  - Getting Started: getting-started.md
-  - Event Streams: streams.md
-  - Dynamic Consistency Boundaries (DCB): dcb.md
-  - Consumers: consumers.md
-  - Advanced Topics: advanced.md
-  - Performance: performance.md
-  - API Reference: api.md
-  - Implementation Architecture: architecture.md
-  - Changelog: changelog.md
-  - Upgrading:
-    - Overview: upgrading/index.md
-    - 0.x to 1.0: upgrading/1.0.md
-    - To 1.2: upgrading/1.2.md
-    - To 1.4: upgrading/1.4.md
+  - Getting Started:
+    - Event Sourcing in 5 Minutes: event-sourcing.md
+    - When to Use: when-to-use.md
+    - Getting Started: getting-started.md
+  - Guides:
+    - Writing and Reading Events: reading-writing.md
+    - Organizing Streams: organizing-streams.md
+    - Matchers: matchers.md
+    - Dynamic Consistency Boundaries (DCB): dcb.md
+    - Consumers: consumers.md
+    - Multiple Processes: multi-process.md
+    - Customization: customization.md
+    - Operations: operations.md
+  - Guarantees and Internals:
+    - Guarantees: guarantees.md
+    - Implementation Architecture: architecture.md
+    - Performance: performance.md
+  - Reference:
+    - API Reference: api.md
+    - Configuration: configuration.md
+    - Changelog: changelog.md
+    - Upgrading:
+      - Overview: upgrading/index.md
+      - 0.x to 1.0: upgrading/1.0.md
+      - To 1.2: upgrading/1.2.md
+      - To 1.4: upgrading/1.4.md

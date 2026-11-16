@@ -32,7 +32,7 @@ There is currently only a single other embedded event store for node/javascript:
 npm install event-storage
 ```
 
-> **CommonJS / `require()` users:** version 1.0 is ESM-only. If your project uses `require()` and migrating to ESM is not an option, install the 0.x series (`npm install event-storage@0`) which is functionally equivalent and retains full CJS support.
+> **CommonJS / `require()` users:** version 1.0 is ESM-only. If your project uses `require()` and migrating to ESM is not an option, install the 0.x series (`npm install event-storage@0`), which supports CommonJS but lacks the features added in 1.x.
 
 
 ## Quick Start
@@ -56,14 +56,6 @@ eventstore.on('ready', () => {
 });
 ```
 
-## Common Usage at a Glance
-
-- **Append events** with optimistic concurrency via `commit(stream, events, expectedVersion, cb)`.
-- **Read streams** with `getEventStream()` and fluent options for revision/range/direction.
-- **Run cross-stream queries** with `query(types, matcher)` and commit with its returned `condition` for DCB.
-- **Build projections** with `fromStreams()` (joined streams) and `createEventStream()` for persistent filtered streams.
-- **Consume reliably** with `getConsumer()` for durable at-least-once (or exactly-once with state) processing.
-
 ## Key Features
 
 | Feature | Summary |
@@ -84,89 +76,21 @@ eventstore.on('ready', () => {
 
 ---
 
-## Joining Streams
+## Companion Packages
 
-Merge events from multiple streams in global insertion order with `fromStreams`. The selector tree alternates: OR at even depths, AND at odd depths:
-
-```javascript
-// OR: all events from either stream, in insertion order
-const joined = eventstore.fromStreams('view', ['orders', 'payments']);
-
-// AND: only events indexed in both streams (intersection)
-const matched = eventstore.fromStreams('view', [['customer-42', 'OrderPlaced']]);
-
-// Nested — (stream-a AND stream-b) OR (stream-c AND stream-d)
-const complex = eventstore.fromStreams('view', [
-    ['stream-a', 'stream-b'],
-    ['stream-c', 'stream-d']
-]);
-```
-
-See [Event Streams](https://node-event-storage.readthedocs.io/en/stable/streams/) for the full selector algebra, categories, and derived projection streams.
-
----
-
-## DCB Example
-
-```javascript
-const { stream, condition } = store.query(['OrderPlaced'], { payload: { customerId: 'cust-1' } });
-const hasOpenOrder = stream.events.some((event) => event.status === 'open');
-
-if (!hasOpenOrder) {
-    store.commit('orders-cust-1', [{ type: 'OrderPlaced', customerId: 'cust-1' }], condition);
-}
-```
-
----
-
-## Object Matcher Syntax
-
-Object matchers support nested equality, array values, scalar operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), and array-containment operators (`$has`, `$hasAny`).
-
-- Scalar operators can be combined on one field (AND semantics), e.g. `{ $gte: 100, $lt: 1000 }`.
-- `$has` / `$hasAny` target array-valued fields and must be used on their own for that field.
-
-For hot paths, reuse the same matcher object reference across calls when possible (instead of recreating equivalent objects each time) so matcher compilation and cache-based optimization paths can be reused.
-
-```javascript
-{ payload: { type: ['OrderPlaced', 'OrderCancelled'] } }
-{ payload: { amount: { $gte: 100, $lt: 1000 } } }
-{ payload: { tags: { $has: 'featured' } } }
-{ payload: { tags: { $hasAny: ['featured', 'priority'] } } }
-```
-
----
-
-## HTTP API
-
-To expose an event store over HTTP, see the companion package **[event-storage-http](https://github.com/albe/node-event-storage-http)**:
-
-```bash
-npm install event-storage-http
-```
-
-```javascript
-import EventStore from 'event-storage';
-import { createEventStoreHttpServer } from 'event-storage-http';
-
-const eventStore = new EventStore('my-store', { storageDirectory: './data' });
-const server = createEventStoreHttpServer(eventStore);
-server.listen(3000);
-```
-
-The package exposes NDJSON stream endpoints, durable consumer management, and an `HttpEventStream` client helper for consuming event streams over fetch.
+- **[event-storage-http](https://github.com/albe/node-event-storage-http)** exposes a store over HTTP (NDJSON streams, consumer management, `HttpEventStream` client).
+- **[event-storage-ui](https://github.com/albe/node-event-storage-ui)** is an admin dashboard for inspecting a running store on the same machine.
 
 ---
 
 ## Documentation
 
-The full documentation is hosted at **<https://node-event-storage.readthedocs.io/en/stable/>** and covers:
+The full documentation is hosted at **<https://node-event-storage.readthedocs.io/en/stable/>**:
 
-- [Getting Started](https://node-event-storage.readthedocs.io/en/stable/getting-started/) — installation, constructor options, basic usage.
-- [Event Streams](https://node-event-storage.readthedocs.io/en/stable/streams/) — writing, reading, optimistic concurrency, fluent API, joining streams, categories, and event metadata.
-- [Dynamic Consistency Boundaries (DCB)](https://node-event-storage.readthedocs.io/en/stable/dcb/) — `typeAccessor`, query matchers, consistency tokens, and the full DCB workflow.
-- [Consumers](https://node-event-storage.readthedocs.io/en/stable/consumers/) — at-least-once and exactly-once delivery, consumer state, consistency guards, and read-only mode.
-- [Advanced Topics](https://node-event-storage.readthedocs.io/en/stable/advanced/) — ACID properties, reliability and crash-safety guarantees, storage configuration, partitioning, custom serialization, compression, security, and access control hooks.
+- **New to event sourcing?** [Event Sourcing in 5 Minutes](https://node-event-storage.readthedocs.io/en/stable/event-sourcing/), [When to Use](https://node-event-storage.readthedocs.io/en/stable/when-to-use/), [Getting Started](https://node-event-storage.readthedocs.io/en/stable/getting-started/).
+- **Guides:** [Writing and Reading Events](https://node-event-storage.readthedocs.io/en/stable/reading-writing/), [Organizing Streams](https://node-event-storage.readthedocs.io/en/stable/organizing-streams/), [Matchers](https://node-event-storage.readthedocs.io/en/stable/matchers/), [DCB](https://node-event-storage.readthedocs.io/en/stable/dcb/), [Consumers](https://node-event-storage.readthedocs.io/en/stable/consumers/), [Multiple Processes](https://node-event-storage.readthedocs.io/en/stable/multi-process/), [Customization](https://node-event-storage.readthedocs.io/en/stable/customization/), [Operations](https://node-event-storage.readthedocs.io/en/stable/operations/).
+- **Evaluating the implementation?** [Guarantees](https://node-event-storage.readthedocs.io/en/stable/guarantees/), [Implementation Architecture](https://node-event-storage.readthedocs.io/en/stable/architecture/), [Performance](https://node-event-storage.readthedocs.io/en/stable/performance/).
+- **Reference:** [API](https://node-event-storage.readthedocs.io/en/stable/api/), [Configuration](https://node-event-storage.readthedocs.io/en/stable/configuration/), [Changelog](https://node-event-storage.readthedocs.io/en/stable/changelog/), [Upgrading](https://node-event-storage.readthedocs.io/en/stable/upgrading/).
 
 ---
 

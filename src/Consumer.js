@@ -2,25 +2,11 @@ import stream from 'stream';
 import fs from 'fs';
 import path from 'path';
 import { assert } from './utils/util.js';
-import { ensureDirectory } from './utils/fsUtil.js';
+import { ensureDirectory, isSameOrParentDirectory, safeUnlink, writeFileAtomic } from './utils/fsUtil.js';
 import { normalizeConsumerStateArgs } from './utils/apiHelpers.js';
 import Storage from './Storage/ReadableStorage.js';
 const MAX_CATCHUP_BATCH = 10;
-
-/**
- * Safely unlink a file and ignore if it doesn't exist.
- * @param {string} filename
- */
-const safeUnlink = (filename) => {
-    /* c8 ignore next */
-    try {
-        fs.unlinkSync(filename);
-    } catch (e) {
-        if (e.code !== "ENOENT") {
-            throw e;
-        }
-    }
-};
+const TMP_FILE_SUFFIX = /^\d+\.tmp$/;
 
 /**
  * Implements an event-driven durable Consumer that provides at-least-once delivery semantics or exactly-once processing semantics if only using setState().
@@ -59,13 +45,18 @@ class Consumer extends stream.Readable {
         this.indexName = indexName;
         const consumerDirectory = path.join(this.storage.indexDirectory, 'consumers');
         this.fileName = path.join(consumerDirectory, this.storage.storageFile + '.' + indexName + '.' + identifier);
-        if (ensureDirectory(consumerDirectory)) {
+        assert(isSameOrParentDirectory(consumerDirectory, path.dirname(this.fileName)),
+            `Consumer "${identifier}" for index "${indexName}" would be stored outside of the consumers directory.`);
+        // Hierarchical stream names (e.g. "tags/course/c1") place the consumer file in a subdirectory.
+        if (ensureDirectory(path.dirname(this.fileName))) {
             this.cleanUpFailedWrites();
         }
     }
 
     /**
-     * Iterate over all files in the directory of this consumer and unlink any file that starts with the filename followed by a dot.
+     * Unlink temporary files of this consumer that were left behind by an interrupted persist.
+     * Only `<fileName>.<position>.tmp` files are removed, so the state files of other consumers whose
+     * identifier or stream name extends this one (e.g. `orders` and `orders.archive`) stay untouched.
      * @private
      */
     cleanUpFailedWrites() {
@@ -73,7 +64,7 @@ class Consumer extends stream.Readable {
         const consumerDirectory = path.dirname(this.fileName);
         const files = fs.readdirSync(consumerDirectory);
         for (let file of files) {
-            if (file.startsWith(consumerNamePrefix)) {
+            if (file.startsWith(consumerNamePrefix) && TMP_FILE_SUFFIX.test(file.slice(consumerNamePrefix.length))) {
                 safeUnlink(path.join(consumerDirectory, file));
             }
         }
@@ -166,20 +157,18 @@ class Consumer extends stream.Readable {
             const consumerData = Buffer.allocUnsafe(4 + Buffer.byteLength(consumerState, 'utf8'));
             consumerData.writeInt32LE(this.position, 0);
             consumerData.write(consumerState, 4, 'utf8');
-            const tmpFile = this.fileName + '.' + this.position;
+            const tmpFile = this.fileName + '.' + this.position + '.tmp';
             this.persisting = null;
             /* c8 ignore next 3 */
             if (fs.existsSync(tmpFile)) {
                 throw new Error(`Trying to update consumer ${this.name} concurrently. Keep each single consumer within a single process.`);
             }
             try {
-                fs.writeFileSync(tmpFile, consumerData);
-                // If the write fails (half-way), the consumer state file will not be corrupted
-                fs.renameSync(tmpFile, this.fileName);
+                writeFileAtomic(this.fileName, consumerData, tmpFile);
                 this.emit('persisted', consumerState);
+            /* c8 ignore next 3 */
             } catch (e) {
-                /* c8 ignore next */
-                safeUnlink(tmpFile);
+                // The previous state file is still intact; the next persist will try again.
             }
         });
     }
