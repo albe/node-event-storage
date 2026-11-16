@@ -151,6 +151,7 @@ Create a new named stream backed by an index that includes every event matching 
 - a plain object using nested equality,
 - array values for OR semantics,
 - scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`),
+- the string prefix operator `$startsWith`,
 - array-containment operators (`$has`, `$hasAny`), or
 - a predicate `(document) => boolean`.
 

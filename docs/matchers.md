@@ -54,16 +54,29 @@ Prefer object matchers: they work in both modes, can be routed in O(1) on writes
   scalar(s) without parsing nested objects. Use `$has`/`$hasAny` instead of a function
   matcher wherever possible for tag-membership predicates.
 
+- **String prefix with `$startsWith`**
+
+```javascript
+  // matches events whose payload.type is a string starting with 'Order'
+  { payload: { type: { $startsWith: 'Order' } } }
+  // equivalent to: typeof event.payload.type === 'string' && event.payload.type.startsWith('Order')
+```
+
+  The prefix must be a string. Non-string document values never match. In raw mode a lone
+  `$startsWith` compiles to a single byte-pattern check on `"type":"Order`, without parsing
+  the value.
+
 - **Scalar comparison operators**
 
 ```javascript
   { payload: { amount: { $gte: 100, $lt: 1000 } } }
 ```
 
-Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$has`, and `$hasAny`.
+Supported operators are `$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$startsWith`, `$has`, and `$hasAny`.
 Multiple operators on the same field are combined with AND semantics, but only when
 they operate on the same value shape. `$gt`/`$gte`/`$lt`/`$lte`/`$eq`/`$ne` are scalar
-operators and can be freely combined (e.g. `{ $gte: 100, $lt: 1000 }`). `$has` and
+operators and can be freely combined (e.g. `{ $gte: 100, $lt: 1000 }`), also with
+`$startsWith` (e.g. `{ $startsWith: 'Order', $ne: 'OrderCancelled' }`). `$has` and
 `$hasAny` are non-scalar (array-containment) operators and cannot be combined with scalar
 operators — `{ $has: 'tag', $gt: 10 }` is nonsensical because a value cannot
 simultaneously be an array (for `$has`) and a scalar comparable to `10`.
