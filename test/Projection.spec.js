@@ -106,6 +106,42 @@ describe('Projection', function () {
         expect(() => store.commit('subscriptions', [subscribe('s1', 'c1')], appendCondition)).to.not.throwError();
     });
 
+    it('continues from a previous decision model with only the new events', function () {
+        store.commit('courses', [defineCourse('c1', 2)]);
+        const projections = () => ({ capacity: CourseCapacity('c1'), subscriptions: CourseSubscriptions('c1') });
+        const first = buildDecisionModel(store, projections());
+
+        store.commit('subscriptions', [subscribe('s1', 'c1')]);
+        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], first.appendCondition))
+            .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
+
+        const seen = [];
+        const counting = createProjection({
+            initialState: 0,
+            handlers: { StudentSubscribedToCourse: (state, event) => (seen.push(event), state + 1) },
+            tagFilter: ['course/c1']
+        });
+        const retry = buildDecisionModel(store, { capacity: CourseCapacity('c1'), subscriptions: counting }, first);
+        expect(retry.state).to.eql({ capacity: 2, subscriptions: 1 });
+        expect(seen).to.have.length(1);
+        expect(retry.appendCondition.noneMatchAfter).to.be(store.length);
+        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], retry.appendCondition)).to.not.throwError();
+    });
+
+    it('returns the previous state when nothing new was committed', function () {
+        store.commit('courses', [defineCourse('c1', 2)]);
+        const first = buildDecisionModel(store, CourseCapacity('c1'));
+        const again = buildDecisionModel(store, CourseCapacity('c1'), first);
+        expect(again.state).to.be(2);
+        expect(again.appendCondition.noneMatchAfter).to.be(first.appendCondition.noneMatchAfter);
+    });
+
+    it('rejects a previous decision model built from different projections', function () {
+        store.commit('courses', [defineCourse('c1', 2)]);
+        const first = buildDecisionModel(store, CourseCapacity('c1'));
+        expect(() => buildDecisionModel(store, CourseCapacity('c2'), first)).to.throwError(/different projections/);
+    });
+
     it('requires a typeAccessor', function (done) {
         store.close();
         fs.emptyDirSync(storageDirectory);

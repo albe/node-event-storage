@@ -238,7 +238,28 @@ function subscribeStudent({ studentId, courseId, semesterId }) {
 - A single projection can be passed instead of a map; `state` is then that projection's state.
 - `composeProjections({ ... })` builds the composed projection without reading, e.g. for unit tests without a store.
 - Projections require `typeAccessor`, and `tagsAccessor` when any projection uses a `tagFilter`.
-- On `OptimisticConcurrencyError`, build the decision model again and re-decide.
+- On `OptimisticConcurrencyError`, pass the failed decision model as third argument. Only the events committed since then are read and applied to its state, then you decide again:
+
+```javascript
+function subscribeStudent({ studentId, courseId, semesterId }, attempts = 3) {
+    const projections = { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) };
+    let model = buildDecisionModel(store, projections);
+    for (let attempt = 1; ; attempt++) {
+        if (model.state.subscriptions >= model.state.capacity) throw new Error('Course is full');
+        try {
+            store.commit(`semester-${semesterId}`, [
+                { type: 'StudentSubscribedToCourse', courseId, studentId, tags: [`course/${courseId}`, `student/${studentId}`] }
+            ], model.appendCondition);
+            return;
+        } catch (e) {
+            if (!(e instanceof OptimisticConcurrencyError) || attempt === attempts) throw e;
+            model = buildDecisionModel(store, projections, model); // reads only the new events
+        }
+    }
+}
+```
+
+  The projections must be the same as for the earlier model; a different query throws.
 
 ### Mapping to the dcb.events specification
 

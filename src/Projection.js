@@ -78,18 +78,27 @@ function isProjection(value) {
  * Build a decision model: read all events relevant to the projection(s) and fold them into state.
  * Returns the state together with the append condition that protects the decision.
  *
+ * Pass the result of an earlier call as `previous` to only read the events committed since then,
+ * e.g. after `commit()` failed with an `OptimisticConcurrencyError`. The projections must be the same
+ * as in that earlier call.
+ *
  * @param {import('./EventStore.js').default} eventStore A store configured with `typeAccessor` (and `tagsAccessor`
  *   when projections use a tagFilter).
  * @param {Projection|Object<string, Projection>} projectionOrMap A projection, or a map of projections to compose.
+ * @param {{ state: any, appendCondition: import('./EventStore.js').CommitCondition }} [previous] An earlier
+ *   decision model for the same projections to continue from.
  * @returns {{ state: any, appendCondition: import('./EventStore.js').CommitCondition }}
  */
-function buildDecisionModel(eventStore, projectionOrMap) {
+function buildDecisionModel(eventStore, projectionOrMap, previous = null) {
     assert(eventStore.typeSource !== null, 'Projections need the store to be configured with a typeAccessor.');
     const projection = isProjection(projectionOrMap) ? projectionOrMap : composeProjections(projectionOrMap);
-    const { stream, condition } = eventStore.query(projection.query);
+    const from = previous ? previous.appendCondition.noneMatchAfter + 1 : 1;
+    const { stream, condition } = eventStore.query(projection.query, null, from);
+    assert(!previous || JSON.stringify(condition.selector) === JSON.stringify(previous.appendCondition.selector),
+        'The previous decision model was built from different projections.');
     const typeOf = eventStore.typeSource.accessor;
     const tagsOf = eventStore.tagsSource ? eventStore.tagsSource.accessor : () => [];
-    let state = projection.initialState;
+    let state = previous ? previous.state : projection.initialState;
     stream.forEach((event, metadata) => {
         const context = { type: typeOf(event), tags: tagsOf(event) ?? [] };
         state = projection.apply(state, event, metadata, context);
