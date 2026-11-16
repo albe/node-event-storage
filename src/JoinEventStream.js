@@ -1,5 +1,5 @@
 import EventStream from './EventStream.js';
-import {assert, iterate} from './utils/util.js';
+import {assert} from './utils/util.js';
 import {intersect, normalizeSelector, union} from './utils/indexUtil.js';
 import {normalizeRevision} from './utils/apiHelpers.js';
 
@@ -40,117 +40,57 @@ class JoinEventStream extends EventStream {
         this.maxRevision = normalizeRevision(maxRevision, eventStore.length);
         this.version = this.streamIndex.length;
 
-        this._combinedRanges = null;
-
         this.fetch = () => this.iterateDocuments();
         this._iterator = null;
     }
 
 
     /**
-     * Resolve and cache the combined index-entry ranges for the full selector.
-     *
-     * @private
-     * @returns {Array<Array<number>>}
-     */
-    resolveCombinedRanges() {
-        if (this._combinedRanges) {
-            return this._combinedRanges;
-        }
-
-        this._combinedRanges = this.resolveSelectorRanges(this.selector);
-        return this._combinedRanges;
-    }
-
-    /**
-     * Resolve one selector node into a sorted index-entry range.
-     * Selector is already normalized and optimized from constructor, so we just traverse and collect ranges.
+     * Resolve one selector node into a lazy range of matching index entries.
+     * Selector is already normalized and optimized from constructor, so we just traverse it.
      *
      * @private
      * @param {string|Array<string|Array>} selectorNode
      * @param {number} [depth=0]
-     * @returns {Array<Array<number>>}
+     * @returns {Iterator<Entry>}
      */
-    resolveSelectorRanges(selectorNode, depth = 0) {
+    resolveSelectorRange(selectorNode, depth = 0) {
+        const forwards = this.minRevision <= this.maxRevision;
         if (typeof selectorNode === 'string') {
             const index = this.eventStore.streams[selectorNode]?.index;
-            return this.resolveIndexRange(index);
+            if (!index || index.length === 0) {
+                return [][Symbol.iterator]();
+            }
+            const first = index.find(Math.min(this.minRevision, this.maxRevision), true);
+            const last = index.find(Math.max(this.minRevision, this.maxRevision));
+            if (first === 0 || last === 0 || first > last) {
+                return [][Symbol.iterator]();
+            }
+            return forwards ? index.range(first, last) : index.range(last, first);
         }
 
-        const childRanges = selectorNode.map(node => this.resolveSelectorRanges(node, depth + 1));
-        return depth % 2 === 0 ? union(...childRanges) : intersect(...childRanges);
+        const ranges = selectorNode.map(node => this.resolveSelectorRange(node, depth + 1));
+        if (ranges.length === 0) {
+            return [][Symbol.iterator]();
+        }
+        const combine = depth % 2 === 0 ? union : intersect;
+        return ranges.reduce((left, right) => combine(left, right, forwards));
     }
 
     /**
-     * Resolve one stream index to the global revision-bounded entry range.
-     *
-     * @private
-     * @param {object|undefined} index
-     * @returns {Array<Array<number>>}
-     */
-    resolveIndexRange(index) {
-        if (!index || index.length === 0) {
-            return [];
-        }
-
-        const ascending = this.minRevision <= this.maxRevision;
-        const from = index.find(this.minRevision, ascending);
-        const until = index.find(this.maxRevision, !ascending);
-        if (
-            from === 0 ||
-            until === 0 ||
-            (ascending ? from > until : from < until)
-        ) {
-            return [];
-        }
-
-        const rangeFrom = ascending ? from : until;
-        const rangeUntil = ascending ? until : from;
-        return index.range(rangeFrom, rangeUntil) || [];
-    }
-
-    /**
-     * Iterate matching index entries in requested direction.
-     *
-     * @private
-     * @returns {Generator<Array<number>>}
-     */
-    * iterateEntries() {
-        const entries = this.resolveCombinedRanges();
-        const forwards = this.minRevision <= this.maxRevision;
-        yield* iterate(entries, forwards);
-    }
-
-    /**
-     * Iterate storage documents lazily from combined index entries.
+     * Iterate storage documents lazily from the matching index entries.
      *
      * @private
      * @returns {Generator<object|{ buffer: Buffer, time64: number, sequenceNumber: number }>}
      */
     * iterateDocuments() {
         const forwards = this.minRevision <= this.maxRevision;
-        for (const entry of this.iterateEntries()) {
-            const event = this.eventStore.storage.readFrom(
-                entry.partition,
-                entry.position,
-                entry.size,
-                this.raw,
-                !forwards
-            );
+        for (const entry of this.resolveSelectorRange(this.selector)) {
+            const event = this.eventStore.storage.readFrom(entry.partition, entry.position, entry.size, this.raw, !forwards);
             if (event) {
                 yield event;
             }
         }
-    }
-
-    /**
-     * Reset fetch state and cached selector ranges when stream boundaries changed.
-     *
-     * @returns {JoinEventStream}
-     */
-    reset() {
-        this._combinedRanges = null;
-        return super.reset();
     }
 }
 

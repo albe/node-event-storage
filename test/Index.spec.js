@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
+import { CHUNK_CAPACITY } from '../src/Index/ReadableIndex.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -38,6 +39,14 @@ describe('Index', function() {
         }
         index.flush();
         return index;
+    }
+
+    function entriesOf(index, from = 1, until = index.length) {
+        const entries = [];
+        for (let position = from; position <= until; position++) {
+            entries.push(index.get(position));
+        }
+        return entries;
     }
 
     function createReader(name, options) {
@@ -196,7 +205,7 @@ describe('Index', function() {
             index = setupIndexWithEntries(25);
             index.close();
             index.open();
-            let entries = index.all();
+            let entries = entriesOf(index);
             expect(entries.length).to.be(25);
             for (let i = 1; i <= entries.length; i++) {
                 expect(entries[i - 1].number).to.be(i);
@@ -208,7 +217,7 @@ describe('Index', function() {
             index.close();
             index.open();
             index.add(new IndexEntry(6, 6));
-            let entries = index.all();
+            let entries = entriesOf(index);
             expect(entries.length).to.be(6);
             for (let i = 1; i <= entries.length; i++) {
                 expect(entries[i - 1].number).to.be(i);
@@ -291,70 +300,49 @@ describe('Index', function() {
 
     describe('range', function() {
 
-        it('returns false on out of bounds range position', function() {
+        function numbers(range) {
+            return Array.from(range, entry => entry.number);
+        }
+
+        it('iterates an arbitrary range of entries forwards and backwards', function() {
             index = setupIndexWithEntries(50);
             index.close();
             index.open();
-            expect(index.range(0)).to.be(false);
-            expect(index.range(51, 55)).to.be(false);
-            expect(index.range(1, 51)).to.be(false);
-            expect(index.range(15, 10)).to.be(false);
+            expect(numbers(index.range(21, 25))).to.eql([21, 22, 23, 24, 25]);
+            expect(numbers(index.range(25, 21))).to.eql([25, 24, 23, 22, 21]);
+            expect(numbers(index.range(21, 21))).to.eql([21]);
         });
 
-        it('returns false on closed index', function() {
+        it('counts negative positions from the end', function() {
+            index = setupIndexWithEntries(50);
+            expect(numbers(index.range(-3))).to.eql([48, 49, 50]);
+            expect(numbers(index.range(1, -48))).to.eql([1, 2, 3]);
+            expect(numbers(index.range()).length).to.be(50);
+            expect(numbers(index.all())).to.eql(numbers(index.range(1, 50)));
+        });
+
+        it('is empty for out of bounds positions or a closed index', function() {
             index = setupIndexWithEntries(5);
+            expect(numbers(index.range(0))).to.eql([]);
+            expect(numbers(index.range(6, 8))).to.eql([]);
+            expect(numbers(index.range(1, 6))).to.eql([]);
+            expect(numbers(index.range('foo'))).to.eql([]);
             index.close();
-            expect(index.range(1)).to.be(false);
-            expect(index.range(1,5)).to.be(false);
+            expect(numbers(index.range(1, 5))).to.eql([]);
         });
 
-        it('can read an arbitrary range of entries', function() {
-            index = setupIndexWithEntries(50);
-            index.close();
-            index.open();
-            let entries = index.range(21, 37);
-            for (let i = 0; i < entries.length; i++) {
-                expect(entries[i].number).to.be(21 + i);
-            }
-        });
+        it('skips ahead to a sequence number given to next()', function() {
+            index = setupIndexWithEntries(100, i => 2 * i);
+            const forwards = index.range();
+            forwards.next();
+            expect(forwards.next(75).value.number).to.be(76);
+            expect(forwards.next(78).value.number).to.be(78);
+            expect(forwards.next(201).done).to.be(true);
 
-        it('can read a range of entries from the end', function() {
-            index = setupIndexWithEntries(50);
-            index.close();
-            index.open();
-            let entries = index.range(-15);
-            expect(entries.length).to.be(15);
-            for (let i = 0; i < entries.length; i++) {
-                expect(entries[i].number).to.be(36 + i);
-            }
-        });
-
-        it('can read a range of entries until a distance from the end', function() {
-            index = setupIndexWithEntries(50);
-            index.close();
-            index.open();
-            let entries = index.range(1, -15);
-            expect(entries.length).to.be(36);   // 36 because end is inclusive
-            for (let i = 0; i < entries.length; i++) {
-                expect(entries[i].number).to.be(1 + i);
-            }
-        });
-
-        it('can read a single item range of entries', function() {
-            index = setupIndexWithEntries(50);
-            index.close();
-            index.open();
-            let entries = index.range(21, 21);
-            expect(entries.length).to.be(1);
-            expect(entries[0].number).to.be(21);
-        });
-
-        it('returns false with a non-numeric range', function() {
-            index = setupIndexWithEntries(5);
-            index.close();
-            index.open();
-            let entries = index.range('foo');
-            expect(entries).to.be(false);
+            const backwards = index.range(-1, 1);
+            backwards.next();
+            expect(backwards.next(41).value.number).to.be(40);
+            expect(backwards.next(1).done).to.be(true);
         });
 
     });
@@ -478,36 +466,6 @@ describe('Index', function() {
 
     });
 
-    describe('validRange', function(){
-
-        it('returns false for out of range from positions', function(){
-            index = setupIndexWithEntries(5);
-            expect(index.validRange(0, 1)).to.be(false);
-            expect(index.validRange(-1, 1)).to.be(false);
-            expect(index.validRange(index.length + 1, index.length + 2)).to.be(false);
-        });
-
-        it('returns false when from greater until', function(){
-            index = setupIndexWithEntries(5);
-            expect(index.validRange(2, 1)).to.be(false);
-            expect(index.validRange(1, 0)).to.be(false);
-        });
-
-        it('returns false for out of range until positions', function(){
-            index = setupIndexWithEntries(5);
-            expect(index.validRange(1, -1)).to.be(false);
-            expect(index.validRange(1, index.length +1)).to.be(false);
-        });
-
-        it('returns true for valid range positions', function(){
-            index = setupIndexWithEntries(5);
-            expect(index.validRange(1, 1)).to.be(true);
-            expect(index.validRange(1, index.length)).to.be(true);
-            expect(index.validRange(index.length, index.length)).to.be(true);
-        });
-
-    });
-
     describe('destroy', function(){
 
         it('completely deletes the file', function(){
@@ -533,6 +491,115 @@ describe('Index', function() {
             expect(index.flush()).to.be(false);
         });
 
+    });
+
+    describe('chunked entries', function() {
+
+        const entryCount = 2 * CHUNK_CAPACITY + 10;
+
+        it('reads entries across chunk boundaries after reopening', function() {
+            index = setupIndexWithEntries(entryCount, i => 3 * i);
+            index.close();
+            index.open();
+            expect(index.get(CHUNK_CAPACITY + 1).number).to.be(3 * (CHUNK_CAPACITY + 1));
+            expect(index.get(1).number).to.be(3);
+            const entries = entriesOf(index, CHUNK_CAPACITY - 1, CHUNK_CAPACITY + 2);
+            expect(entries.map(entry => entry.number)).to.eql([CHUNK_CAPACITY - 1, CHUNK_CAPACITY, CHUNK_CAPACITY + 1, CHUNK_CAPACITY + 2].map(i => 3 * i));
+            expect(entriesOf(index).length).to.be(entryCount);
+            expect(index.lastEntry.number).to.be(3 * entryCount);
+        });
+
+        it('finds numbers across chunk boundaries without loading the whole index first', function() {
+            index = setupIndexWithEntries(entryCount, i => 2 * i);
+            index.close();
+            index.open();
+            expect(index.find(2 * (CHUNK_CAPACITY + 5))).to.be(CHUNK_CAPACITY + 5);
+            expect(index.find(2 * (CHUNK_CAPACITY + 5) + 1)).to.be(CHUNK_CAPACITY + 5);
+            expect(index.find(2 * (CHUNK_CAPACITY + 5) + 1, true)).to.be(CHUNK_CAPACITY + 6);
+        });
+
+        it('appends to a reopened index whose last chunk was not read yet', function() {
+            index = setupIndexWithEntries(CHUNK_CAPACITY + 3);
+            index.close();
+            index.open();
+            index.add(new IndexEntry(CHUNK_CAPACITY + 4, 0));
+            index.flush();
+            index.close();
+            index.open();
+            expect(index.length).to.be(CHUNK_CAPACITY + 4);
+            expect(entriesOf(index, CHUNK_CAPACITY + 2).map(entry => entry.number)).to.eql([CHUNK_CAPACITY + 2, CHUNK_CAPACITY + 3, CHUNK_CAPACITY + 4]);
+        });
+
+        it('flushes unwritten entries that span several chunks', function() {
+            index = createIndex('large-buffer.index', { writeBufferSize: 4 * CHUNK_CAPACITY * IndexEntry.size });
+            const count = CHUNK_CAPACITY + 100;
+            for (let i = 1; i <= count; i++) {
+                index.add(new IndexEntry(i, i));
+            }
+            expect(index.flush()).to.be(true);
+            index.close();
+            index.open();
+            expect(index.length).to.be(count);
+            expect(entriesOf(index, CHUNK_CAPACITY - 1, CHUNK_CAPACITY + 2).map(entry => entry.position)).to.eql([CHUNK_CAPACITY - 1, CHUNK_CAPACITY, CHUNK_CAPACITY + 1, CHUNK_CAPACITY + 2]);
+            expect(index.lastEntry.number).to.be(count);
+        });
+
+        it('truncates across chunk boundaries and appends again', function() {
+            index = setupIndexWithEntries(entryCount);
+            index.truncate(CHUNK_CAPACITY - 2);
+            expect(index.length).to.be(CHUNK_CAPACITY - 2);
+            expect(index.lastEntry.number).to.be(CHUNK_CAPACITY - 2);
+            for (let i = CHUNK_CAPACITY - 1; i <= CHUNK_CAPACITY + 2; i++) {
+                index.add(new IndexEntry(i, 100 + i));
+            }
+            index.flush();
+            expect(index.get(CHUNK_CAPACITY + 1).position).to.be(100 + CHUNK_CAPACITY + 1);
+            index.close();
+            index.open();
+            expect(index.length).to.be(CHUNK_CAPACITY + 2);
+            expect(index.get(CHUNK_CAPACITY + 1).position).to.be(100 + CHUNK_CAPACITY + 1);
+        });
+
+        it('supports custom entry classes with a different layout', function() {
+            class WideEntry extends IndexEntry {
+                static get size() {
+                    return 20;
+                }
+                static fromBuffer(buffer, offset = 0) {
+                    return new this(buffer.readUInt32LE(offset + 4), buffer.readUInt32LE(offset + 8));
+                }
+                toBuffer(buffer, offset) {
+                    buffer.writeUInt32LE(0xffffffff, offset);
+                    buffer.writeUInt32LE(this.number, offset + 4);
+                    buffer.writeUInt32LE(this.position, offset + 8);
+                    buffer.fill(0, offset + 12, offset + 20);
+                    return WideEntry.size;
+                }
+            }
+            index = createIndex('wide.index', { EntryClass: WideEntry });
+            for (let i = 1; i <= CHUNK_CAPACITY + 5; i++) {
+                index.add(new WideEntry(2 * i, i));
+            }
+            index.flush();
+            index.close();
+            index.open();
+            expect(index.get(CHUNK_CAPACITY + 2)).to.be.a(WideEntry);
+            expect(index.get(CHUNK_CAPACITY + 2).position).to.be(CHUNK_CAPACITY + 2);
+            expect(index.find(2 * (CHUNK_CAPACITY + 3))).to.be(CHUNK_CAPACITY + 3);
+        });
+
+        it('lets a reader see entries appended into an already read chunk', function(done) {
+            index = setupIndexWithEntries(5);
+            const reader = createReader(index.name);
+            expect(reader.get(5).number).to.be(5);
+            reader.on('append', (prevLength, newLength) => {
+                expect(entriesOf(reader, prevLength + 1, newLength).map(entry => entry.number)).to.eql([6, 7]);
+                done();
+            });
+            index.add(new IndexEntry(6, 6));
+            index.add(new IndexEntry(7, 7));
+            index.flush();
+        });
     });
 
     describe('ReadOnly', function(){

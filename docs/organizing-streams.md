@@ -94,7 +94,7 @@ eventstore.fromStreams('selector-stream', [
 ]);
 ```
 
-The union and intersection are computed over index entry ranges before any document is read — no events are deserialized that do not belong to the result set.
+The union and intersection are computed lazily on the index entries while iterating — no events are deserialized that do not belong to the result set, and an intersection skips over non-matching index entries with a binary search instead of visiting each one.
 
 The result is not persisted and cannot be used with consumers. For frequently-needed joins, create a permanent derived stream with `createEventStream` instead.
 
