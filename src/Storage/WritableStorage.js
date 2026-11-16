@@ -18,6 +18,9 @@ const LOCK_THROW = 0x2;
 
 class StorageLockedError extends Error {}
 
+// Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
+const MAX_UINT32 = 0xFFFFFFFF;
+
 /**
  * @typedef {object|function(object):boolean} Matcher
  */
@@ -267,6 +270,21 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * Reject a write that the index format can not record, before anything is written. Otherwise the document would
+     * land in the partition and the index entry would fail afterwards, leaving data and index diverged.
+     *
+     * @private
+     * @param {WritablePartition} partition The partition the document will be written to.
+     * @throws {Error} if the storage or the partition is full.
+     */
+    assertWithinLimits(partition) {
+        assert(this.index.length < MAX_UINT32,
+            `Storage is full: it can hold at most ${MAX_UINT32} documents.`);
+        assert(partition.size <= MAX_UINT32,
+            `Partition ${partition.name} is full: documents must start within the first 4 GiB of a partition. Use a partitioner that spreads the documents over more partitions.`);
+    }
+
+    /**
      * Add an index entry for the given document at the position and size.
      *
      * @private
@@ -402,6 +420,7 @@ class WritableStorage extends ReadableStorage {
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
+        this.assertWithinLimits(partition);
         this.emit('preCommit', document, partition.metadata);
 
         const position = partition.write(data, this.length, callback);
@@ -515,12 +534,8 @@ class WritableStorage extends ReadableStorage {
             return;
         }
 
-        const entries = this.index.range(after + 1);  // We need the first entry that is cut off
-        if (entries === false || entries.length === 0) {
-            return;
-        }
-
-        this.forEachDistinctPartitionOf(entries, entry => this.getPartition(entry.partition).truncate(entry.position));
+        // We need the first entry that is cut off in each partition.
+        this.forEachDistinctPartitionOf(this.index.range(after + 1), entry => this.getPartition(entry.partition).truncate(entry.position));
     }
 
     /**

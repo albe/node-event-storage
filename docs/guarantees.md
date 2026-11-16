@@ -116,3 +116,7 @@ WRITE_DURATION=10 bash run.sh
 ```
 
 The test exits with code `0` if data loss is within bounds and code `1` otherwise, making it suitable for CI. The GitHub Actions workflow (`.github/workflows/stress-test.yml`) runs it on every push.
+
+## Size Limits
+
+Index entries store sequence numbers and file positions as unsigned 32-bit integers. A storage therefore holds at most 4,294,967,295 documents, and every document has to start within the first 4 GiB of its partition. A write beyond either limit is rejected with an error before anything is written, so partitions and index stay consistent. To store more data per storage, use a partitioner that spreads the documents over more partitions.

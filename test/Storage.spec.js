@@ -89,6 +89,33 @@ describe('Storage', function() {
             });
         });
 
+        it('rejects a document that would start beyond 4 GiB of its partition without writing it', function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+            const partition = storage.getPartition('');
+            const size = partition.size;
+            partition.size = 2 ** 32;
+
+            expect(() => storage.write({ foo: 'baz' })).to.throwError(/Partition .* is full/);
+            partition.size = size;
+            expect(storage.index.length).to.be(1);
+            expect(partition.size).to.be(size);
+        });
+
+        it('rejects a document when the index can hold no further entries', function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+            const partitionSize = storage.getPartition('').size;
+            Object.defineProperty(storage.index, 'length', { value: 0xFFFFFFFF, configurable: true });
+
+            expect(() => storage.write({ foo: 'baz' })).to.throwError(/Storage is full/);
+            delete storage.index.length;
+            expect(storage.index.length).to.be(1);
+            expect(storage.getPartition('').size).to.be(partitionSize);
+        });
+
         it('reopens partition if partition was closed', function() {
             storage = createStorage();
             storage.open();

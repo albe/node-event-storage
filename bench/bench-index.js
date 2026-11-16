@@ -23,8 +23,8 @@ function bench(index) {
 
 	let number;
 	index.open();
-	for (let entry of index.range(-WRITES + 1)) {
-		number = entry.number;
+	for (let position = 1; position <= index.length; position++) {
+		number = index.get(position).number;
 	}
 	index.close();
 	if (number < WRITES) throw new Error('Not all entries were written! Last entry was '+number);

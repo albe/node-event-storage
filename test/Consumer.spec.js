@@ -213,6 +213,19 @@ describe('Consumer', function() {
         });
     });
 
+    it('restores positions above 2^31 after restart', function(done){
+        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer.stop();
+        consumer.position = 2 ** 31 + 5;
+        consumer.once('persisted', () => {
+            const restarted = new Consumer(storage, 'foobar', 'consumer1');
+            restarted.stop();
+            expect(restarted.position).to.be(2 ** 31 + 5);
+            done();
+        });
+        consumer.persist();
+    });
+
     it('continues from last position after restart', function(done){
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         let expected = 0;

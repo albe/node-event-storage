@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import events from 'events';
 import Entry, { assertValidEntryClass } from '../IndexEntry.js';
 import FileHandlePool from '../FileHandlePool.js';
@@ -8,6 +9,35 @@ import { resolvePath } from "../utils/fsUtil.js";
 
 // node-event-store-index V01
 const HEADER_MAGIC = "nesidx01";
+
+// Entries per in-memory chunk. A full chunk of default entries is 64 KiB, so loading one is a single small read.
+const CHUNK_CAPACITY = 4096;
+const MIN_CHUNK_ALLOCATION = 8;
+const LITTLE_ENDIAN_HOST = os.endianness() === 'LE';
+
+/**
+ * Create a chunk of raw entry bytes with room for `capacity` entries, optionally copying the entries of a smaller chunk.
+ * A dedicated ArrayBuffer keeps the Uint32Array view aligned, which a pooled Buffer does not guarantee.
+ *
+ * @param {number} entrySize
+ * @param {number} count The amount of entries the chunk needs room for. Rounded up to the next power of two.
+ * @param {object} [from] The chunk to copy the valid entries from.
+ * @returns {{buffer: Buffer, words: Uint32Array, capacity: number, filled: number}}
+ */
+function createChunk(entrySize, count, from) {
+    let capacity = MIN_CHUNK_ALLOCATION;
+    while (capacity < count) {
+        capacity *= 2;
+    }
+    capacity = Math.min(capacity, CHUNK_CAPACITY);
+    const arrayBuffer = new ArrayBuffer(capacity * entrySize);
+    const chunk = { buffer: Buffer.from(arrayBuffer), words: new Uint32Array(arrayBuffer), capacity, filled: 0 };
+    if (from) {
+        from.buffer.copy(chunk.buffer, 0, 0, from.filled * entrySize);
+        chunk.filled = from.filled;
+    }
+    return chunk;
+}
 
 class CorruptedIndexError extends Error {}
 
@@ -40,7 +70,6 @@ class ReadableIndex extends events.EventEmitter {
      * @param {object} [options] An object with additional index options.
      * @param {typeof EntryInterface} [options.EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [options.dataDirectory] The directory to store the index file in. Default '.'.
-     * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      * @param {object} [options.fileHandlePool] Shared file-handle pool used to reopen evicted handles on demand.
@@ -66,15 +95,18 @@ class ReadableIndex extends events.EventEmitter {
      * @param {object} options
      */
     initialize(options) {
-        /* @type Array<Entry> */
-        this.data = [];
+        // Entries are kept as raw entry bytes in chunks of CHUNK_CAPACITY, which are read lazily from the file.
+        // Only the first `filled` entries of a chunk are valid, the rest is room for appending.
+        this.chunks = [];
+        this.entryCount = 0;
+        // Entries with the default binary layout are read straight from 32-bit words, without creating objects.
+        this.wordsPerEntry = (LITTLE_ENDIAN_HOST && options.EntryClass.fromBuffer === Entry.fromBuffer) ? options.EntryClass.size / 4 : 0;
         this.opened = false;
         this.fileMode = 'r';
         this.fileHandlePool = options.fileHandlePool || new FileHandlePool();
         this.EntryClass = options.EntryClass;
         this.dataDirectory = options.dataDirectory;
         this.fileName = resolvePath(options.dataDirectory, this.name);
-        this.readBuffer = Buffer.allocUnsafe(Math.max(options.EntryClass.size, options.writeBufferSize > 0 ? options.writeBufferSize : 4096));
 
         if (options.metadata) {
             this.metadata = Object.assign({entryClass: options.EntryClass.name, entrySize: options.EntryClass.size}, options.metadata);
@@ -103,7 +135,7 @@ class ReadableIndex extends events.EventEmitter {
      * @returns {number}
      */
     get length() {
-        return this.data.length;
+        return this.entryCount;
     }
 
     /**
@@ -168,14 +200,9 @@ class ReadableIndex extends events.EventEmitter {
         }
         this.opened = this.getFileHandle() !== null;
 
-        this.readUntil = -1;
-
         const length = this.readFileLength();
-        if (length > 0) {
-            this.data = new Array(length);
-            // Read last item to get the index started
-            this.read(length);
-        }
+        this.setLength(0);
+        this.setLength(length);
 
         return true;
     }
@@ -251,85 +278,100 @@ class ReadableIndex extends events.EventEmitter {
      * @api
      */
     close() {
-        this.data = [];
-        this.readUntil = -1;
-        this.readBuffer.fill(0);
+        // Evict first, so a writer can still flush its unwritten entries from memory.
         this.fileHandlePool.evict(this, false);
+        this.setLength(0);
         this.opened = false;
     }
 
     /**
-     * Read a single index entry from the given index position.
-     * Will prevent reading if the entry has already been read sequentially from the start.
+     * Return the chunk that holds the given entry, reading the missing part of it from file if necessary.
      *
      * @private
-     * @param {number} index
-     * @returns {Entry} The index entry at the given position.
+     * @param {number} index The 0-based entry number.
+     * @returns {object|null} The chunk or null if the entry could not be read.
      */
-    read(index) {
-        index = Number(index) - 1;
-
-        const fd = this.getFileHandle();
-        fs.readSync(fd, this.readBuffer, 0, this.EntryClass.size, this.headerSize + index * this.EntryClass.size);
-        if (index === this.readUntil + 1) {
-            this.readUntil++;
+    chunkFor(index) {
+        const chunkIndex = Math.floor(index / CHUNK_CAPACITY);
+        const chunkStart = chunkIndex * CHUNK_CAPACITY;
+        let chunk = this.chunks[chunkIndex];
+        if (chunk && index - chunkStart < chunk.filled) {
+            return chunk;
         }
-        this.data[index] = this.EntryClass.fromBuffer(this.readBuffer);
 
-        return this.data[index];
+        const count = Math.min(CHUNK_CAPACITY, this.length - chunkStart);
+        if (!chunk || chunk.capacity < count) {
+            chunk = this.chunks[chunkIndex] = createChunk(this.EntryClass.size, count, chunk);
+        }
+        const entrySize = this.EntryClass.size;
+        const bytesRead = fs.readSync(this.getFileHandle(), chunk.buffer, chunk.filled * entrySize, (count - chunk.filled) * entrySize,
+            this.headerSize + (chunkStart + chunk.filled) * entrySize);
+        chunk.filled += Math.floor(bytesRead / entrySize);
+        return index - chunkStart < chunk.filled ? chunk : null;
     }
 
     /**
-     * Read a range of entries from disk. This method will not do any range checks.
-     * It will however optimize to prevent reading entries that have already been read sequentially from start.
+     * Set the amount of entries in the index. Additional entries are read from the file on access,
+     * entries beyond the new length are dropped from memory.
      *
-     * @private
-     * @param {number} from The 1-based index position from where to read from (inclusive).
-     * @param {number} until The 1-based index position until which to read to (inclusive).
-     * @returns {Array<Entry>|boolean} An array of the index entries in the given range or false on error.
+     * @protected
+     * @param {number} length
      */
-    readRange(from, until) {
-        if (until === from) {
-            return [this.read(from)];
+    setLength(length) {
+        if (length >= this.entryCount) {
+            this.entryCount = length;
+            return;
         }
-
-        from--;
-        until--;
-
-        const readFrom = Math.max(this.readUntil + 1, from);
-        const amount = (until - readFrom + 1);
-
-        const bufferSize = amount * this.EntryClass.size;
-        const readBuffer = bufferSize <= this.readBuffer.byteLength
-            ? this.readBuffer
-            : Buffer.allocUnsafe(bufferSize);
-        const fd = this.getFileHandle();
-        let readSize = fs.readSync(fd, readBuffer, 0, bufferSize, this.headerSize + readFrom * this.EntryClass.size);
-        let index = 0;
-        while (index < amount && readSize > 0) {
-            this.data[index + readFrom] = this.EntryClass.fromBuffer(readBuffer, index * this.EntryClass.size);
-            readSize -= this.EntryClass.size;
-            index++;
+        this.entryCount = length;
+        const chunkCount = Math.ceil(length / CHUNK_CAPACITY);
+        this.chunks.length = Math.min(this.chunks.length, chunkCount);
+        const lastChunk = this.chunks[chunkCount - 1];
+        if (lastChunk) {
+            lastChunk.filled = Math.min(lastChunk.filled, length - (chunkCount - 1) * CHUNK_CAPACITY);
         }
-        if (from <= this.readUntil + 1) {
-            this.readUntil = Math.max(this.readUntil, until);
-        }
-
-        return this.data.slice(from, until + 1);
     }
 
     /**
-     * Read all index entries. Equal to range(1, index.length) with the exception that this returns
-     * an empty array if the index is empty.
+     * Create the entry object for a 0-based entry number. With `into`, the default entry layout fills that
+     * object instead of allocating a new one.
      *
-     * @api
-     * @returns {Array<EntryInterface>} An array of all index entries.
+     * @private
+     * @param {number} index The 0-based entry number.
+     * @param {Entry|null} [into]
+     * @returns {Entry|boolean} The entry or false if it could not be read.
      */
-    all() {
-        if (this.length === 0) {
-            return [];
+    entryAt(index, into = null) {
+        const chunk = this.chunkFor(index);
+        if (!chunk) {
+            return false;
         }
-        return this.range(1, this.length);
+        const position = index % CHUNK_CAPACITY;
+        if (!this.wordsPerEntry) {
+            return this.EntryClass.fromBuffer(chunk.buffer, position * this.EntryClass.size);
+        }
+        const words = chunk.words;
+        const word = position * this.wordsPerEntry;
+        if (!into) {
+            return new this.EntryClass(words[word], words[word + 1], words[word + 2], words[word + 3]);
+        }
+        into[0] = words[word];
+        into[1] = words[word + 1];
+        into[2] = words[word + 2];
+        into[3] = words[word + 3];
+        return into;
+    }
+
+    /**
+     * Get the sequence number of an entry without creating an entry object for the default entry layout.
+     *
+     * @param {number} index The 0-based entry number.
+     * @returns {number}
+     */
+    numberAt(index) {
+        if (!this.wordsPerEntry) {
+            return this.entryAt(index).number;
+        }
+        return this.chunkFor(index).words[(index % CHUNK_CAPACITY) * this.wordsPerEntry];
     }
 
     /**
@@ -345,55 +387,58 @@ class ReadableIndex extends events.EventEmitter {
             return false;
         }
 
-        if (this.data[index - 1]) {
-            return this.data[index - 1];
-        }
-
-        return this.read(index);
+        return this.entryAt(index - 1);
     }
 
     /**
-     * Check if the given range is within the bounds of the index.
+     * Iterate the index entries between two positions, without loading them all at once.
+     * If `from` is greater than `until`, the entries are iterated backwards.
+     *
+     * For the default entry layout one entry object is reused for the whole iteration, so read its fields
+     * before advancing and do not keep it. Calling `next(number)` on the iterator skips ahead to the first
+     * entry whose sequence number does not come before `number` in the iteration direction.
      *
      * @api
-     * @param {number} from The 1-based index position from where to get entries from (inclusive).
-     * @param {number} until The 1-based index position until where to get entries to (inclusive).
-     * @returns {boolean}
+     * @param {number} [from=1] The 1-based index position to start at (inclusive). If < 0 counts from the end.
+     * @param {number} [until=-1] The 1-based index position to end at (inclusive). If < 0 counts from the end.
+     * @returns {Generator<Entry>} An empty iteration if a position is out of bounds.
      */
-    validRange(from, until) {
-        if (from < 1 || from > this.length) {
-            return false;
-        }
-        return (until >= from && until <= this.length);
-    }
-
-    /**
-     * Get a range of index entries.
-     *
-     * @api
-     * @param {number} from The 1-based index position from where to get entries from (inclusive). If < 0 will start at that position from end.
-     * @param {number} [until=-1] The 1-based index position until where to get entries to (inclusive). If < 0 will get until that position from the end. Defaults to this.length.
-     * @returns {Array<Entry>|boolean} An array of entries for the given range or false on error.
-     */
-    range(from, until = -1) {
+    *range(from = 1, until = -1) {
         from = wrapAndCheck(from, this.length);
         until = wrapAndCheck(until, this.length);
-
-        if (from <= 0 || until < from) {
-            return false;
+        if (from <= 0 || until <= 0) {
+            return;
         }
-
-        const readFrom = Math.max(this.readUntil + 1, from);
-        let readUntil = until;
-        while (readUntil >= readFrom && this.data[readUntil - 1]) {
-            readUntil--;
+        const step = from <= until ? 1 : -1;
+        const end = until + step;
+        const entry = this.wordsPerEntry ? new this.EntryClass(0, 0) : null;
+        let position = from;
+        while (position !== end) {
+            const target = yield this.entryAt(position - 1, entry);
+            position += step;
+            if (target !== undefined && position !== end && (this.numberAt(position - 1) - target) * step < 0) {
+                position = this.skipTo(target, position, end, step);
+            }
         }
+    }
 
-        if (readFrom <= readUntil) {
-            this.readRange(readFrom, readUntil);
-        }
+    /**
+     * Iterate all index entries. Same as `range(1, -1)`, with the same reuse of the entry object.
+     *
+     * @api
+     * @returns {Generator<Entry>}
+     */
+    all() {
+        return this.range(1, -1);
+    }
 
-        return this.data.slice(from - 1, until);
+    /**
+     * @private
+     * @returns {number} The first position from `position` towards `end` whose number does not come before `target`.
+     */
+    skipTo(target, position, end, step) {
+        const found = step > 0 ? this.find(target, true) : this.find(target);
+        return found === 0 || (found - end) * step >= 0 ? end : found;
     }
 
     /**
@@ -414,10 +459,10 @@ class ReadableIndex extends events.EventEmitter {
             return 0;
         }
         // We only need to search until the searched number because entry.number is always >= position
-        const [low, high] = binarySearch(number, Math.min(this.length, number), index => this.get(index).number);
+        const [low, high] = binarySearch(number, Math.min(this.length, number), index => this.numberAt(index - 1));
         return min ? low : high;
     }
 }
 
 export default ReadableIndex;
-export { Entry, HEADER_MAGIC, CorruptedIndexError };
+export { Entry, HEADER_MAGIC, CorruptedIndexError, CHUNK_CAPACITY, createChunk };
