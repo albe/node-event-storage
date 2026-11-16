@@ -47,15 +47,29 @@ describe('Consumer', function() {
     it('cleans up failed write left-overs', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();
-        fs.writeFileSync(consumer.fileName + '.1', 'failed write!');
+        fs.writeFileSync(consumer.fileName + '.1.tmp', 'failed write!');
         consumer = new Consumer(storage, 'foobar', 'consumer1');
-        expect(fs.existsSync(consumer.fileName + '.1')).to.be(false);
+        expect(fs.existsSync(consumer.fileName + '.1.tmp')).to.be(false);
+    });
+
+    it('does not remove state files of consumers whose name extends this one', function() {
+        const other = new Consumer(storage, 'foobar', 'consumer1.archive');
+        other.stop();
+        fs.writeFileSync(other.fileName, 'state of another consumer');
+        const otherStream = new Consumer(storage, 'foobar', 'consumer1.2');
+        otherStream.stop();
+        fs.writeFileSync(otherStream.fileName, 'state of another consumer');
+
+        consumer = new Consumer(storage, 'foobar', 'consumer1');
+
+        expect(fs.existsSync(other.fileName)).to.be(true);
+        expect(fs.existsSync(otherStream.fileName)).to.be(true);
     });
 
     it('rethrows cleanup unlink errors other than ENOENT', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();
-        const failedWriteFile = consumer.fileName + '.1';
+        const failedWriteFile = consumer.fileName + '.1.tmp';
         fs.writeFileSync(failedWriteFile, 'failed write!');
 
         const originalUnlinkSync = fsNative.unlinkSync;
@@ -350,7 +364,7 @@ describe('Consumer', function() {
         consumer.position = 1;
         consumer.state = Object.freeze({ foo: 1 });
 
-        const tmpFile = consumer.fileName + '.1';
+        const tmpFile = consumer.fileName + '.1.tmp';
         const originalWriteFileSync = fsNative.writeFileSync;
         fsNative.writeFileSync = () => {
             const error = new Error('disk full');
