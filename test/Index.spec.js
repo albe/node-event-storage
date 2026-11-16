@@ -93,6 +93,24 @@ describe('Index', function() {
         other.close();
     });
 
+    it('writes buffered entries on close after the pool evicted its file handle', function() {
+        const fileHandlePool = new FileHandlePool(1);
+        index = createIndex('evicted.index', { fileHandlePool });
+        index.add(new IndexEntry(1, 11));
+        const other = createIndex('other.index', { fileHandlePool });
+        expect(index.hasFileHandle()).to.be(false);
+
+        let flushed = false;
+        index.add(new IndexEntry(2, 22), () => flushed = true);
+        index.close();
+        other.close();
+
+        expect(flushed).to.be(true);
+        const reader = createReader(index.name);
+        expect(reader.length).to.be(2);
+        expect(reader.get(2).position).to.be(22);
+    });
+
     it('defaults name to ".index"', function() {
         index = new Index({ dataDirectory });
         expect(index.name).to.be('.index');

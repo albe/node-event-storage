@@ -128,6 +128,17 @@ class WritableIndex extends ReadableIndex {
     }
 
     /**
+     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it
+     * since the last write, so no buffered entry is lost.
+     *
+     * @api
+     */
+    close() {
+        this.flush();
+        super.close();
+    }
+
+    /**
      * This destroys the index and deletes it from disk.
      * @api
      */
