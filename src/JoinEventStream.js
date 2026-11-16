@@ -1,6 +1,6 @@
 import EventStream from './EventStream.js';
 import {assert} from './utils/util.js';
-import {indexRange, intersect, normalizeSelector, union} from './utils/indexUtil.js';
+import {intersect, normalizeSelector, union} from './utils/indexUtil.js';
 import {normalizeRevision} from './utils/apiHelpers.js';
 
 /**
@@ -52,7 +52,7 @@ class JoinEventStream extends EventStream {
      * @private
      * @param {string|Array<string|Array>} selectorNode
      * @param {number} [depth=0]
-     * @returns {Generator<{index: ReadableIndex, position: number, number: number}>}
+     * @returns {Iterator<Entry>}
      */
     resolveSelectorRange(selectorNode, depth = 0) {
         const forwards = this.minRevision <= this.maxRevision;
@@ -61,9 +61,12 @@ class JoinEventStream extends EventStream {
             if (!index || index.length === 0) {
                 return [][Symbol.iterator]();
             }
-            const minNumber = Math.min(this.minRevision, this.maxRevision);
-            const maxNumber = Math.max(this.minRevision, this.maxRevision);
-            return indexRange(index, minNumber, maxNumber, forwards);
+            const first = index.find(Math.min(this.minRevision, this.maxRevision), true);
+            const last = index.find(Math.max(this.minRevision, this.maxRevision));
+            if (first === 0 || last === 0 || first > last) {
+                return [][Symbol.iterator]();
+            }
+            return forwards ? index.range(first, last) : index.range(last, first);
         }
 
         const ranges = selectorNode.map(node => this.resolveSelectorRange(node, depth + 1));
@@ -82,11 +85,7 @@ class JoinEventStream extends EventStream {
      */
     * iterateDocuments() {
         const forwards = this.minRevision <= this.maxRevision;
-        for (const { index, position } of this.resolveSelectorRange(this.selector)) {
-            const entry = index.peek(position);
-            if (!entry) {
-                return;
-            }
+        for (const entry of this.resolveSelectorRange(this.selector)) {
             const event = this.eventStore.storage.readFrom(entry.partition, entry.position, entry.size, this.raw, !forwards);
             if (event) {
                 yield event;

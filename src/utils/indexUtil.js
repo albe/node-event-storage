@@ -2,11 +2,11 @@ import { assert, compileAccessor } from './util.js';
 import { buildMatcherFn } from './metadataUtil.js';
 
 /*
- * An index range is a generator over the index entries of one stream, in the order of the requested direction.
- * It yields a hit `{ index, position, number }` per entry. A hit object is reused for the whole range and only
- * changes when the range is advanced, so read it before calling `next()` again.
+ * `union` and `intersect` combine two lazy ranges of index entries, as returned by `index.range()`, into a new
+ * lazy range in the same direction. A range may reuse its entry object, so an entry is only read before the range
+ * that yielded it is advanced.
  *
- * Calling `next(target)` with a sequence number skips ahead to the first entry that does not come before `target`.
+ * Calling `next(number)` on a range skips ahead to the first entry that does not come before `number`.
  * `intersect` uses that to jump over long stretches without a match instead of stepping through them.
  */
 
@@ -19,38 +19,7 @@ function comesBefore(forwards) {
 }
 
 /**
- * Iterate the entries of an index between two global sequence numbers.
- *
- * @param {ReadableIndex} index
- * @param {number} minNumber The lowest global sequence number to include.
- * @param {number} maxNumber The highest global sequence number to include.
- * @param {boolean} [forwards=true]
- * @returns {Generator<{index: ReadableIndex, position: number, number: number}>}
- */
-function* indexRange(index, minNumber, maxNumber, forwards = true) {
-    const first = index.find(minNumber, true);
-    const last = index.find(maxNumber);
-    if (first === 0 || last === 0 || first > last) {
-        return;
-    }
-    const step = forwards ? 1 : -1;
-    const end = (forwards ? last : first) + step;
-    const before = comesBefore(forwards);
-    const hit = { index, position: forwards ? first : last, number: 0 };
-    while (hit.position !== end) {
-        hit.number = index.numberAt(hit.position - 1);
-        const target = yield hit;
-        hit.position += step;
-        if (target !== undefined && hit.position !== end && before(index.numberAt(hit.position - 1), target)) {
-            // The next entry is not enough, so binary search for the target.
-            const found = forwards ? index.find(target, true) : index.find(target);
-            hit.position = found === 0 || (found - end) * step >= 0 ? end : found;
-        }
-    }
-}
-
-/**
- * Continue yielding the hits of a range, passing skip targets through.
+ * Continue yielding the entries of a range, passing skip targets through.
  *
  * @param {IteratorResult} current The current, not yet yielded result of the range.
  * @param {Generator} range
@@ -195,7 +164,6 @@ function buildStreamSource(sourcePath, nameBuilder) {
 }
 
 export {
-    indexRange,
     union,
     intersect,
     normalizeSelector,

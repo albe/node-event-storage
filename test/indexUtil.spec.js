@@ -1,71 +1,32 @@
 import expect from 'expect.js';
 import {
-    indexRange,
     union,
     intersect,
     normalizeSelector
 } from '../src/utils/indexUtil.js';
 
 /**
- * Minimal stand-in for a ReadableIndex over the given ascending sequence numbers.
+ * Stand-in for index.range() over the given ascending sequence numbers, including skipping with next(number).
  */
-function createIndex(numbers) {
-    return {
-        length: numbers.length,
-        numberAt: index => numbers[index],
-        find(number, min = false) {
-            if (min) {
-                return numbers.findIndex(value => value >= number) + 1;
-            }
-            let position = 0;
-            numbers.forEach((value, index) => { if (value <= number) position = index + 1; });
-            return position;
+function* range(numbers, forwards = true, min = 1, max = 1000) {
+    const selected = numbers.filter(number => number >= min && number <= max);
+    if (!forwards) {
+        selected.reverse();
+    }
+    const before = forwards ? (a, b) => a < b : (a, b) => a > b;
+    for (let i = 0; i < selected.length; i++) {
+        const target = yield { number: selected[i] };
+        while (target !== undefined && i + 1 < selected.length && before(selected[i + 1], target)) {
+            i++;
         }
-    };
-}
-
-function range(numbers, forwards = true, min = 1, max = 1000) {
-    return indexRange(createIndex(numbers), min, max, forwards);
+    }
 }
 
 function collect(range) {
-    return Array.from(range, hit => hit.number);
+    return Array.from(range, entry => entry.number);
 }
 
 describe('indexUtil', function() {
-
-    describe('indexRange', function () {
-
-        it('yields all numbers within the bounds forwards and backwards', function () {
-            expect(collect(range([1, 3, 5, 7, 9], true, 3, 7))).to.eql([3, 5, 7]);
-            expect(collect(range([1, 3, 5, 7, 9], false, 2, 8))).to.eql([7, 5, 3]);
-        });
-
-        it('is empty for an empty or out of bounds range', function () {
-            expect(collect(range([]))).to.eql([]);
-            expect(collect(range([5, 6], true, 10, 20))).to.eql([]);
-            expect(collect(range([5, 6], false, 1, 4))).to.eql([]);
-        });
-
-        it('skips ahead to a target given to next()', function () {
-            const numbers = Array.from({ length: 100 }, (_, i) => 2 * (i + 1));
-            const forwards = range(numbers);
-            forwards.next();
-            expect(forwards.next(75).value.number).to.be(76);
-            expect(forwards.next(78).value.number).to.be(78);
-            expect(forwards.next(201).done).to.be(true);
-
-            const backwards = range(numbers, false);
-            backwards.next();
-            expect(backwards.next(41).value.number).to.be(40);
-            expect(backwards.next(1).done).to.be(true);
-        });
-
-        it('yields the index and position of each entry', function () {
-            const hits = Array.from(range([2, 4, 6]), hit => hit.position);
-            expect(hits).to.eql([1, 2, 3]);
-        });
-    });
 
     describe('union', function () {
 
@@ -91,6 +52,17 @@ describe('indexUtil', function() {
 
         it('is empty when one range is empty', function () {
             expect(collect(intersect(range([1, 2]), range([])))).to.eql([]);
+        });
+
+        it('asks the lagging range to skip ahead', function () {
+            const targets = [];
+            function* recording() {
+                for (const number of [1, 2, 3, 4, 5, 6, 7, 8]) {
+                    targets.push(yield { number });
+                }
+            }
+            expect(collect(intersect(recording(), range([7, 8])))).to.eql([7, 8]);
+            expect(targets[0]).to.be(7);
         });
 
         it('nests with unions and passes skip targets through them', function () {

@@ -383,13 +383,9 @@ class ReadableStorage extends events.EventEmitter {
         }
 
         const idx = index || this.index;
-        const forwards = from <= until;
-        if (Math.min(from, until) < 1 || Math.max(from, until) > idx.length) return;
-        // Walk the positions instead of materializing the range, so no entry object is created per document.
-        const step = forwards ? 1 : -1;
-        for (let position = from; position !== until + step && position <= idx.length; position += step) {
-            const entry = idx.peek(position);
-            yield this.readFrom(entry.partition, entry.position, entry.size, raw, !forwards);
+        const backwards = from > until;
+        for (const entry of idx.range(from, until)) {
+            yield this.readFrom(entry.partition, entry.position, entry.size, raw, backwards);
         }
     }
 

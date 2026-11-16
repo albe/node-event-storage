@@ -39,10 +39,10 @@ function timed(fn) {
 }
 
 /**
- * Read entries through range() where the index still has it, otherwise position by position with get().
+ * Read entries as an array: through the array-returning range() of older versions, otherwise with get().
  */
 function readRange(index, from, until) {
-    if (index.range) {
+    if (index.all) {
         return index.range(from, until);
     }
     const entries = new Array(until - from + 1);

@@ -332,15 +332,15 @@ class ReadableIndex extends events.EventEmitter {
     }
 
     /**
-     * Create the entry object for a 0-based entry number. With `reuse` the default entry layout fills one shared
+     * Create the entry object for a 0-based entry number. With `into`, the default entry layout fills that
      * object instead of allocating a new one.
      *
      * @private
      * @param {number} index The 0-based entry number.
-     * @param {boolean} [reuse=false]
+     * @param {Entry|null} [into]
      * @returns {Entry|boolean} The entry or false if it could not be read.
      */
-    entryAt(index, reuse = false) {
+    entryAt(index, into = null) {
         const chunk = this.chunkFor(index);
         if (!chunk) {
             return false;
@@ -351,15 +351,14 @@ class ReadableIndex extends events.EventEmitter {
         }
         const words = chunk.words;
         const word = position * this.wordsPerEntry;
-        if (!reuse) {
+        if (!into) {
             return new this.EntryClass(words[word], words[word + 1], words[word + 2], words[word + 3]);
         }
-        const entry = this.sharedEntry || (this.sharedEntry = new this.EntryClass(0, 0));
-        entry[0] = words[word];
-        entry[1] = words[word + 1];
-        entry[2] = words[word + 2];
-        entry[3] = words[word + 3];
-        return entry;
+        into[0] = words[word];
+        into[1] = words[word + 1];
+        into[2] = words[word + 2];
+        into[3] = words[word + 3];
+        return into;
     }
 
     /**
@@ -392,14 +391,44 @@ class ReadableIndex extends events.EventEmitter {
     }
 
     /**
-     * Get a single index entry without the boundary checks of get(). The returned object may be reused by the next
-     * call, so only read its fields right away and never keep it.
+     * Iterate the index entries between two positions, without loading them all at once.
+     * If `from` is greater than `until`, the entries are iterated backwards.
      *
-     * @param {number} index The 1-based index position, which must be within the index bounds.
-     * @returns {Entry|boolean} The entry at the given index position or false if it could not be read.
+     * For the default entry layout one entry object is reused for the whole iteration, so read its fields
+     * before advancing and do not keep it. Calling `next(number)` on the iterator skips ahead to the first
+     * entry whose sequence number does not come before `number` in the iteration direction.
+     *
+     * @api
+     * @param {number} [from=1] The 1-based index position to start at (inclusive). If < 0 counts from the end.
+     * @param {number} [until=-1] The 1-based index position to end at (inclusive). If < 0 counts from the end.
+     * @returns {Generator<Entry>} An empty iteration if a position is out of bounds.
      */
-    peek(index) {
-        return this.entryAt(index - 1, true);
+    *range(from = 1, until = -1) {
+        from = wrapAndCheck(from, this.length);
+        until = wrapAndCheck(until, this.length);
+        if (from <= 0 || until <= 0) {
+            return;
+        }
+        const step = from <= until ? 1 : -1;
+        const end = until + step;
+        const entry = this.wordsPerEntry ? new this.EntryClass(0, 0) : null;
+        let position = from;
+        while (position !== end) {
+            const target = yield this.entryAt(position - 1, entry);
+            position += step;
+            if (target !== undefined && position !== end && (this.numberAt(position - 1) - target) * step < 0) {
+                position = this.skipTo(target, position, end, step);
+            }
+        }
+    }
+
+    /**
+     * @private
+     * @returns {number} The first position from `position` towards `end` whose number does not come before `target`.
+     */
+    skipTo(target, position, end, step) {
+        const found = step > 0 ? this.find(target, true) : this.find(target);
+        return found === 0 || (found - end) * step >= 0 ? end : found;
     }
 
     /**

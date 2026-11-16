@@ -298,6 +298,54 @@ describe('Index', function() {
 
     });
 
+    describe('range', function() {
+
+        function numbers(range) {
+            return Array.from(range, entry => entry.number);
+        }
+
+        it('iterates an arbitrary range of entries forwards and backwards', function() {
+            index = setupIndexWithEntries(50);
+            index.close();
+            index.open();
+            expect(numbers(index.range(21, 25))).to.eql([21, 22, 23, 24, 25]);
+            expect(numbers(index.range(25, 21))).to.eql([25, 24, 23, 22, 21]);
+            expect(numbers(index.range(21, 21))).to.eql([21]);
+        });
+
+        it('counts negative positions from the end', function() {
+            index = setupIndexWithEntries(50);
+            expect(numbers(index.range(-3))).to.eql([48, 49, 50]);
+            expect(numbers(index.range(1, -48))).to.eql([1, 2, 3]);
+            expect(numbers(index.range()).length).to.be(50);
+        });
+
+        it('is empty for out of bounds positions or a closed index', function() {
+            index = setupIndexWithEntries(5);
+            expect(numbers(index.range(0))).to.eql([]);
+            expect(numbers(index.range(6, 8))).to.eql([]);
+            expect(numbers(index.range(1, 6))).to.eql([]);
+            expect(numbers(index.range('foo'))).to.eql([]);
+            index.close();
+            expect(numbers(index.range(1, 5))).to.eql([]);
+        });
+
+        it('skips ahead to a sequence number given to next()', function() {
+            index = setupIndexWithEntries(100, i => 2 * i);
+            const forwards = index.range();
+            forwards.next();
+            expect(forwards.next(75).value.number).to.be(76);
+            expect(forwards.next(78).value.number).to.be(78);
+            expect(forwards.next(201).done).to.be(true);
+
+            const backwards = index.range(-1, 1);
+            backwards.next();
+            expect(backwards.next(41).value.number).to.be(40);
+            expect(backwards.next(1).done).to.be(true);
+        });
+
+    });
+
     describe('lastEntry', function() {
 
         it('returns the last entry', function() {
