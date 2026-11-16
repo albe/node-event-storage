@@ -62,11 +62,38 @@ class CommitCondition {
      * @param {number} noneMatchAfter
      * @param {boolean} [raw=false]
      */
-    constructor(selector, matcher = null, noneMatchAfter, raw = false) {
+    constructor(selector, matcher = null, noneMatchAfter, raw = false, dcbQuery = null, compileDcbQuery = null) {
         this.selector = selector;
         this.matcher = matcher;
         this.raw = raw;
         this.noneMatchAfter = noneMatchAfter;
+        this.dcbQuery = dcbQuery;
+        Object.defineProperty(this, 'compileDcbQuery', { value: compileDcbQuery });
+    }
+
+    /**
+     * Narrow this condition so that new events of the given types no longer cause a conflict.
+     * Use it when the decision only depends on part of the queried events, e.g. a new subscription
+     * cannot be invalidated by a concurrent unsubscribe that the decision model also counts.
+     * Only available for conditions created from a {@link DcbQuery}.
+     *
+     * @api
+     * @param {...(string|string[])} types The event types to ignore in the conflict check.
+     * @returns {CommitCondition} A new condition at the same position.
+     * @throws {Error} When the condition was not created from a DcbQuery, when a query item has no types
+     *   (it matches all types, so a type cannot be removed from it), or when no event type would be left.
+     */
+    without(...types) {
+        assert(this.dcbQuery !== null, 'without() is only available for conditions created from a DcbQuery.');
+        const excluded = types.flat();
+        const items = this.dcbQuery.items.flatMap(item => {
+            assert(item.types?.length, 'without() can not exclude types from a query item that has no types.');
+            const remaining = item.types.filter(type => !excluded.includes(type));
+            return remaining.length ? [{ ...item, types: remaining }] : [];
+        });
+        assert(items.length > 0, 'without() would leave no event types to check. Commit without a condition instead.');
+        const dcbQuery = { items };
+        return new CommitCondition(this.compileDcbQuery(dcbQuery), this.matcher, this.noneMatchAfter, this.raw, dcbQuery, this.compileDcbQuery);
     }
 }
 
@@ -600,23 +627,39 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} if `selector` is not a non-empty array.
      */
     query(selectorOrDcbQuery, matcher = null, minRevision = 1, raw = false) {
-        let selector = selectorOrDcbQuery;
-        if (isDcbQuery(selectorOrDcbQuery)) {
-            selector = compileDcbQuery(
-                selectorOrDcbQuery,
-                (type) => this.resolveTypeStream(type),
-                (tag) => this.resolveTagStream(tag)
-            );
-        }
-        assert(Array.isArray(selector) && selector.length > 0, 'Must specify a non-empty array of stream selectors for query.');
-        // Normalize the selector once here; both the condition and the stream use
-        // the normalized form.  Wrap a string result (single-stream reduction) in
-        // an array so fromStreams always receives an array.
-        const normalized = normalizeSelector(selector);
-        const querySelector = Array.isArray(normalized) ? normalized : [normalized];
-        const condition = new CommitCondition(querySelector, matcher, this.storage.length, raw);
+        const dcbQuery = isDcbQuery(selectorOrDcbQuery) ? selectorOrDcbQuery : null;
+        const querySelector = dcbQuery ? this.compileDcbQuery(dcbQuery) : this.normalizeQuerySelector(selectorOrDcbQuery);
+        const condition = new CommitCondition(querySelector, matcher, this.storage.length, raw,
+            dcbQuery, dcbQuery && ((query) => this.compileDcbQuery(query)));
         const stream = this.fromStreams('_query_' + Date.now(), querySelector, minRevision, -1, matcher, raw);
         return { stream, condition };
+    }
+
+    /**
+     * Normalize a selector once; both the condition and the stream use the normalized form.
+     * A string result (single-stream reduction) is wrapped in an array so fromStreams always receives an array.
+     *
+     * @private
+     * @param {SelectorNode[]} selector
+     * @returns {SelectorNode[]}
+     */
+    normalizeQuerySelector(selector) {
+        assert(Array.isArray(selector) && selector.length > 0, 'Must specify a non-empty array of stream selectors for query.');
+        const normalized = normalizeSelector(selector);
+        return Array.isArray(normalized) ? normalized : [normalized];
+    }
+
+    /**
+     * @private
+     * @param {DcbQuery} dcbQuery
+     * @returns {SelectorNode[]} The normalized selector for the query.
+     */
+    compileDcbQuery(dcbQuery) {
+        return this.normalizeQuerySelector(compileDcbQuery(
+            dcbQuery,
+            (type) => this.resolveTypeStream(type),
+            (tag) => this.resolveTagStream(tag)
+        ));
     }
 
     /**

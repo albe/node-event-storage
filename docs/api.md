@@ -329,7 +329,7 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `ExpectedVersion.Any` | `-1` | Skip version check. |
 | `ExpectedVersion.EmptyStream` | `0` | Assert the stream is new. |
 | `OptimisticConcurrencyError` | `Error` subclass | Thrown when an expected-version or `CommitCondition` check fails. |
-| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. |
+| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. For a `DcbQuery`, `condition.without(...types)` returns a narrowed condition that ignores new events of those types. |
 | `LOCK_THROW` | constant | Throw if storage lock is held (default). |
 | `LOCK_RECLAIM` | constant | Forcefully reclaim storage lock on open. |
 | `VERSION` | `string` | Package version (also available as `EventStore.VERSION`). |
@@ -344,6 +344,7 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `createProjection({ initialState, handlers, tagFilter? })` | Creates a projection; its `query` is derived from the handler types and the tag filter. |
 | `composeProjections({ name: projection, ... })` | Combines projections; state has one key per projection, query is the OR of all parts. |
 | `buildDecisionModel(store, projectionOrMap)` | Reads the matching events and returns an immutable `DecisionModel` with `state` and `appendCondition`; pass `appendCondition` to `commit()`. |
+| `DecisionModel#since([condition])` | `EventStream` of the events matching the condition (default `appendCondition`) committed after the model was built, i.e. those that block a commit. |
 | `DecisionModel#update()` | Returns a new model with only the events committed since applied (or the same model when nothing is new). |
 
 See [DCB → Projections and Decision Models](dcb.md#projections-and-decision-models).

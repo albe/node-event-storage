@@ -95,6 +95,25 @@ class DecisionModel {
     }
 
     /**
+     * The events matching the condition that were committed after this model was built, i.e. the events that
+     * make a commit with that condition fail. Defaults to this model's `appendCondition`; pass a narrowed
+     * condition (e.g. from `appendCondition.without(...)`) to get only the events that conflict with it.
+     *
+     * @param {import('./EventStore.js').CommitCondition} [condition]
+     * @returns {import('./EventStream.js').default}
+     */
+    since(condition = this.appendCondition) {
+        return this.eventStore.fromStreams(
+            '_since_' + condition.noneMatchAfter,
+            condition.selector,
+            condition.noneMatchAfter + 1,
+            -1,
+            condition.matcher,
+            condition.raw
+        );
+    }
+
+    /**
      * Apply the events committed since this model was built and return the updated model. Only those events are
      * read. Returns this model unchanged when nothing new was committed.
      *

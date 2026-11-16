@@ -1,4 +1,4 @@
-import type { CommitCondition, DcbQuery, EventStore } from './index.js';
+import type { CommitCondition, DcbQuery, EventStore, EventStream } from './index.js';
 
 /** Pure reducer for one event type. Must not have side effects. */
 export type ProjectionHandler<S, E = any> = (state: S, event: E, metadata: Record<string, any>) => S;
@@ -30,6 +30,8 @@ export function composeProjections<M extends Record<string, Projection<any>>>(pr
 export class DecisionModel<S> {
     readonly state: S;
     readonly appendCondition: CommitCondition;
+    /** Events matching `condition` (default: `appendCondition`) committed after this model was built, i.e. those that block a commit. */
+    since(condition?: CommitCondition): EventStream;
     /** Apply only the events committed since this model was built. Returns this model when nothing is new. */
     update(): DecisionModel<S>;
 }

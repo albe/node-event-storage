@@ -277,6 +277,49 @@ function courseModel(courseId) {
 
 This stays correct because the conflict check runs at `commit()` against the store, not against the cached model: a stale model only leads to an `OptimisticConcurrencyError`, never to a wrong commit. Bounding the cache (e.g. an LRU over the ids) is up to the application, as one model is kept per id.
 
+### Finding the conflicting events
+
+After an `OptimisticConcurrencyError`, `model.since()` returns the events that block the commit: the events matching the model's condition that were committed after the model was built. It is an `EventStream`, so it can be iterated or read with `forEach((event, metadata) => ...)`.
+
+```javascript
+try {
+    store.commit(`semester-${semesterId}`, events, model.appendCondition);
+} catch (e) {
+    if (!(e instanceof OptimisticConcurrencyError)) throw e;
+    for (const event of model.since()) {
+        console.log('conflicting', event.type);
+    }
+}
+```
+
+`model.since(condition)` does the same for any other condition with the model's position, e.g. a narrowed one.
+
+### Narrowing the commit condition
+
+A decision may depend on fewer events than the decision model reads. A course's free seats count subscriptions and unsubscriptions, but a concurrent unsubscription cannot make a new subscription invalid. `appendCondition.without(...types)` returns a new condition at the same position that ignores new events of those types:
+
+```javascript
+const model = buildDecisionModel(store, {
+    capacity: CourseCapacity(courseId),
+    taken: createProjection({
+        initialState: 0,
+        handlers: {
+            StudentSubscribedToCourse: (state) => state + 1,
+            StudentUnsubscribedFromCourse: (state) => state - 1
+        },
+        tagFilter: [`course/${courseId}`]
+    })
+});
+
+if (model.state.taken >= model.state.capacity) throw new Error('Course is full');
+
+store.commit(`semester-${semesterId}`, [subscription], model.appendCondition.without('StudentUnsubscribedFromCourse'));
+```
+
+- The original condition is unchanged; `without()` accepts several types or an array.
+- The types are removed from each query item; an item with no types left is dropped. The tags stay.
+- It throws when no type would be left (commit without a condition instead), for query items without `types` (they match every type), and for conditions created from a selector instead of a `DcbQuery`.
+
 ### Mapping to the dcb.events specification
 
 event-storage implements the semantics of the [DCB specification](https://dcb.events/specification/) but keeps its own API names. The translation:
@@ -287,7 +330,7 @@ event-storage implements the semantics of the [DCB specification](https://dcb.ev
 | Sequence position | Global event number (1-based) | `store.length` is the position of the last event |
 | `read(query, { from })` | `query(dcbQuery, null, minRevision)` | Returns `{ stream, condition }` |
 | `AppendCondition` | `CommitCondition` returned by `query()` / `buildDecisionModel()` | Passed as the third argument of `commit()` |
-| `AppendCondition.failIfEventsMatch` | `CommitCondition.selector` (+ optional `matcher`) | The compiled query |
+| `AppendCondition.failIfEventsMatch` | `CommitCondition.dcbQuery`, compiled to `CommitCondition.selector` (+ optional `matcher`) | Narrow it with `condition.without(...types)` |
 | `AppendCondition.after` | `CommitCondition.noneMatchAfter` | `store.length` at query time |
 | `append(events, condition)` | `commit(streamName, events, condition)` | See below |
 | `createProjection`, `composeProjections`, `buildDecisionModel` | Same names in `event-storage/projections` | Handlers get `(state, event, metadata)` |

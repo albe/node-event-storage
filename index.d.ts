@@ -37,11 +37,15 @@ export interface DcbQuery {
 export type CommitCallback = (commit: Record<string, unknown>) => void;
 
 export class CommitCondition {
-    constructor(selector: StreamSelector | string, matcher: EventMatcher | null | undefined, noneMatchAfter: number, raw?: boolean);
+    constructor(selector: StreamSelector | string, matcher: EventMatcher | null | undefined, noneMatchAfter: number, raw?: boolean, dcbQuery?: DcbQuery | null, compileDcbQuery?: ((query: DcbQuery) => StreamSelector) | null);
     selector: StreamSelector | string;
     matcher: EventMatcher | null;
     raw: boolean;
     noneMatchAfter: number;
+    /** The DcbQuery the condition was created from, or null for selector queries. */
+    dcbQuery: DcbQuery | null;
+    /** A narrowed condition at the same position that ignores new events of the given types. DcbQuery conditions only. */
+    without(...types: Array<string | string[]>): CommitCondition;
 }
 
 export class OptimisticConcurrencyError extends Error {}
@@ -78,6 +82,7 @@ export class EventStream extends Readable {
         options: { concurrency?: number; signal?: AbortSignal }
     ): Readable;
     next(): any | false;
+    [Symbol.iterator](): Iterator<any>;
 }
 
 export class Consumer extends Readable {

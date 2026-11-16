@@ -31,6 +31,21 @@ const StudentSubscriptions = (studentId) => createProjection({
     tagFilter: [`student/${studentId}`]
 });
 
+const CourseSeats = (courseId) => composeProjections({
+    capacity: CourseCapacity(courseId),
+    taken: createProjection({
+        initialState: 0,
+        handlers: {
+            StudentSubscribedToCourse: (state) => state + 1,
+            StudentUnsubscribedFromCourse: (state) => state - 1
+        },
+        tagFilter: [`course/${courseId}`]
+    })
+});
+
+const unsubscribe = (studentId, courseId) => ({
+    type: 'StudentUnsubscribedFromCourse', tags: [`course/${courseId}`, `student/${studentId}`]
+});
 const defineCourse = (id, capacity) => ({ type: 'CourseDefined', capacity, tags: [`course/${id}`] });
 const subscribe = (studentId, courseId) => ({
     type: 'StudentSubscribedToCourse', tags: [`course/${courseId}`, `student/${studentId}`]
@@ -149,6 +164,85 @@ describe('Projection', function () {
         store.commit('courses', [defineCourse('c1', 2)]);
         const model = buildDecisionModel(store, CourseCapacity('c1'));
         expect(Object.isFrozen(model)).to.be(true);
+    });
+
+    describe('since', function () {
+
+        it('returns the events that block a commit with the model\'s condition', function () {
+            store.commit('courses', [defineCourse('c1', 2), defineCourse('c2', 2)]);
+            const model = buildDecisionModel(store, CourseSubscriptions('c1'));
+            store.commit('subscriptions', [subscribe('s1', 'c2'), subscribe('s2', 'c1'), subscribe('s3', 'c1')]);
+
+            const blocking = [];
+            model.since().forEach((event, metadata) => blocking.push(event.tags[1]));
+            expect(blocking).to.eql(['student/s2', 'student/s3']);
+        });
+
+        it('is empty when nothing relevant was committed', function () {
+            store.commit('courses', [defineCourse('c1', 2)]);
+            const model = buildDecisionModel(store, CourseSubscriptions('c1'));
+            store.commit('subscriptions', [subscribe('s1', 'c2')]);
+            expect([...model.since()]).to.have.length(0);
+        });
+
+        it('returns only the events conflicting with a narrowed condition', function () {
+            store.commit('courses', [defineCourse('c1', 2)]);
+            const model = buildDecisionModel(store, CourseSeats('c1'));
+            store.commit('subscriptions', [unsubscribe('s1', 'c1'), subscribe('s2', 'c1')]);
+            const types = [...model.since(model.appendCondition.without('StudentUnsubscribedFromCourse'))].map(e => e.type);
+            expect(types).to.eql(['StudentSubscribedToCourse']);
+        });
+    });
+
+    describe('appendCondition.without', function () {
+
+        it('ignores concurrent events of the excluded types', function () {
+            store.commit('courses', [defineCourse('c1', 1)]);
+            store.commit('subscriptions', [subscribe('s1', 'c1')]);
+            const model = buildDecisionModel(store, CourseSeats('c1'));
+            expect(model.state).to.eql({ capacity: 1, taken: 1 });
+
+            store.commit('subscriptions', [unsubscribe('s1', 'c1')]);
+            expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], model.appendCondition))
+                .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
+            expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')],
+                model.appendCondition.without('StudentUnsubscribedFromCourse'))).to.not.throwError();
+        });
+
+        it('still conflicts on the remaining types', function () {
+            store.commit('courses', [defineCourse('c1', 2)]);
+            const model = buildDecisionModel(store, CourseSeats('c1'));
+            store.commit('subscriptions', [subscribe('s1', 'c1')]);
+            expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')],
+                model.appendCondition.without('StudentUnsubscribedFromCourse')))
+                .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
+        });
+
+        it('keeps the original condition unchanged and accepts arrays', function () {
+            store.commit('courses', [defineCourse('c1', 2)]);
+            const { appendCondition } = buildDecisionModel(store, CourseSeats('c1'));
+            const narrowed = appendCondition.without(['StudentUnsubscribedFromCourse', 'CourseDefined']);
+            expect(narrowed.noneMatchAfter).to.be(appendCondition.noneMatchAfter);
+            expect(narrowed.dcbQuery.items.flatMap(item => item.types)).to.eql(['CourseCapacityChanged', 'StudentSubscribedToCourse']);
+            expect(appendCondition.dcbQuery.items.flatMap(item => item.types)).to.contain('StudentUnsubscribedFromCourse');
+        });
+
+        it('throws when no type would be left', function () {
+            store.commit('courses', [defineCourse('c1', 2)]);
+            const { appendCondition } = buildDecisionModel(store, CourseSubscriptions('c1'));
+            expect(() => appendCondition.without('StudentSubscribedToCourse')).to.throwError(/no event types/);
+        });
+
+        it('throws for conditions not created from a DcbQuery', function () {
+            store.commit('courses', [defineCourse('c1', 2)]);
+            const { condition } = store.query(['CourseDefined']);
+            expect(() => condition.without('CourseDefined')).to.throwError(/DcbQuery/);
+        });
+
+        it('throws for query items without types', function () {
+            const { condition } = store.query({ items: [{ tags: ['course/c1'] }] });
+            expect(() => condition.without('CourseDefined')).to.throwError(/has no types/);
+        });
     });
 
     it('requires a typeAccessor', function (done) {
