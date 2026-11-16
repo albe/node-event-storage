@@ -1,1 +1,1 @@
-export { createProjection, composeProjections, buildDecisionModel } from './src/Projection.js';
+export { createProjection, composeProjections, buildDecisionModel, DecisionModel } from './src/Projection.js';

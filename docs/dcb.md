@@ -238,12 +238,15 @@ function subscribeStudent({ studentId, courseId, semesterId }) {
 - A single projection can be passed instead of a map; `state` is then that projection's state.
 - `composeProjections({ ... })` builds the composed projection without reading, e.g. for unit tests without a store.
 - Projections require `typeAccessor`, and `tagsAccessor` when any projection uses a `tagFilter`.
-- On `OptimisticConcurrencyError`, pass the failed decision model as third argument. Only the events committed since then are read and applied to its state, then you decide again:
+- The returned `DecisionModel` is immutable. `model.update()` reads only the events committed since the model was built, applies them to its state and returns a new model with a new `appendCondition` (or the same model when nothing was committed).
+
+### Updating a decision model
+
+After an `OptimisticConcurrencyError`, update the model instead of rebuilding it and decide again:
 
 ```javascript
 function subscribeStudent({ studentId, courseId, semesterId }, attempts = 3) {
-    const projections = { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) };
-    let model = buildDecisionModel(store, projections);
+    let model = buildDecisionModel(store, { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) });
     for (let attempt = 1; ; attempt++) {
         if (model.state.subscriptions >= model.state.capacity) throw new Error('Course is full');
         try {
@@ -253,13 +256,26 @@ function subscribeStudent({ studentId, courseId, semesterId }, attempts = 3) {
             return;
         } catch (e) {
             if (!(e instanceof OptimisticConcurrencyError) || attempt === attempts) throw e;
-            model = buildDecisionModel(store, projections, model); // reads only the new events
+            model = model.update(); // reads only the new events
         }
     }
 }
 ```
 
-  The projections must be the same as for the earlier model; a different query throws.
+A process that handles many commands for the same boundary can also keep the model in memory and call `update()` before each decision. When nothing changed, `update()` costs one length comparison; otherwise it reads only the new matching events through the indexes.
+
+```javascript
+const courses = new Map(); // courseId -> DecisionModel
+
+function courseModel(courseId) {
+    const model = courses.get(courseId)?.update()
+        ?? buildDecisionModel(store, { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) });
+    courses.set(courseId, model);
+    return model;
+}
+```
+
+This stays correct because the conflict check runs at `commit()` against the store, not against the cached model: a stale model only leads to an `OptimisticConcurrencyError`, never to a wrong commit. Bounding the cache (e.g. an LRU over the ids) is up to the application, as one model is kept per id.
 
 ### Mapping to the dcb.events specification
 

@@ -343,7 +343,8 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 |--------|-------------|
 | `createProjection({ initialState, handlers, tagFilter? })` | Creates a projection; its `query` is derived from the handler types and the tag filter. |
 | `composeProjections({ name: projection, ... })` | Combines projections; state has one key per projection, query is the OR of all parts. |
-| `buildDecisionModel(store, projectionOrMap, previous?)` | Reads the matching events and returns `{ state, appendCondition }`; pass `appendCondition` to `commit()`. With `previous` (an earlier result for the same projections) only the events committed since then are read. |
+| `buildDecisionModel(store, projectionOrMap)` | Reads the matching events and returns an immutable `DecisionModel` with `state` and `appendCondition`; pass `appendCondition` to `commit()`. |
+| `DecisionModel#update()` | Returns a new model with only the events committed since applied (or the same model when nothing is new). |
 
 See [DCB → Projections and Decision Models](dcb.md#projections-and-decision-models).
 

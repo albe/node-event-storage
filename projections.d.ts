@@ -26,11 +26,13 @@ export function createProjection<S>(definition: ProjectionDefinition<S>): Projec
 
 export function composeProjections<M extends Record<string, Projection<any>>>(projections: M): Projection<ComposedState<M>>;
 
-export interface DecisionModel<S> {
-    state: S;
-    appendCondition: CommitCondition;
+/** Projection state at a known store position plus the condition protecting a decision on it. Immutable. */
+export class DecisionModel<S> {
+    readonly state: S;
+    readonly appendCondition: CommitCondition;
+    /** Apply only the events committed since this model was built. Returns this model when nothing is new. */
+    update(): DecisionModel<S>;
 }
 
-/** Pass `previous` (an earlier result for the same projections) to only read events committed since then. */
-export function buildDecisionModel<S>(eventStore: EventStore, projection: Projection<S>, previous?: DecisionModel<S> | null): DecisionModel<S>;
-export function buildDecisionModel<M extends Record<string, Projection<any>>>(eventStore: EventStore, projections: M, previous?: DecisionModel<ComposedState<M>> | null): DecisionModel<ComposedState<M>>;
+export function buildDecisionModel<S>(eventStore: EventStore, projection: Projection<S>): DecisionModel<S>;
+export function buildDecisionModel<M extends Record<string, Projection<any>>>(eventStore: EventStore, projections: M): DecisionModel<ComposedState<M>>;

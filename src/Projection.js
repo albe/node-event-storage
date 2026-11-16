@@ -75,35 +75,71 @@ function isProjection(value) {
 }
 
 /**
- * Build a decision model: read all events relevant to the projection(s) and fold them into state.
- * Returns the state together with the append condition that protects the decision.
- *
- * Pass the result of an earlier call as `previous` to only read the events committed since then,
- * e.g. after `commit()` failed with an `OptimisticConcurrencyError`. The projections must be the same
- * as in that earlier call.
- *
- * @param {import('./EventStore.js').default} eventStore A store configured with `typeAccessor` (and `tagsAccessor`
- *   when projections use a tagFilter).
- * @param {Projection|Object<string, Projection>} projectionOrMap A projection, or a map of projections to compose.
- * @param {{ state: any, appendCondition: import('./EventStore.js').CommitCondition }} [previous] An earlier
- *   decision model for the same projections to continue from.
- * @returns {{ state: any, appendCondition: import('./EventStore.js').CommitCondition }}
+ * The state of one or more projections at a known position of the store, together with the append condition
+ * that protects a decision made on it. Immutable: {@link DecisionModel#update} returns a new model.
  */
-function buildDecisionModel(eventStore, projectionOrMap, previous = null) {
-    assert(eventStore.typeSource !== null, 'Projections need the store to be configured with a typeAccessor.');
-    const projection = isProjection(projectionOrMap) ? projectionOrMap : composeProjections(projectionOrMap);
-    const from = previous ? previous.appendCondition.noneMatchAfter + 1 : 1;
+class DecisionModel {
+
+    /**
+     * @param {import('./EventStore.js').default} eventStore
+     * @param {Projection} projection
+     * @param {any} state
+     * @param {import('./EventStore.js').CommitCondition} appendCondition
+     */
+    constructor(eventStore, projection, state, appendCondition) {
+        this.eventStore = eventStore;
+        this.projection = projection;
+        this.state = state;
+        this.appendCondition = appendCondition;
+        Object.freeze(this);
+    }
+
+    /**
+     * Apply the events committed since this model was built and return the updated model. Only those events are
+     * read. Returns this model unchanged when nothing new was committed.
+     *
+     * @returns {DecisionModel}
+     */
+    update() {
+        if (this.eventStore.length === this.appendCondition.noneMatchAfter) {
+            return this;
+        }
+        return readDecisionModel(this.eventStore, this.projection, this.state, this.appendCondition.noneMatchAfter + 1);
+    }
+}
+
+/**
+ * @param {import('./EventStore.js').default} eventStore
+ * @param {Projection} projection
+ * @param {any} state The state to apply the events to.
+ * @param {number} from The first global position to read.
+ * @returns {DecisionModel}
+ */
+function readDecisionModel(eventStore, projection, state, from) {
     const { stream, condition } = eventStore.query(projection.query, null, from);
-    assert(!previous || JSON.stringify(condition.selector) === JSON.stringify(previous.appendCondition.selector),
-        'The previous decision model was built from different projections.');
     const typeOf = eventStore.typeSource.accessor;
     const tagsOf = eventStore.tagsSource ? eventStore.tagsSource.accessor : () => [];
-    let state = previous ? previous.state : projection.initialState;
     stream.forEach((event, metadata) => {
         const context = { type: typeOf(event), tags: tagsOf(event) ?? [] };
         state = projection.apply(state, event, metadata, context);
     });
-    return { state, appendCondition: condition };
+    return new DecisionModel(eventStore, projection, state, condition);
 }
 
-export { createProjection, composeProjections, buildDecisionModel };
+/**
+ * Build a decision model: read all events relevant to the projection(s) and fold them into state.
+ * The returned model carries the append condition that protects the decision. After a conflict, or to keep
+ * a model in memory across commands, call `model.update()` to only apply the events committed since.
+ *
+ * @param {import('./EventStore.js').default} eventStore A store configured with `typeAccessor` (and `tagsAccessor`
+ *   when projections use a tagFilter).
+ * @param {Projection|Object<string, Projection>} projectionOrMap A projection, or a map of projections to compose.
+ * @returns {DecisionModel}
+ */
+function buildDecisionModel(eventStore, projectionOrMap) {
+    assert(eventStore.typeSource !== null, 'Projections need the store to be configured with a typeAccessor.');
+    const projection = isProjection(projectionOrMap) ? projectionOrMap : composeProjections(projectionOrMap);
+    return readDecisionModel(eventStore, projection, projection.initialState, 1);
+}
+
+export { createProjection, composeProjections, buildDecisionModel, DecisionModel };

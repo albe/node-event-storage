@@ -106,40 +106,49 @@ describe('Projection', function () {
         expect(() => store.commit('subscriptions', [subscribe('s1', 'c1')], appendCondition)).to.not.throwError();
     });
 
-    it('continues from a previous decision model with only the new events', function () {
+    it('updates a decision model with only the events committed since', function () {
         store.commit('courses', [defineCourse('c1', 2)]);
-        const projections = () => ({ capacity: CourseCapacity('c1'), subscriptions: CourseSubscriptions('c1') });
-        const first = buildDecisionModel(store, projections());
-
-        store.commit('subscriptions', [subscribe('s1', 'c1')]);
-        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], first.appendCondition))
-            .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
-
         const seen = [];
         const counting = createProjection({
             initialState: 0,
             handlers: { StudentSubscribedToCourse: (state, event) => (seen.push(event), state + 1) },
             tagFilter: ['course/c1']
         });
-        const retry = buildDecisionModel(store, { capacity: CourseCapacity('c1'), subscriptions: counting }, first);
-        expect(retry.state).to.eql({ capacity: 2, subscriptions: 1 });
+        const first = buildDecisionModel(store, { capacity: CourseCapacity('c1'), subscriptions: counting });
+
+        store.commit('subscriptions', [subscribe('s1', 'c1')]);
+        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], first.appendCondition))
+            .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
+
+        const updated = first.update();
+        expect(updated.state).to.eql({ capacity: 2, subscriptions: 1 });
         expect(seen).to.have.length(1);
-        expect(retry.appendCondition.noneMatchAfter).to.be(store.length);
-        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], retry.appendCondition)).to.not.throwError();
+        expect(first.state).to.eql({ capacity: 2, subscriptions: 0 });
+        expect(updated.appendCondition.noneMatchAfter).to.be(store.length);
+        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], updated.appendCondition)).to.not.throwError();
     });
 
-    it('returns the previous state when nothing new was committed', function () {
+    it('returns the same model when nothing was committed since', function () {
         store.commit('courses', [defineCourse('c1', 2)]);
-        const first = buildDecisionModel(store, CourseCapacity('c1'));
-        const again = buildDecisionModel(store, CourseCapacity('c1'), first);
-        expect(again.state).to.be(2);
-        expect(again.appendCondition.noneMatchAfter).to.be(first.appendCondition.noneMatchAfter);
+        const model = buildDecisionModel(store, CourseCapacity('c1'));
+        expect(model.update()).to.be(model);
     });
 
-    it('rejects a previous decision model built from different projections', function () {
+    it('keeps an updated model in memory across commands', function () {
+        store.commit('courses', [defineCourse('c1', 3)]);
+        let model = buildDecisionModel(store, { capacity: CourseCapacity('c1'), subscriptions: CourseSubscriptions('c1') });
+        for (const studentId of ['s1', 's2', 's3', 's4']) {
+            model = model.update();
+            if (model.state.subscriptions >= model.state.capacity) break;
+            store.commit('subscriptions', [subscribe(studentId, 'c1')], model.appendCondition);
+        }
+        expect(model.update().state).to.eql({ capacity: 3, subscriptions: 3 });
+    });
+
+    it('returns an immutable model', function () {
         store.commit('courses', [defineCourse('c1', 2)]);
-        const first = buildDecisionModel(store, CourseCapacity('c1'));
-        expect(() => buildDecisionModel(store, CourseCapacity('c2'), first)).to.throwError(/different projections/);
+        const model = buildDecisionModel(store, CourseCapacity('c1'));
+        expect(Object.isFrozen(model)).to.be(true);
     });
 
     it('requires a typeAccessor', function (done) {

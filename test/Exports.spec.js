@@ -16,5 +16,6 @@ describe('Projections subpath export', function() {
         expect(projections.createProjection).to.be.a('function');
         expect(projections.composeProjections).to.be.a('function');
         expect(projections.buildDecisionModel).to.be.a('function');
+        expect(projections.DecisionModel).to.be.a('function');
     });
 });
