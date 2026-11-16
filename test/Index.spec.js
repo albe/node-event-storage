@@ -318,6 +318,7 @@ describe('Index', function() {
             expect(numbers(index.range(-3))).to.eql([48, 49, 50]);
             expect(numbers(index.range(1, -48))).to.eql([1, 2, 3]);
             expect(numbers(index.range()).length).to.be(50);
+            expect(numbers(index.all())).to.eql(numbers(index.range(1, 50)));
         });
 
         it('is empty for out of bounds positions or a closed index', function() {

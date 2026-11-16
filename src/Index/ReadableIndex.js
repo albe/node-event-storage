@@ -423,6 +423,16 @@ class ReadableIndex extends events.EventEmitter {
     }
 
     /**
+     * Iterate all index entries. Same as `range(1, -1)`, with the same reuse of the entry object.
+     *
+     * @api
+     * @returns {Generator<Entry>}
+     */
+    all() {
+        return this.range(1, -1);
+    }
+
+    /**
      * @private
      * @returns {number} The first position from `position` towards `end` whose number does not come before `target`.
      */
