@@ -178,6 +178,87 @@ store.on('ready', () => {
 
 ---
 
+## Projections and Decision Models
+
+Instead of folding the query stream by hand (Step 3), you can describe the decision model as a set of small **projections** in the format used by [dcb.events](https://dcb.events/topics/projections/). The projection API lives in the `event-storage/projections` subpath.
+
+A projection declares its initial state, one pure reducer per event type, and the tags every handled event must carry. Its DCB query is derived from that: the handler keys become `types`, the `tagFilter` becomes `tags`.
+
+```javascript
+import { createProjection } from 'event-storage/projections';
+
+const CourseExists = (courseId) => createProjection({
+    initialState: false,
+    handlers: { CourseDefined: () => true },
+    tagFilter: [`course/${courseId}`]
+});
+
+const CourseCapacity = (courseId) => createProjection({
+    initialState: 0,
+    handlers: {
+        CourseDefined: (state, event) => event.capacity,
+        CourseCapacityChanged: (state, event) => event.newCapacity
+    },
+    tagFilter: [`course/${courseId}`]
+});
+
+const CourseSubscriptions = (courseId) => createProjection({
+    initialState: 0,
+    handlers: { StudentSubscribedToCourse: (state) => state + 1 },
+    tagFilter: [`course/${courseId}`]
+});
+
+CourseCapacity('c1').query;
+// { items: [{ types: ['CourseDefined', 'CourseCapacityChanged'], tags: ['course/c1'] }] }
+```
+
+Handlers receive `(state, event, metadata)`. `event` is the stored payload itself (not a `{ type, data, tags }` wrapper), and `metadata` is the storage metadata (e.g. `committedAt`). Handlers must be pure and return the new state.
+
+`buildDecisionModel(store, projections)` composes the projections, runs one `query()` for all of them, and applies each event only to the projections whose query it matches. It returns the composed state and the condition to pass to `commit()`:
+
+```javascript
+import { buildDecisionModel } from 'event-storage/projections';
+
+function subscribeStudent({ studentId, courseId, semesterId }) {
+    const { state, appendCondition } = buildDecisionModel(store, {
+        exists: CourseExists(courseId),
+        capacity: CourseCapacity(courseId),
+        subscriptions: CourseSubscriptions(courseId)
+    });
+
+    if (!state.exists) throw new Error('Unknown course');
+    if (state.subscriptions >= state.capacity) throw new Error('Course is full');
+
+    store.commit(`semester-${semesterId}`, [
+        { type: 'StudentSubscribedToCourse', courseId, studentId, tags: [`course/${courseId}`, `student/${studentId}`] }
+    ], appendCondition);
+}
+```
+
+- A single projection can be passed instead of a map; `state` is then that projection's state.
+- `composeProjections({ ... })` builds the composed projection without reading, e.g. for unit tests without a store.
+- Projections require `typeAccessor`, and `tagsAccessor` when any projection uses a `tagFilter`.
+- On `OptimisticConcurrencyError`, build the decision model again and re-decide.
+
+### Mapping to the dcb.events specification
+
+event-storage implements the semantics of the [DCB specification](https://dcb.events/specification/) but keeps its own API names. The translation:
+
+| dcb.events | event-storage | Notes |
+|---|---|---|
+| `Query` with `QueryItem { types, tags }` | `DcbQuery { items: [{ types, tags }] }` passed to `query()` | Same semantics: items OR, tags AND, types OR |
+| Sequence position | Global event number (1-based) | `store.length` is the position of the last event |
+| `read(query, { from })` | `query(dcbQuery, null, minRevision)` | Returns `{ stream, condition }` |
+| `AppendCondition` | `CommitCondition` returned by `query()` / `buildDecisionModel()` | Passed as the third argument of `commit()` |
+| `AppendCondition.failIfEventsMatch` | `CommitCondition.selector` (+ optional `matcher`) | The compiled query |
+| `AppendCondition.after` | `CommitCondition.noneMatchAfter` | `store.length` at query time |
+| `append(events, condition)` | `commit(streamName, events, condition)` | See below |
+| `createProjection`, `composeProjections`, `buildDecisionModel` | Same names in `event-storage/projections` | Handlers get `(state, event, metadata)` |
+
+`commit()` requires a stream name where the specification has none. The stream does not take part in the DCB conflict check, which runs only over the condition's query. It decides the **physical partition** the events are written to. Choosing a domain partition (e.g. `semester-${id}`) keeps related events together and lets reads stay selective, which is what makes the semester-bounded mode in the benchmark below the fastest.
+
+---
+
 ## Without Tag Streams — Matcher-Only Queries
 
 Tag streams are optional. When tag cardinality is low or write throughput is the primary concern, encode the per-item tag logic in the `matcher` instead. Pass the union of all relevant types and evaluate tag membership at read time.

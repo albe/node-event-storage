@@ -335,6 +335,18 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `VERSION` | `string` | Package version (also available as `EventStore.VERSION`). |
 | `matches`, `buildRawBufferMatcher` | functions | Low-level matcher utilities. |
 
+### Projections subpath
+
+`import { createProjection, composeProjections, buildDecisionModel } from 'event-storage/projections'` (not yet stable).
+
+| Export | Description |
+|--------|-------------|
+| `createProjection({ initialState, handlers, tagFilter? })` | Creates a projection; its `query` is derived from the handler types and the tag filter. |
+| `composeProjections({ name: projection, ... })` | Combines projections; state has one key per projection, query is the OR of all parts. |
+| `buildDecisionModel(store, projectionOrMap)` | Reads the matching events and returns `{ state, appendCondition }`; pass `appendCondition` to `commit()`. |
+
+See [DCB → Projections and Decision Models](dcb.md#projections-and-decision-models).
+
 ---
 
 ## EventStream

@@ -9,3 +9,12 @@ describe('Public exports', function() {
     });
 });
 
+
+describe('Projections subpath export', function() {
+    it('exposes the projection API under event-storage/projections', async function() {
+        const projections = await import('event-storage/projections');
+        expect(projections.createProjection).to.be.a('function');
+        expect(projections.composeProjections).to.be.a('function');
+        expect(projections.buildDecisionModel).to.be.a('function');
+    });
+});
