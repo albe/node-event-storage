@@ -322,7 +322,7 @@ store.commit(`semester-${semesterId}`, [subscription], model.appendCondition.wit
 
 ### Read models
 
-A read model is the same projection, kept up to date for queries instead of for one decision. `createReadModel(store, projections, options)` catches up through the stream indexes and then applies every new matching event synchronously as it is written:
+A read model is the same projection, kept up to date for queries instead of for one decision. `createReadModel(store, projections, options)` catches up through the stream indexes asynchronously, in batches of `batchSize` global positions (default 1000) so a large store does not block the event loop, and then applies every new matching event synchronously as it is written:
 
 ```javascript
 import { createProjection, createReadModel } from 'event-storage/projections';
@@ -339,6 +339,11 @@ const CourseOverview = createProjection({
 });
 
 const overview = createReadModel(store, CourseOverview, { name: 'course-overview', persist: true, version: 1 });
+
+overview.on('caught-up', (state, position) => { /* serve queries from here */ });
+overview.on('progress', (position) => { /* after each catch-up batch */ });
+overview.caughtUp;  // true once it follows new commits live
+overview.update();  // catch up synchronously right now, e.g. at startup when the state is needed immediately
 
 overview.state;     // current state
 overview.position;  // global position of the last event it has seen

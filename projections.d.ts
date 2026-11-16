@@ -47,6 +47,8 @@ export interface ReadModelOptions {
     persist?: boolean;
     /** Change it when the handlers change; a persisted state of another version is rebuilt. */
     version?: string | number;
+    /** Global positions read per asynchronous catch-up batch. Default 1000. */
+    batchSize?: number;
 }
 
 /** A projection that follows the store. Emits `'change'` with `(state, position)` and, when persisted, `'persisted'`. */
@@ -54,6 +56,8 @@ export class ReadModel<S> extends EventEmitter {
     readonly state: S;
     /** Global position of the last event this read model has seen. */
     readonly position: number;
+    /** Whether the initial catch-up reached the end of the store and new commits are applied live. */
+    readonly caughtUp: boolean;
     /** Synchronously apply all matching events committed since `position`. */
     update(until?: number): this;
     /** A decision model from the current state and position. */

@@ -6,25 +6,32 @@ import { ensureDirectory, isSameOrParentDirectory, writeFileAtomic } from './uti
 import { applyEvent, resolveProjection, DecisionModel } from './Projection.js';
 import { ReadOnly as ReadOnlyStorage } from './Storage.js';
 
+const DEFAULT_CATCHUP_BATCH = 1000;
+
 /**
  * A projection that follows the store: it catches up through the stream indexes and then applies every new matching
  * event as it is written. Optionally its state and position are persisted, so a restart only reads the events
  * committed since.
  *
- * Emits `'change'` with `(state, position)` whenever the state changed.
+ * The initial catch-up runs asynchronously in batches of global positions, so a large store does not block the event
+ * loop. `update()` catches up synchronously at any time, e.g. when the state is needed right away.
+ *
+ * Emits `'change'` with `(state, position)` whenever the state changed, `'progress'` with `(position)` after each
+ * catch-up batch and `'caught-up'` once it reached the end of the store and follows new commits live.
  */
 class ReadModel extends events.EventEmitter {
 
     /**
      * @param {import('./EventStore.js').default} eventStore
      * @param {import('./Projection.js').Projection|Object<string, import('./Projection.js').Projection>} projectionOrMap
-     * @param {{ name?: string, persist?: boolean, version?: string|number }} [options]
+     * @param {{ name?: string, persist?: boolean, version?: string|number, batchSize?: number }} [options]
      *   `persist` stores state and position under `name` (required then); `version` invalidates a persisted
-     *   state when the handlers changed.
+     *   state when the handlers changed; `batchSize` is the number of global positions read per catch-up batch.
      */
-    constructor(eventStore, projectionOrMap, { name = null, persist = false, version = null } = {}) {
+    constructor(eventStore, projectionOrMap, { name = null, persist = false, version = null, batchSize = DEFAULT_CATCHUP_BATCH } = {}) {
         super();
         assert(!persist || (typeof name === 'string' && name !== ''), 'A persisted read model needs a name.');
+        assert(Number.isInteger(batchSize) && batchSize > 0, 'The catch-up batch size must be a positive integer.');
         this.eventStore = eventStore;
         this.projection = resolveProjection(eventStore, projectionOrMap);
         this.name = name;
@@ -34,8 +41,10 @@ class ReadModel extends events.EventEmitter {
         this.selector = eventStore.compileDcbQuery(this.projection.query);
         this.state = this.projection.initialState;
         this.position = 0;
+        this.batchSize = batchSize;
+        this.caughtUp = false;
+        this.catchingUp = null;
         this.restore();
-        this.update();
 
         this.storage = eventStore.storage;
         this.isReadOnly = this.storage instanceof ReadOnlyStorage;
@@ -43,6 +52,38 @@ class ReadModel extends events.EventEmitter {
             ? (document, entry) => this.follow(entry.number, document)
             : (indexName, number, document) => indexName === '_all' && this.follow(number, document);
         this.storage.on(this.isReadOnly ? 'wrote' : 'index-add', this.onWrite);
+        this.catchUp();
+    }
+
+    /**
+     * Read the next batch on the next tick until the end of the store is reached.
+     * @private
+     */
+    catchUp() {
+        this.catchingUp = setImmediate(() => {
+            this.catchingUp = null;
+            this.update(Math.min(this.position + this.batchSize, this.eventStore.length));
+            if (this.caughtUp) {
+                return;
+            }
+            this.emit('progress', this.position);
+            this.catchUp();
+        });
+    }
+
+    /**
+     * @private
+     */
+    checkCaughtUp() {
+        if (this.caughtUp || this.position < this.eventStore.length) {
+            return;
+        }
+        if (this.catchingUp) {
+            clearImmediate(this.catchingUp);
+            this.catchingUp = null;
+        }
+        this.caughtUp = true;
+        this.emit('caught-up', this.state, this.position);
     }
 
     /**
@@ -85,6 +126,7 @@ class ReadModel extends events.EventEmitter {
      */
     update(until = this.eventStore.length) {
         if (until <= this.position) {
+            this.checkCaughtUp();
             return this;
         }
         const previous = this.state;
@@ -94,6 +136,7 @@ class ReadModel extends events.EventEmitter {
         });
         this.position = until;
         this.changed(previous);
+        this.checkCaughtUp();
         return this;
     }
 
@@ -104,8 +147,8 @@ class ReadModel extends events.EventEmitter {
      * @param {{ payload: object, metadata: object }} document
      */
     follow(number, document) {
-        if (number <= this.position) {
-            return;
+        if (!this.caughtUp || number <= this.position) {
+            return; // the running catch-up reads it from the indexes
         }
         // Catch up on anything missed before, without the current document whose stream indexes may not be written yet.
         this.update(number - 1);
@@ -170,6 +213,10 @@ class ReadModel extends events.EventEmitter {
      * @api
      */
     close() {
+        if (this.catchingUp) {
+            clearImmediate(this.catchingUp);
+            this.catchingUp = null;
+        }
         this.storage.removeListener(this.isReadOnly ? 'wrote' : 'index-add', this.onWrite);
         if (this.persisting) {
             clearImmediate(this.persisting);
