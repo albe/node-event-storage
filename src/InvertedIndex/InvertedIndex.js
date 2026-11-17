@@ -7,7 +7,7 @@ import { assert } from '../utils/util.js';
 import { ensureDirectory, resolvePath } from '../utils/fsUtil.js';
 
 const MANIFEST_VERSION = 1;
-const DEFAULT_FLUSH_THRESHOLD = 64000;
+const DEFAULT_FLUSH_THRESHOLD = 256000;
 const DEFAULT_FLUSH_INTERVAL = 60000;
 const DEFAULT_MERGE_FACTOR = 10;
 
@@ -54,7 +54,7 @@ class InvertedIndex {
      * @param {string} [name] The file name prefix for the manifest and segment files.
      * @param {object} [options]
      * @param {string} [options.dataDirectory] Directory for the index files. Default '.'.
-     * @param {number} [options.flushThreshold] Number of buffered postings that triggers a flush. Default 64 000.
+     * @param {number} [options.flushThreshold] Number of buffered postings that triggers a flush. Default 256 000.
      * @param {number} [options.flushInterval] Flush at the latest this many ms after the first unpersisted add, so that
      *   a crash only needs to re-add that much from the event log. 0 disables it. Default 60 000.
      * @param {number} [options.mergeFactor] Merge once more than this many segments exist. Default 10.
