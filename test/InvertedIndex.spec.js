@@ -144,7 +144,24 @@ describe('InvertedIndex', function() {
         expect(get('a')).to.eql([1, 2]);
         index.add(3, ['a']);
         expect(get('a')).to.eql([1, 2, 3]);
+        clearTimeout(crashed.flushTimeout);
         crashed.segments.forEach(segment => segment.close());
+    });
+
+    it('flushes buffered postings after the flush interval', function(done) {
+        createIndex({ flushInterval: 10 });
+        index.add(1, ['a']);
+        index.add(2, ['a']);
+        expect(segmentFiles()).to.eql([]);
+        setTimeout(() => {
+            expect(segmentFiles()).to.eql(['test.seg-000001.inv']);
+            const crashed = index;
+            index = new InvertedIndex('test', { dataDirectory, syncOnFlush: false });
+            expect(index.open()).to.be(2);
+            expect(get('a')).to.eql([1, 2]);
+            crashed.segments.forEach(segment => segment.close());
+            done();
+        }, 30);
     });
 
     it('removes segment files that are not in the manifest', function() {

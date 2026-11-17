@@ -7,7 +7,8 @@ import { assert } from '../utils/util.js';
 import { ensureDirectory, resolvePath } from '../utils/fsUtil.js';
 
 const MANIFEST_VERSION = 1;
-const DEFAULT_FLUSH_THRESHOLD = 1000000;
+const DEFAULT_FLUSH_THRESHOLD = 64000;
+const DEFAULT_FLUSH_INTERVAL = 60000;
 const DEFAULT_MERGE_FACTOR = 10;
 
 /**
@@ -53,7 +54,9 @@ class InvertedIndex {
      * @param {string} [name] The file name prefix for the manifest and segment files.
      * @param {object} [options]
      * @param {string} [options.dataDirectory] Directory for the index files. Default '.'.
-     * @param {number} [options.flushThreshold] Number of buffered postings that triggers a flush. Default 1 000 000.
+     * @param {number} [options.flushThreshold] Number of buffered postings that triggers a flush. Default 64 000.
+     * @param {number} [options.flushInterval] Flush at the latest this many ms after the first unpersisted add, so that
+     *   a crash only needs to re-add that much from the event log. 0 disables it. Default 60 000.
      * @param {number} [options.mergeFactor] Merge once more than this many segments exist. Default 10.
      * @param {boolean} [options.syncOnFlush] fsync segments and manifest on flush. Default true.
      */
@@ -62,6 +65,8 @@ class InvertedIndex {
         this.name = name;
         this.dataDirectory = resolvePath(options.dataDirectory || '.');
         this.flushThreshold = options.flushThreshold ?? DEFAULT_FLUSH_THRESHOLD;
+        this.flushInterval = options.flushInterval ?? DEFAULT_FLUSH_INTERVAL;
+        this.flushTimeout = null;
         this.mergeFactor = Math.max(2, options.mergeFactor ?? DEFAULT_MERGE_FACTOR);
         this.syncOnFlush = options.syncOnFlush ?? true;
         this.manifestFile = path.join(this.dataDirectory, name + '.manifest');
@@ -185,6 +190,9 @@ class InvertedIndex {
         this.lastAdded = position;
         if (this.memtablePostings >= this.flushThreshold) {
             this.flush();
+        } else if (this.flushTimeout === null && this.flushInterval > 0) {
+            this.flushTimeout = setTimeout(() => this.flush(), this.flushInterval);
+            this.flushTimeout.unref();
         }
     }
 
@@ -202,6 +210,8 @@ class InvertedIndex {
      * @returns {boolean} True if anything was persisted.
      */
     flush() {
+        clearTimeout(this.flushTimeout);
+        this.flushTimeout = null;
         if (!this.opened || this.lastAdded === this.persistedUntil) {
             return false;
         }
