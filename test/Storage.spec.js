@@ -89,6 +89,23 @@ describe('Storage', function() {
             });
         });
 
+        it('can write durable with a sync interval', function(done) {
+            storage = createStorage({ syncInterval: 5 });
+            storage.open();
+
+            storage.write({ foo: 'bar' }, () => {
+                expect(storage.getPartition('').syncCallbacks.length).to.be(0);
+                let fileContent = fs.readFileSync('test/data/storage', 'utf8');
+                expect(fileContent).to.contain(JSON.stringify({ foo: 'bar' }));
+                done();
+            });
+        });
+
+        it('throws on an invalid sync interval', function() {
+            expect(() => createStorage({ syncInterval: -1 })).to.throwError(/syncInterval/);
+            expect(() => createStorage({ syncInterval: 1.5 })).to.throwError(/syncInterval/);
+        });
+
         it('rejects a document that would start beyond 4 GiB of its partition without writing it', function() {
             storage = createStorage();
             storage.open();
