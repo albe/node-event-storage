@@ -11,7 +11,7 @@ const storageDirectory = __dirname + 'data';
 const applied = [];
 const CourseOverview = createProjection({
     initialState: {},
-    handlers: {
+    when: {
         CourseDefined: (state, event) => (applied.push(event), { ...state, [event.id]: { capacity: event.capacity, subscribed: 0 } }),
         StudentSubscribedToCourse: (state, event) => (applied.push(event), {
             ...state,
@@ -21,7 +21,7 @@ const CourseOverview = createProjection({
 });
 const CourseSubscriptions = (courseId) => createProjection({
     initialState: 0,
-    handlers: { StudentSubscribedToCourse: (state) => state + 1 },
+    when: { StudentSubscribedToCourse: (state) => state + 1 },
     tagFilter: [`course/${courseId}`]
 });
 
@@ -99,7 +99,7 @@ describe('ReadModel', function () {
         const model = readModel.decisionModel();
         expect(model.state).to.be(1);
         store.commit('subscriptions', [subscribe('s2', 'c1')]);
-        expect(() => store.commit('subscriptions', [subscribe('s3', 'c1')], model.appendCondition))
+        expect(() => store.commit('subscriptions', [subscribe('s3', 'c1')], model.commitCondition))
             .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
         expect(model.update().state).to.be(2);
     });

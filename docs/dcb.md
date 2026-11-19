@@ -329,7 +329,7 @@ import { createProjection, createReadModel } from 'event-storage/projections';
 
 const CourseOverview = createProjection({
     initialState: {},
-    handlers: {
+    when: {
         CourseDefined: (state, e) => ({ ...state, [e.id]: { capacity: e.capacity, subscribed: 0 } }),
         StudentSubscribedToCourse: (state, e) => ({
             ...state,
@@ -371,7 +371,7 @@ event-storage implements the semantics of the [DCB specification](https://dcb.ev
 | `append(events, condition)` | `commit(streamName, events, condition)` | See below |
 | `createProjection`, `composeProjections`, `buildDecisionModel` | Same names in `event-storage/projections` | |
 | Projection `handlers` | `when` | `{ when: { CourseDefined: (state, event, metadata) => ... } }` |
-| Decision model `appendCondition` | `commitCondition` | Same object as `condition` from `query()` |
+| Decision model `commitCondition` | `commitCondition` | Same object as `condition` from `query()` |
 
 `commit()` requires a stream name where the specification has none. The stream does not take part in the DCB conflict check, which runs only over the condition's query. It decides the **physical partition** the events are written to. Choosing a domain partition (e.g. `semester-${id}`) keeps related events together and lets reads stay selective, which is what makes the semester-bounded mode in the benchmark below the fastest.
 
