@@ -1,7 +1,9 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
-import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM } from '../src/Storage.js';
+import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM, LOCK_THROW } from '../src/Storage.js';
+import os from 'os';
+import { spawnSync } from 'child_process';
 import { matches } from '../src/utils/metadataUtil.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
@@ -1359,6 +1361,107 @@ describe('Storage', function() {
                 storage.open();
             }).to.throwError(e => e instanceof StorageLockedError);
             storage2.close();
+        });
+
+        function leaveLock(storageInstance, owner) {
+            fs.mkdirSync(storageInstance.lockFile);
+            if (owner) {
+                const pidNamespace = (() => { try { return fs.readlinkSync('/proc/self/ns/pid'); } catch (e) { return null; } })();
+                fs.writeFileSync(path.join(storageInstance.lockFile, 'owner.lock'), JSON.stringify(Object.assign({
+                    hostname: os.hostname(), pidNamespace, lockedAt: new Date().toISOString()
+                }, owner)));
+            }
+        }
+
+        function deadPid() {
+            return spawnSync(process.execPath, ['-e', '']).pid;
+        }
+
+        it('records the lock owner', function() {
+            storage = createStorage();
+            storage.open();
+            const owner = storage.readLockOwner();
+            expect(owner.pid).to.be(process.pid);
+            expect(owner.hostname).to.be(os.hostname());
+            expect(owner.lockedAt).to.be.a('string');
+        });
+
+        it('reclaims the lock of a process that is gone and repairs the storage', function(done) {
+            const crashedStorage = createStorage();
+            crashedStorage.open();
+            for (let i = 1; i <= 5; i++) {
+                crashedStorage.write({ foo: i });
+            }
+            crashedStorage.flush();
+            crashedStorage.index.truncate(3);
+            crashedStorage.index.flush();
+            crashedStorage.close();
+            leaveLock(crashedStorage, { pid: deadPid() });
+
+            storage = createStorage();
+            storage.once('opened', () => {
+                expect(storage.index.length).to.be(5);
+                expect(storage.readLockOwner().pid).to.be(process.pid);
+                done();
+            });
+            storage.open();
+        });
+
+        it('reclaims a lock left by an earlier process with the same pid', function() {
+            storage = createStorage();
+            leaveLock(storage, { pid: process.pid });
+            expect(() => storage.open()).to.not.throwError();
+        });
+
+        it('does not reclaim the lock of a running process', function() {
+            storage = createStorage();
+            leaveLock(storage, { pid: process.ppid });
+            expect(() => storage.open()).to.throwError(e => {
+                expect(e).to.be.a(StorageLockedError);
+                expect(e.message).to.contain(`process ${process.ppid}`);
+            });
+        });
+
+        it('does not reclaim the lock of a process on another host or in another pid namespace', function() {
+            storage = createStorage();
+            leaveLock(storage, { pid: deadPid(), hostname: 'other-host' });
+            expect(() => storage.open()).to.throwError(e => e instanceof StorageLockedError);
+            fs.rmSync(storage.lockFile, { recursive: true });
+            leaveLock(storage, { pid: deadPid(), pidNamespace: 'pid:[1]' });
+            expect(() => storage.open()).to.throwError(e => e instanceof StorageLockedError);
+        });
+
+        it('does not reclaim a lock without owner information', function() {
+            storage = createStorage();
+            leaveLock(storage);
+            expect(() => storage.open()).to.throwError(e => {
+                expect(e).to.be.a(StorageLockedError);
+                expect(e.message).to.contain('LOCK_RECLAIM');
+            });
+            expect(storage.readLockOwner()).to.be(null);
+        });
+
+        it('never reclaims a lock with LOCK_THROW', function() {
+            storage = createStorage({ lock: LOCK_THROW });
+            leaveLock(storage, { pid: deadPid() });
+            expect(() => storage.open()).to.throwError(e => e instanceof StorageLockedError);
+        });
+
+        it('does not treat lock files as partitions', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+            storage.flush();
+            const reader = createReader();
+            expect(reader.storageFilesFilter('storage.lock')).to.be(false);
+            expect(reader.storageFilesFilter('storage.lock/owner.lock')).to.be(false);
+            reader.open();
+            reader.once('opened', () => {
+                const partitionNames = [];
+                reader.forEachPartition(partition => partitionNames.push(partition.name));
+                expect(partitionNames).to.eql(['storage']);
+                done();
+            });
         });
 
         it('releases write lock after closing', function(){

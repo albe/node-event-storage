@@ -40,7 +40,7 @@ const eventstore = new EventStore('my-store', {
 | `maxWriteBufferDocuments` | `number` | `0` (unlimited) | Flush after this many buffered documents. |
 | `syncOnFlush` | `boolean` | `false` | Call `fsync` on every flush for strict durability. |
 | `dirtyReads` | `boolean` | `true` | Let the writer read events that are still in the write buffer. |
-| `lock` | `LOCK_THROW\|LOCK_RECLAIM` | `LOCK_THROW` | How to handle an existing lock on open. See [Operations](operations.md#crash-recovery). |
+| `lock` | `LOCK_AUTO\|LOCK_THROW\|LOCK_RECLAIM` | `LOCK_AUTO` | How to handle an existing lock on open: reclaim it only if its owner process is gone, never, or always. See [Operations](operations.md#crash-recovery). |
 | `hmacSecret` | `string` | `''` | Secret used to verify persisted function matchers. See [Security](customization.md#security). |
 | `metadata` | `object\|function(partitionName)` | — | Metadata written to each partition header (low-level alternative to `streamMetadata`). |
 | `matcherProperties` | `string[]` | `['stream', 'payload.type']` | Document paths used for O(1) routing of writes to indexes. See [Performance](performance.md#matcherproperties). |

@@ -80,7 +80,7 @@ node-event-storage is designed to survive hard process crashes (e.g. `SIGKILL`, 
 |-----------|---------|
 | **No silent corruption** | Torn writes (partial page writes caused by a crash) are detected on startup and automatically truncated. The store will never surface a partially-written event. |
 | **Atomic commits** | A multi-event commit is all-or-nothing. If the process crashes mid-commit, the incomplete commit is rolled back on the next open. |
-| **Consistent reads after recovery** | Once `'ready'` fires after a `LOCK_RECLAIM` open, all indexes are fully consistent with the data files. |
+| **Consistent reads after recovery** | Once `'ready'` fires after reclaiming a lock (automatically or with `LOCK_RECLAIM`), all indexes are fully consistent with the data files. |
 | **Bounded data loss** | Events that were in the in-memory write buffer at the time of the crash are lost. The maximum loss is deterministic and can be calculated from the buffer settings (see below). |
 
 ### Quantifying the data-loss window
@@ -90,7 +90,7 @@ Two factors bound how many events can be lost in a crash:
 1. **Partition write buffer** — each stream buffers up to `writeBufferSize` bytes or `maxWriteBufferDocuments` events before flushing. With a 16 KB buffer and ~100-byte events, that is at most ~160 events per stream.
 2. **In-flight commit** — at most one commit's worth of events (the number of events passed to that `commit()` call) may be torn.
 
-Index entries that were buffered but not yet flushed at the time of the crash are **not** lost: `LOCK_RECLAIM` automatically reindexes from the data files on the next open, making all on-disk events visible again.
+Index entries that were buffered but not yet flushed at the time of the crash are **not** lost: reclaiming the lock automatically reindexes from the data files on the next open, making all on-disk events visible again.
 
 With the default settings and a single stream the worst-case data loss is roughly:
 

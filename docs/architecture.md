@@ -217,7 +217,7 @@ Every event is stamped with a `Clock` value that increments in microseconds and 
 
 ### Crash Recovery via Torn-Write Detection
 
-When a process is killed mid-commit, the last write to a partition file may be incomplete. On the next open, `ReadablePartition` detects the torn write by checking whether the `commitId` in the final document matches the expected `commitSize`. When a torn write is detected, `WritableStorage` delegates the actual file truncation to `WritablePartition`, which truncates the file to the position before the incomplete commit began. Combined with `LOCK_RECLAIM`, `WritableStorage` also detects when the primary index lags behind the data file and automatically calls `reindex()` before emitting `'ready'`. This gives bounded, predictable recovery with no manual intervention required.
+When a process is killed mid-commit, the last write to a partition file may be incomplete. On the next open, `ReadablePartition` detects the torn write by checking whether the `commitId` in the final document matches the expected `commitSize`. When a torn write is detected, `WritableStorage` delegates the actual file truncation to `WritablePartition`, which truncates the file to the position before the incomplete commit began. When it reclaims the lock of a crashed writer (automatically when the owner process is gone, or forced with `LOCK_RECLAIM`), `WritableStorage` also detects when the primary index lags behind the data file and automatically calls `reindex()` before emitting `'ready'`. This gives bounded, predictable recovery with no manual intervention required.
 
 ### Three-Tier Variant Design (Writable / Readable / ReadOnly)
 

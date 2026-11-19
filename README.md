@@ -69,7 +69,7 @@ eventstore.on('ready', () => {
 | **Durable consumers** | At-least-once (and exactly-once with `setState`) event delivery with automatic position tracking. |
 | **Consistency guards** | Build aggregates that enforce business invariants with built-in snapshotting. |
 | **Read-only mode** | Open the store from a second process to build projections without touching the writer. |
-| **Crash safety** | Torn writes detected and truncated on startup; automatic index repair via `LOCK_RECLAIM`; bounded, predictable data loss validated by a dedicated stress test. |
+| **Crash safety** | Torn writes detected and truncated on startup; automatic lock reclaim and index repair after a crashed writer; bounded, predictable data loss validated by a dedicated stress test. |
 | **Custom serialization** | Plug in msgpack, protobuf, or any other codec. |
 | **Compression** | Apply LZ4, zstd, or any other compression via the `serializer` option. |
 | **Access control hooks** | `preCommit` / `preRead` hooks with per-stream metadata for authorization. |
