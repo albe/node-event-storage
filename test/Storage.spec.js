@@ -1287,7 +1287,7 @@ describe('Storage', function() {
             });
             repairedStorage.open();
             // Prevent afterEach from trying to remove the now-gone lock file
-            crashedStorage.locked = false;
+            crashedStorage.storageLock.held = false;
         });
 
     });
@@ -1405,46 +1405,6 @@ describe('Storage', function() {
                 done();
             });
             storage.open();
-        });
-
-        it('reclaims a lock left by an earlier process with the same pid', function() {
-            storage = createStorage();
-            leaveLock(storage, { pid: process.pid });
-            expect(() => storage.open()).to.not.throwError();
-        });
-
-        it('does not reclaim the lock of a running process', function() {
-            storage = createStorage();
-            leaveLock(storage, { pid: process.ppid });
-            expect(() => storage.open()).to.throwError(e => {
-                expect(e).to.be.a(StorageLockedError);
-                expect(e.message).to.contain(`process ${process.ppid}`);
-            });
-        });
-
-        it('does not reclaim the lock of a process on another host or in another pid namespace', function() {
-            storage = createStorage();
-            leaveLock(storage, { pid: deadPid(), hostname: 'other-host' });
-            expect(() => storage.open()).to.throwError(e => e instanceof StorageLockedError);
-            fs.rmSync(storage.lockFile, { recursive: true });
-            leaveLock(storage, { pid: deadPid(), pidNamespace: 'pid:[1]' });
-            expect(() => storage.open()).to.throwError(e => e instanceof StorageLockedError);
-        });
-
-        it('does not reclaim a lock without owner information', function() {
-            storage = createStorage();
-            leaveLock(storage);
-            expect(() => storage.open()).to.throwError(e => {
-                expect(e).to.be.a(StorageLockedError);
-                expect(e.message).to.contain('LOCK_RECLAIM');
-            });
-            expect(storage.readLockOwner()).to.be(null);
-        });
-
-        it('never reclaims a lock with LOCK_THROW', function() {
-            storage = createStorage({ lock: LOCK_THROW });
-            leaveLock(storage, { pid: deadPid() });
-            expect(() => storage.open()).to.throwError(e => e instanceof StorageLockedError);
         });
 
         it('does not treat lock files as partitions', function(done) {

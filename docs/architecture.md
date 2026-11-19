@@ -32,6 +32,7 @@ This page describes the technical implementation and architecture of the `node-e
 | `Storage/WritableStorage.js` | Append-only storage with write buffering and a global primary index |
 | `Storage/ReadableStorage.js` | Base class for read access: sequential scan, dirty reads, HMAC verification |
 | `Storage/ReadOnlyStorage.js` | Read-only storage that reacts to new files written by a sibling writer process |
+| `Storage/StorageLock.js` | Single-writer lock directory with an owner file (pid, host, pid namespace); reclaims the lock of a crashed writer |
 | `Partition/WritablePartition.js` | Append-only single-file partition with a write buffer and torn-write detection |
 | `Partition/ReadablePartition.js` | Buffered reading, document header/footer parsing, and metadata deserialization |
 | `Partition/ReadOnlyPartition.js` | Read-only partition that uses `WatchesFile` to detect appended data |

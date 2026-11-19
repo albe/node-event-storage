@@ -1,9 +1,9 @@
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import WritablePartition from '../Partition/WritablePartition.js';
 import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableIndex.js';
 import ReadableStorage from './ReadableStorage.js';
+import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
@@ -14,46 +14,8 @@ const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
-const LOCK_RECLAIM = 0x1;
-const LOCK_THROW = 0x2;
-const LOCK_AUTO = 0x4;
-
-// Ends in `.lock` so that partition scans, also those of earlier versions, skip it like the lock directory itself.
-const LOCK_OWNER_FILE = 'owner.lock';
-// Lock files held by storages of this process, to tell an own live lock from one left by an earlier process with the same pid.
-const locksHeldByThisProcess = new Set();
-
-class StorageLockedError extends Error {}
-
 // Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
 const MAX_UINT32 = 0xFFFFFFFF;
-
-/**
- * Containers sharing a host name can not see each other's processes, so a pid is only comparable within one pid namespace.
- *
- * @returns {string|null} The pid namespace of this process on Linux, null elsewhere.
- */
-function currentPidNamespace() {
-    try {
-        return fs.readlinkSync('/proc/self/ns/pid');
-    /* c8 ignore next 3 */
-    } catch (e) {
-        return null;
-    }
-}
-
-/**
- * @param {number} pid
- * @returns {boolean}
- */
-function isProcessRunning(pid) {
-    try {
-        process.kill(pid, 0);
-        return true;
-    } catch (e) {
-        return e.code === 'EPERM';
-    }
-}
 
 /**
  * @typedef {object|function(object):boolean} Matcher
@@ -101,7 +63,7 @@ class WritableStorage extends ReadableStorage {
         super(storageName, config);
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
-        this._lockMode = config.lock;
+        this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
         this.partitioner = config.partitioner;
         this.partitionIds = {};
     }
@@ -117,7 +79,7 @@ class WritableStorage extends ReadableStorage {
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open(callback) {
-        const needsRepair = this.shouldReclaimLock() && this.unlock();
+        const needsRepair = this.storageLock.reclaimOrphaned();
 
         if (!this.lock()) {
             return true;
@@ -256,46 +218,19 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * @private
-     * @returns {boolean}
-     */
-    shouldReclaimLock() {
-        if (this._lockMode === LOCK_RECLAIM) {
-            return true;
-        }
-        return this._lockMode === LOCK_AUTO && this.isLockOwnerGone();
-    }
-
-    /**
-     * Only a lock whose owner provably ran in this process table (same host, same pid namespace) and no longer runs
-     * counts as gone. Anything else, including a lock without owner information, is treated as held.
-     *
-     * @private
-     * @returns {boolean}
-     */
-    isLockOwnerGone() {
-        const owner = this.readLockOwner();
-        if (owner === null || owner.hostname !== os.hostname() || owner.pidNamespace !== currentPidNamespace()) {
-            return false;
-        }
-        if (owner.pid === process.pid) {
-            return !locksHeldByThisProcess.has(this.lockFile);
-        }
-        return !isProcessRunning(owner.pid);
-    }
-
-    /**
      * @api
      * @returns {{pid: number, hostname: string, pidNamespace: string|null, lockedAt: string}|null} The process holding
      *   the lock, or null if the storage is not locked or the lock carries no owner information.
      */
     readLockOwner() {
-        try {
-            const owner = JSON.parse(fs.readFileSync(path.join(this.lockFile, LOCK_OWNER_FILE), 'utf8'));
-            return Number.isInteger(owner.pid) ? owner : null;
-        } catch (e) {
-            return null;
-        }
+        return this.storageLock.readOwner();
+    }
+
+    /**
+     * @returns {boolean} If this writer holds the storage lock.
+     */
+    get locked() {
+        return this.storageLock.held;
     }
 
     /**
@@ -305,51 +240,16 @@ class WritableStorage extends ReadableStorage {
      * @throws {Error} If the lock could not be created.
      */
     lock() {
-        if (this.locked) {
-            return false;
-        }
-        try {
-            fs.mkdirSync(this.lockFile);
-        } catch (e) {
-            /* c8 ignore next */
-            assert(e.code === 'EEXIST', `Error creating lock for storage ${this.storageFile}: ` + e.message)
-
-            throw new StorageLockedError(this.describeExistingLock());
-        }
-        this.locked = true;
-        locksHeldByThisProcess.add(this.lockFile);
-        const owner = { pid: process.pid, hostname: os.hostname(), pidNamespace: currentPidNamespace(), lockedAt: new Date().toISOString() };
-        fs.writeFileSync(path.join(this.lockFile, LOCK_OWNER_FILE), JSON.stringify(owner));
-        return true;
-    }
-
-    /**
-     * @private
-     * @returns {string}
-     */
-    describeExistingLock() {
-        const owner = this.readLockOwner();
-        const holder = owner === null ? 'another process' : `process ${owner.pid} on ${owner.hostname} (locked at ${owner.lockedAt})`;
-        return `Storage ${this.storageFile} is locked by ${holder}. If that process is no longer running, open the storage with LOCK_RECLAIM.`;
+        return this.storageLock.acquire();
     }
 
     /**
      * Unlock this storage, no matter if it was previously locked by this writer.
      * Only use this if you are sure there is no other process still having a writer open.
-     * Current implementation just deletes a lock file that is named like the storage.
      * @returns {boolean} True if an orphaned lock from another process was removed.
      */
     unlock() {
-        const lockExists = fs.existsSync(this.lockFile);
-        const orphaned = lockExists && !this.locked;
-        if (lockExists) {
-            fs.rmSync(this.lockFile, { recursive: true, force: true });
-        }
-        if (this.locked) {
-            locksHeldByThisProcess.delete(this.lockFile);
-        }
-        this.locked = false;
-        return orphaned;
+        return this.storageLock.release();
     }
 
     /**
