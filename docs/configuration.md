@@ -24,6 +24,7 @@ const eventstore = new EventStore('my-store', {
 | `tagsAccessor` | `string` | — | Dot-notation path to an array of tag strings. Maintains one stream `tags/<tag>` per tag value and enables `tags` in `DcbQuery`. |
 | `streamSources` | `Array<{ path, nameBuilder }>` | `[]` | Generic automatically maintained streams. See [Organizing Streams](organizing-streams.md#automatically-maintained-streams). |
 | `streamMetadata` | `object\|function` | — | Metadata stored once per stream at creation: a `{ streamName: metadata }` map or `(streamName) => object`. Used by [access control hooks](customization.md#access-control-hooks). Ignored when `storageConfig.metadata` is set. |
+| `idempotencyCacheSize` | `number` | `1000` | How many recent commit `idempotencyKey`s to remember in memory. See [Idempotent Commits](reading-writing.md#idempotent-commits). |
 | `storageConfig` | `object` | `{}` | Storage options, see below. |
 
 ## Storage options

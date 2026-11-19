@@ -4,6 +4,7 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
+- Added idempotent commits: pass a unique `idempotencyKey` in the commit metadata, and a retried commit with the same key is acknowledged with the original commit (`duplicate: true`) instead of being written twice or failing the concurrency check. Reusing a key for a different commit throws the new `IdempotencyError`. The new `idempotencyCacheSize` option (default 1000) bounds the in-memory cache of recent keys.
 - Added the `$startsWith` matcher operator for string prefixes: `{ payload: { type: { $startsWith: 'Order' } } }`. In raw mode a lone `$startsWith` compiles to a single byte-pattern check without parsing the value. It can be combined with the scalar comparison operators.
 - Keep index entries in memory as chunks of raw entry bytes instead of one object per entry. A fully read index now needs about 16 bytes per entry instead of about 90, opening a large index no longer allocates an array of its full length, and `find()` no longer creates entry objects. `get()` still returns entry objects, but creates them on each call, so the same position no longer returns the identical object twice.
 - `fromStreams()`/`query()` now evaluate the selector lazily over the indexes instead of building merged entry arrays: the first event is available immediately, memory no longer grows with the number of matches, and intersections skip non-matching entries with a binary search.

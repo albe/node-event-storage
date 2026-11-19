@@ -46,6 +46,8 @@ export class CommitCondition {
 
 export class OptimisticConcurrencyError extends Error {}
 
+export class IdempotencyError extends Error {}
+
 export const ExpectedVersion: {
     Any: -1;
     EmptyStream: 0;
