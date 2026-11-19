@@ -49,6 +49,25 @@ function writeFileAtomic(fileName, data, tmpFileName = fileName + '.tmp') {
 }
 
 /**
+ * A new file is only guaranteed to survive a power loss once its directory entry is synced as well.
+ * Platforms that can not open a directory for syncing (Windows) are skipped silently.
+ *
+ * @param {string} dirName
+ */
+function syncDirectory(dirName) {
+    let fd;
+    try {
+        fd = fs.openSync(dirName, 'r');
+        fs.fsyncSync(fd);
+    } catch (e) {
+    } finally {
+        if (fd !== undefined) {
+            fs.closeSync(fd);
+        }
+    }
+}
+
+/**
  * Ensure that the given directory exists.
  * @param {string} dirName Target directory.
  * @returns {boolean} True when the directory already existed.
@@ -186,5 +205,6 @@ export {
     scanForFiles,
     isSameOrParentDirectory,
     safeUnlink,
+    syncDirectory,
     writeFileAtomic
 };

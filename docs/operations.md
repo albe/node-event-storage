@@ -37,13 +37,15 @@ On open, the store truncates an incomplete (torn) commit and, if the primary ind
 
 ## Durability
 
-By default, commits are acknowledged once they are handed to the operating system, which protects against process crashes but not against an OS crash or power loss. For strict durability (no loss of acknowledged commits, at the cost of write throughput), enable `syncOnFlush`:
+By default, commits are acknowledged once they are handed to the operating system, which protects against process crashes but not against an OS crash or power loss. To never lose acknowledged commits, enable group commit with `syncInterval`, which acknowledges commits after a shared `fsync` at most every given milliseconds and costs little throughput:
 
 ```javascript
 const eventstore = new EventStore('my-event-store', {
-    storageConfig: { syncOnFlush: true }
+    storageConfig: { syncInterval: 50 }
 });
 ```
+
+`syncOnFlush: true` calls `fsync` on every flush instead, at a significant cost in write throughput.
 
 See [Guarantees](guarantees.md#durability) for what each setting protects against.
 

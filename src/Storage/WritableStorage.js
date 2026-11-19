@@ -40,6 +40,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
+     * @param {number} [config.syncInterval] Group commit: fsync each partition at most every this many ms and only then invoke write callbacks. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {function(object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
      * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
@@ -53,12 +54,14 @@ class WritableStorage extends ReadableStorage {
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
             syncOnFlush: false,
+            syncInterval: 0,
             dirtyReads: true,
             dataDirectory: '.',
             lock: LOCK_AUTO
         };
         config = Object.assign(defaults, config);
-        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush }, config.indexOptions);
+        assert(Number.isInteger(config.syncInterval) && config.syncInterval >= 0, 'syncInterval must be a non-negative integer.');
+        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush, syncInterval: config.syncInterval }, config.indexOptions);
         ensureDirectory(config.dataDirectory);
         super(storageName, config);
 
