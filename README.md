@@ -63,7 +63,7 @@ eventstore.on('ready', () => {
 | **Optimistic concurrency** | Pass `expectedVersion` to `commit()` to guarantee conflict-free writes. |
 | **Flexible stream reading** | Range queries, reverse iteration, and a fluent builder API. |
 | **Joined and derived streams** | Combine any number of streams with a nested OR/AND selector tree into one globally-ordered virtual stream; filter events into reusable derived projection streams. |
-| **Object matchers** | Support nested equality, array values (OR semantics), scalar operators (`$gt` / `$gte` / `$lt` / `$lte` / `$eq` / `$ne`), plus array-containment operators (`$has` / `$hasAny`), while still benefiting from O(1) discriminant routing on writes. |
+| **Object matchers** | Support nested equality, array values (OR semantics), scalar operators (`$gt` / `$gte` / `$lt` / `$lte` / `$eq` / `$ne`), string prefixes (`$startsWith`), plus array-containment operators (`$has` / `$hasAny`), while still benefiting from O(1) discriminant routing on writes. |
 | **DCB** | Configure `typeAccessor` to have per-type stream indexes maintained automatically, and use `query()` / `Condition` for fine-grained, query-scoped optimistic concurrency (Dynamic Consistency Boundaries). |
 | **Stream categories** | Name streams `<category>-<id>` and query the whole category at once. |
 | **Durable consumers** | At-least-once (and exactly-once with `setState`) event delivery with automatic position tracking. |

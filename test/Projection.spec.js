@@ -9,12 +9,12 @@ const storageDirectory = __dirname + 'data';
 
 const CourseExists = (courseId) => createProjection({
     initialState: false,
-    handlers: { CourseDefined: () => true },
+    when: { CourseDefined: () => true },
     tagFilter: [`course/${courseId}`]
 });
 const CourseCapacity = (courseId) => createProjection({
     initialState: 0,
-    handlers: {
+    when: {
         CourseDefined: (state, event) => event.capacity,
         CourseCapacityChanged: (state, event) => event.newCapacity
     },
@@ -22,12 +22,12 @@ const CourseCapacity = (courseId) => createProjection({
 });
 const CourseSubscriptions = (courseId) => createProjection({
     initialState: 0,
-    handlers: { StudentSubscribedToCourse: (state) => state + 1 },
+    when: { StudentSubscribedToCourse: (state) => state + 1 },
     tagFilter: [`course/${courseId}`]
 });
 const StudentSubscriptions = (studentId) => createProjection({
     initialState: 0,
-    handlers: { StudentSubscribedToCourse: (state) => state + 1 },
+    when: { StudentSubscribedToCourse: (state) => state + 1 },
     tagFilter: [`student/${studentId}`]
 });
 
@@ -35,7 +35,7 @@ const CourseSeats = (courseId) => composeProjections({
     capacity: CourseCapacity(courseId),
     taken: createProjection({
         initialState: 0,
-        handlers: {
+        when: {
             StudentSubscribedToCourse: (state) => state + 1,
             StudentUnsubscribedFromCourse: (state) => state - 1
         },
@@ -65,11 +65,11 @@ describe('Projection', function () {
         store.close();
     });
 
-    it('derives the query from handlers and tagFilter', function () {
+    it('derives the query from when and tagFilter', function () {
         expect(CourseCapacity('c1').query).to.eql({
             items: [{ types: ['CourseDefined', 'CourseCapacityChanged'], tags: ['course/c1'] }]
         });
-        expect(createProjection({ handlers: { A: () => 1 } }).query).to.eql({ items: [{ types: ['A'] }] });
+        expect(createProjection({ when: { A: () => 1 } }).query).to.eql({ items: [{ types: ['A'] }] });
     });
 
     it('composes state and query of several projections', function () {
@@ -108,17 +108,17 @@ describe('Projection', function () {
         const second = decide('s2');
         expect(first.state).to.eql({ capacity: 1, subscriptions: 0 });
 
-        store.commit('subscriptions', [subscribe('s1', 'c1')], first.appendCondition);
-        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], second.appendCondition))
+        store.commit('subscriptions', [subscribe('s1', 'c1')], first.commitCondition);
+        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], second.commitCondition))
             .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
     });
 
     it('does not conflict on events outside the consistency boundary', function () {
         store.commit('courses', [defineCourse('c1', 10), defineCourse('c2', 10)]);
-        const { appendCondition } = buildDecisionModel(store, { subscriptions: CourseSubscriptions('c1') });
+        const { commitCondition } = buildDecisionModel(store, { subscriptions: CourseSubscriptions('c1') });
 
         store.commit('subscriptions', [subscribe('s9', 'c2')]);
-        expect(() => store.commit('subscriptions', [subscribe('s1', 'c1')], appendCondition)).to.not.throwError();
+        expect(() => store.commit('subscriptions', [subscribe('s1', 'c1')], commitCondition)).to.not.throwError();
     });
 
     it('updates a decision model with only the events committed since', function () {
@@ -126,21 +126,21 @@ describe('Projection', function () {
         const seen = [];
         const counting = createProjection({
             initialState: 0,
-            handlers: { StudentSubscribedToCourse: (state, event) => (seen.push(event), state + 1) },
+            when: { StudentSubscribedToCourse: (state, event) => (seen.push(event), state + 1) },
             tagFilter: ['course/c1']
         });
         const first = buildDecisionModel(store, { capacity: CourseCapacity('c1'), subscriptions: counting });
 
         store.commit('subscriptions', [subscribe('s1', 'c1')]);
-        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], first.appendCondition))
+        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], first.commitCondition))
             .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
 
         const updated = first.update();
         expect(updated.state).to.eql({ capacity: 2, subscriptions: 1 });
         expect(seen).to.have.length(1);
         expect(first.state).to.eql({ capacity: 2, subscriptions: 0 });
-        expect(updated.appendCondition.noneMatchAfter).to.be(store.length);
-        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], updated.appendCondition)).to.not.throwError();
+        expect(updated.commitCondition.noneMatchAfter).to.be(store.length);
+        expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], updated.commitCondition)).to.not.throwError();
     });
 
     it('returns the same model when nothing was committed since', function () {
@@ -155,7 +155,7 @@ describe('Projection', function () {
         for (const studentId of ['s1', 's2', 's3', 's4']) {
             model = model.update();
             if (model.state.subscriptions >= model.state.capacity) break;
-            store.commit('subscriptions', [subscribe(studentId, 'c1')], model.appendCondition);
+            store.commit('subscriptions', [subscribe(studentId, 'c1')], model.commitCondition);
         }
         expect(model.update().state).to.eql({ capacity: 3, subscriptions: 3 });
     });
@@ -189,12 +189,12 @@ describe('Projection', function () {
             store.commit('courses', [defineCourse('c1', 2)]);
             const model = buildDecisionModel(store, CourseSeats('c1'));
             store.commit('subscriptions', [unsubscribe('s1', 'c1'), subscribe('s2', 'c1')]);
-            const types = [...model.since(model.appendCondition.without('StudentUnsubscribedFromCourse'))].map(e => e.type);
+            const types = [...model.since(model.commitCondition.without('StudentUnsubscribedFromCourse'))].map(e => e.type);
             expect(types).to.eql(['StudentSubscribedToCourse']);
         });
     });
 
-    describe('appendCondition.without', function () {
+    describe('commitCondition.without', function () {
 
         it('ignores concurrent events of the excluded types', function () {
             store.commit('courses', [defineCourse('c1', 1)]);
@@ -203,10 +203,10 @@ describe('Projection', function () {
             expect(model.state).to.eql({ capacity: 1, taken: 1 });
 
             store.commit('subscriptions', [unsubscribe('s1', 'c1')]);
-            expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], model.appendCondition))
+            expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')], model.commitCondition))
                 .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
             expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')],
-                model.appendCondition.without('StudentUnsubscribedFromCourse'))).to.not.throwError();
+                model.commitCondition.without('StudentUnsubscribedFromCourse'))).to.not.throwError();
         });
 
         it('still conflicts on the remaining types', function () {
@@ -214,23 +214,23 @@ describe('Projection', function () {
             const model = buildDecisionModel(store, CourseSeats('c1'));
             store.commit('subscriptions', [subscribe('s1', 'c1')]);
             expect(() => store.commit('subscriptions', [subscribe('s2', 'c1')],
-                model.appendCondition.without('StudentUnsubscribedFromCourse')))
+                model.commitCondition.without('StudentUnsubscribedFromCourse')))
                 .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
         });
 
         it('keeps the original condition unchanged and accepts arrays', function () {
             store.commit('courses', [defineCourse('c1', 2)]);
-            const { appendCondition } = buildDecisionModel(store, CourseSeats('c1'));
-            const narrowed = appendCondition.without(['StudentUnsubscribedFromCourse', 'CourseDefined']);
-            expect(narrowed.noneMatchAfter).to.be(appendCondition.noneMatchAfter);
+            const { commitCondition } = buildDecisionModel(store, CourseSeats('c1'));
+            const narrowed = commitCondition.without(['StudentUnsubscribedFromCourse', 'CourseDefined']);
+            expect(narrowed.noneMatchAfter).to.be(commitCondition.noneMatchAfter);
             expect(narrowed.dcbQuery.items.flatMap(item => item.types)).to.eql(['CourseCapacityChanged', 'StudentSubscribedToCourse']);
-            expect(appendCondition.dcbQuery.items.flatMap(item => item.types)).to.contain('StudentUnsubscribedFromCourse');
+            expect(commitCondition.dcbQuery.items.flatMap(item => item.types)).to.contain('StudentUnsubscribedFromCourse');
         });
 
         it('throws when no type would be left', function () {
             store.commit('courses', [defineCourse('c1', 2)]);
-            const { appendCondition } = buildDecisionModel(store, CourseSubscriptions('c1'));
-            expect(() => appendCondition.without('StudentSubscribedToCourse')).to.throwError(/no event types/);
+            const { commitCondition } = buildDecisionModel(store, CourseSubscriptions('c1'));
+            expect(() => commitCondition.without('StudentSubscribedToCourse')).to.throwError(/no event types/);
         });
 
         it('throws for conditions not created from a DcbQuery', function () {
