@@ -342,10 +342,10 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 
 | Export | Description |
 |--------|-------------|
-| `createProjection({ initialState, handlers, tagFilter? })` | Creates a projection; its `query` is derived from the handler types and the tag filter. |
+| `createProjection({ initialState, when, tagFilter? })` | Creates a projection; its `query` is derived from the handler types and the tag filter. |
 | `composeProjections({ name: projection, ... })` | Combines projections; state has one key per projection, query is the OR of all parts. |
-| `buildDecisionModel(store, projectionOrMap)` | Reads the matching events and returns an immutable `DecisionModel` with `state` and `appendCondition`; pass `appendCondition` to `commit()`. |
-| `DecisionModel#since([condition])` | `EventStream` of the events matching the condition (default `appendCondition`) committed after the model was built, i.e. those that block a commit. |
+| `buildDecisionModel(store, projectionOrMap)` | Reads the matching events and returns an immutable `DecisionModel` with `state` and `commitCondition`; pass `commitCondition` to `commit()`. |
+| `DecisionModel#since([condition])` | `EventStream` of the events matching the condition (default `commitCondition`) committed after the model was built, i.e. those that block a commit. |
 | `DecisionModel#update()` | Returns a new model with only the events committed since applied (or the same model when nothing is new). |
 
 See [DCB → Projections and Decision Models](dcb.md#projections-and-decision-models).

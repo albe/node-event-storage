@@ -6,7 +6,7 @@ export type ProjectionHandler<S, E = any> = (state: S, event: E, metadata: Recor
 export interface ProjectionDefinition<S> {
     initialState: S;
     /** Reducers keyed by event type. The keys are the event types the projection reads. */
-    handlers: Record<string, ProjectionHandler<S>>;
+    when: Record<string, ProjectionHandler<S>>;
     /** Tags every handled event must carry (AND). */
     tagFilter?: string[];
 }
@@ -29,8 +29,8 @@ export function composeProjections<M extends Record<string, Projection<any>>>(pr
 /** Projection state at a known store position plus the condition protecting a decision on it. Immutable. */
 export class DecisionModel<S> {
     readonly state: S;
-    readonly appendCondition: CommitCondition;
-    /** Events matching `condition` (default: `appendCondition`) committed after this model was built, i.e. those that block a commit. */
+    readonly commitCondition: CommitCondition;
+    /** Events matching `condition` (default: `commitCondition`) committed after this model was built, i.e. those that block a commit. */
     since(condition?: CommitCondition): EventStream;
     /** Apply only the events committed since this model was built. Returns this model when nothing is new. */
     update(): DecisionModel<S>;

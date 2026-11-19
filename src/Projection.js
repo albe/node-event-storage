@@ -4,7 +4,7 @@ import { matchesDcbQuery } from './utils/dcbUtil.js';
 /**
  * @typedef {object} ProjectionDefinition
  * @property {any} initialState The state before any event was applied.
- * @property {Object<string, function(any, object, object): any>} handlers Pure reducers keyed by event type.
+ * @property {Object<string, function(any, object, object): any>} when Pure reducers keyed by event type.
  *   Each receives `(state, event, metadata)` and returns the new state.
  * @property {string[]} [tagFilter] Tags that every handled event must carry (AND semantics).
  */
@@ -20,14 +20,14 @@ import { matchesDcbQuery } from './utils/dcbUtil.js';
 
 /**
  * Create a projection in the dcb.events declarative format.
- * The query is derived from the handler keys (event types) and the tag filter.
+ * The query is derived from the event types in `when` and the tag filter.
  *
  * @param {ProjectionDefinition} definition
  * @returns {Projection}
  */
-function createProjection({ initialState = null, handlers, tagFilter = [] }) {
-    assert(handlers !== null && typeof handlers === 'object', 'A projection needs a handlers object.');
-    const types = Object.keys(handlers);
+function createProjection({ initialState = null, when, tagFilter = [] }) {
+    assert(when !== null && typeof when === 'object', 'A projection needs a `when` object with one handler per event type.');
+    const types = Object.keys(when);
     assert(types.length > 0, 'A projection needs at least one event handler.');
     assert(Array.isArray(tagFilter), 'Projection tagFilter must be an array of tags.');
     const query = { items: [tagFilter.length ? { types, tags: [...tagFilter] } : { types }] };
@@ -36,7 +36,7 @@ function createProjection({ initialState = null, handlers, tagFilter = [] }) {
         query,
         apply(state, event, metadata, { type, tags }) {
             if (!matchesDcbQuery(query, type, tags)) return state;
-            return handlers[type](state, event, metadata);
+            return when[type](state, event, metadata);
         }
     });
 }
@@ -84,25 +84,25 @@ class DecisionModel {
      * @param {import('./EventStore.js').default} eventStore
      * @param {Projection} projection
      * @param {any} state
-     * @param {import('./EventStore.js').CommitCondition} appendCondition
+     * @param {import('./EventStore.js').CommitCondition} commitCondition
      */
-    constructor(eventStore, projection, state, appendCondition) {
+    constructor(eventStore, projection, state, commitCondition) {
         this.eventStore = eventStore;
         this.projection = projection;
         this.state = state;
-        this.appendCondition = appendCondition;
+        this.commitCondition = commitCondition;
         Object.freeze(this);
     }
 
     /**
      * The events matching the condition that were committed after this model was built, i.e. the events that
-     * make a commit with that condition fail. Defaults to this model's `appendCondition`; pass a narrowed
-     * condition (e.g. from `appendCondition.without(...)`) to get only the events that conflict with it.
+     * make a commit with that condition fail. Defaults to this model's `commitCondition`; pass a narrowed
+     * condition (e.g. from `commitCondition.without(...)`) to get only the events that conflict with it.
      *
      * @param {import('./EventStore.js').CommitCondition} [condition]
      * @returns {import('./EventStream.js').default}
      */
-    since(condition = this.appendCondition) {
+    since(condition = this.commitCondition) {
         return this.eventStore.fromStreams(
             '_since_' + condition.noneMatchAfter,
             condition.selector,
@@ -120,10 +120,10 @@ class DecisionModel {
      * @returns {DecisionModel}
      */
     update() {
-        if (this.eventStore.length === this.appendCondition.noneMatchAfter) {
+        if (this.eventStore.length === this.commitCondition.noneMatchAfter) {
             return this;
         }
-        return readDecisionModel(this.eventStore, this.projection, this.state, this.appendCondition.noneMatchAfter + 1);
+        return readDecisionModel(this.eventStore, this.projection, this.state, this.commitCondition.noneMatchAfter + 1);
     }
 }
 
