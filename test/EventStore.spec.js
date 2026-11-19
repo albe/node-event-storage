@@ -794,6 +794,17 @@ describe('EventStore', function() {
             });
         });
 
+        it('filters by $startsWith in object and raw mode', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('orders', [{ type: 'OrderPlaced' }, { type: 'PaymentReceived' }, { type: 'OrderShipped' }], () => {
+                const matcher = { payload: { type: { $startsWith: 'Order' } } };
+                expect(eventstore.getAllEvents(1, -1, matcher).events.map(event => event.type)).to.eql(['OrderPlaced', 'OrderShipped']);
+                const chunks = [...eventstore.getAllEvents(1, -1, matcher, true)];
+                expect(chunks.map(chunk => JSON.parse(chunk.toString('utf8')).payload.type)).to.eql(['OrderPlaced', 'OrderShipped']);
+                done();
+            });
+        });
+
         it('activates raw mode via predicate shorthand (true as 3rd arg)', function(done) {
             eventstore = new EventStore({ storageDirectory });
             eventstore.commit('foo', [{ type: 'A' }], () => {
