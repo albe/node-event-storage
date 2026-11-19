@@ -122,6 +122,44 @@ describe('StorageLock', function() {
         });
     });
 
+    it('does not reclaim a stale lock that another writer is already reclaiming', function() {
+        leaveLock({ pid: deadPid() });
+        fs.mkdirSync(path.join(lockDirectory, 'reclaim.lock'));
+        const lock = createLock();
+        expect(lock.reclaimOrphaned()).to.be(false);
+        expect(() => lock.acquire()).to.throwError(e => e instanceof StorageLockedError);
+    });
+
+    it('does not remove a lock that a faster writer acquired after the owner check', function() {
+        leaveLock({ pid: deadPid() });
+        const slow = createLock();
+        const fast = createLock();
+        const isOwnerGone = slow.isOwnerGone.bind(slow);
+        let checks = 0;
+        slow.isOwnerGone = () => {
+            checks++;
+            if (checks === 1) {
+                const result = isOwnerGone();
+                // The faster writer reclaims and acquires the lock between the slow writer's first check and its claim.
+                expect(fast.reclaimOrphaned()).to.be(true);
+                expect(fast.acquire()).to.be(true);
+                return result;
+            }
+            return isOwnerGone();
+        };
+        expect(slow.reclaimOrphaned()).to.be(false);
+        expect(checks).to.be(2);
+        expect(fast.readOwner().pid).to.be(process.pid);
+        expect(fs.existsSync(path.join(lockDirectory, 'reclaim.lock'))).to.be(false);
+        expect(() => slow.acquire()).to.throwError(e => e instanceof StorageLockedError);
+    });
+
+    it('does not reclaim a lock whose owner file is not written yet', function() {
+        leaveLock();
+        expect(createLock().reclaimOrphaned()).to.be(false);
+        expect(fs.existsSync(lockDirectory)).to.be(true);
+    });
+
     it('never reclaims with LOCK_THROW', function() {
         leaveLock({ pid: deadPid() });
         expect(createLock(LOCK_THROW).reclaimOrphaned()).to.be(false);

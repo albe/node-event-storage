@@ -9,6 +9,7 @@ const LOCK_AUTO = 0x4;
 
 // Ends in `.lock` so that partition scans, also those of earlier versions, skip it like the lock directory itself.
 const OWNER_FILE = 'owner.lock';
+const RECLAIM_MARKER = 'reclaim.lock';
 
 class StorageLockedError extends Error {}
 
@@ -66,10 +67,33 @@ class StorageLock {
         if (this.held) {
             return false;
         }
-        if (this.mode === LOCK_RECLAIM || (this.mode === LOCK_AUTO && this.isOwnerGone())) {
+        if (this.mode === LOCK_RECLAIM) {
             return this.release();
         }
-        return false;
+        return this.mode === LOCK_AUTO && this.isOwnerGone() && this.removeStaleLock();
+    }
+
+    /**
+     * Two writers starting at the same time may both find the owner gone. Without a claim, the slower one would delete
+     * the lock the faster one has just acquired. The claim is a directory inside the stale lock that only one of them
+     * can create, and the owner is checked again while holding it.
+     *
+     * @private
+     * @returns {boolean} True if the stale lock was removed by this instance.
+     */
+    removeStaleLock() {
+        const marker = path.join(this.directory, RECLAIM_MARKER);
+        try {
+            fs.mkdirSync(marker);
+        } catch (e) {
+            return false;
+        }
+        if (!this.isOwnerGone()) {
+            fs.rmdirSync(marker);
+            return false;
+        }
+        fs.rmSync(this.directory, { recursive: true, force: true });
+        return true;
     }
 
     /**
