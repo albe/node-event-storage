@@ -56,13 +56,29 @@ Strict durability is intentionally traded for write performance:
 - Events are buffered in memory before being flushed to disk.
 - Flush does **not** call `fsync` by default, so OS/disk write-cache can still absorb and potentially lose recent writes on a crash.
 
-To enable strict durability (at significant performance cost):
+Three levels are available:
+
+| Setting | Commit callback fires when | Survives process crash | Survives OS crash / power loss | Write throughput |
+|---------|----------------------------|------------------------|--------------------------------|------------------|
+| default | the data was handed to the OS | yes | no | highest |
+| `syncInterval: <ms>` | the data was `fsync`ed, at most `<ms>` later | yes | yes, for acknowledged commits | close to the default |
+| `syncOnFlush: true` | the data was `fsync`ed on every flush | yes | yes, for acknowledged commits | lowest |
+
+`syncInterval` is a group commit: all flushes of a partition within the interval share one `fsync`, and their callbacks fire after it. A commit is therefore acknowledged up to `syncInterval` milliseconds later, but every acknowledged commit is on disk. Commits that are not yet acknowledged can still be lost.
 
 ```javascript
+// Acknowledge commits only once they are on disk, with at most one fsync per partition every 50 ms
 const eventstore = new EventStore('my-event-store', {
+    storageConfig: { syncInterval: 50 }
+});
+
+// fsync on every flush
+const strict = new EventStore('my-strict-store', {
     storageConfig: { syncOnFlush: true }
 });
 ```
+
+With either option, the directory is also synced after a new partition or index file is created, so a new stream does not disappear after a power loss.
 
 ## Global Order
 

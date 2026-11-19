@@ -1,8 +1,9 @@
 import fs from 'fs';
+import path from 'path';
 import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC, CHUNK_CAPACITY, createChunk } from './ReadableIndex.js';
 import { assert, assertEqual } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
-import { ensureDirectory } from '../utils/fsUtil.js';
+import { ensureDirectory, syncDirectory } from '../utils/fsUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 /**
@@ -53,6 +54,7 @@ class WritableIndex extends ReadableIndex {
         this.flushCallbacks = [];
         this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
         this.syncOnFlush = !!options.syncOnFlush;
+        this.syncNewFile = this.syncOnFlush || options.syncInterval > 0;
     }
 
     /**
@@ -112,6 +114,9 @@ class WritableIndex extends ReadableIndex {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeSync(this.getFileHandle(), metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = metadataBuffer.byteLength;
+        if (this.syncNewFile) {
+            syncDirectory(path.dirname(this.fileName));
+        }
     }
 
     /**
