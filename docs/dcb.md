@@ -12,11 +12,11 @@ This removes the need to route every command through a fixed aggregate, enabling
 
 Consider the classic example from Sara Pellegrini's talk: students subscribing to courses. The event `StudentSubscribedToCourse` concerns both a Student and a Course — in a traditional aggregate model it is unclear which aggregate owns it, and the Course aggregate keeps growing with every new event type:
 
-![Traditional aggregate model — the Course aggregate grows while StudentSubscribedToCourse is ambiguous between Course and Student](diagram-dcb-aggregate-ambiguity.svg)
+![Classic aggregates: Course and Student run vertically, StudentSubscribedToCourse sits between them and belongs to neither](diagram-dcb-aggregate-ambiguity.svg)
 
-DCB resolves this by letting each command handler declare exactly which events it needs to be consistent with. Different commands define different boundaries that can freely overlap:
+DCB resolves this by letting each command handler declare exactly which events it needs to be consistent with. The boundary follows the decision instead of the entity, so it runs across the aggregates rather than along them. Different commands define different boundaries, which may overlap freely:
 
-![Overlapping Dynamic Consistency Boundaries — each command (Rename course, Change course capacity, Subscribe student to course) reads its own set of events, and the sets overlap](diagram-dcb-boundary.svg)
+![Dynamic consistency boundary: Subscribe student to course runs horizontally across Course and Student and encloses the events it needs](diagram-dcb-boundary.svg)
 
 ---
 
