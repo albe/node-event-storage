@@ -535,7 +535,7 @@ class EventStore extends events.EventEmitter {
                     `Idempotency key "${idempotencyKey}" was already used for a commit with ${original.events.length} events to stream "${streamName}".`,
                     IdempotencyError
                 );
-                // The original commit may still sit in the write buffer: make it durable before acknowledging.
+                // The original commit may still be in the write buffer and must be on disk before it is acknowledged.
                 this.storage.flush();
                 process.nextTick(() => callback(original));
                 return;
@@ -595,15 +595,10 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Find an already written commit with the given idempotency key in the given stream.
-     * Checks, in this order: the commit right after `expectedVersion` (if the stream moved past it), the last commit of
-     * the stream and the in-memory cache of recent keys. Every candidate is verified against the stored events.
+     * Lookups are verified against the stored events, so a stale cache entry (e.g. after a truncate) is harmless.
      *
      * @private
-     * @param {string} streamName
-     * @param {string} idempotencyKey
-     * @param {number|CommitCondition} expectedVersion
-     * @returns {object|null} The original commit object (with `duplicate: true`) or null if none was found.
+     * @returns {object|null} The original commit with `duplicate: true`, or null.
      */
     findCommitByIdempotencyKey(streamName, idempotencyKey, expectedVersion) {
         if (!(streamName in this.streams)) {
@@ -631,12 +626,8 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Read the commit that the event at the given stream revision belongs to, if it carries the given idempotency key.
-     *
      * @private
-     * @param {string} streamName
      * @param {number} revision The 1-based revision of any event of the commit.
-     * @param {string} idempotencyKey
      * @returns {object|null}
      */
     readCommitAt(streamName, revision, idempotencyKey) {
@@ -654,16 +645,16 @@ class EventStore extends events.EventEmitter {
             }
             events.push(payload);
         });
-        // eslint-disable-next-line no-unused-vars
-        const { commitVersion: _v, commitSize: _s, streamVersion, ...commitMetadata } = first;
-        return Object.assign(commitMetadata, { streamName, streamVersion, events, duplicate: true });
+        const commit = Object.assign({}, first, { streamName, events, duplicate: true });
+        delete commit.commitVersion;
+        delete commit.commitSize;
+        return commit;
     }
 
     /**
+     * Remembers keys so that retries with `ExpectedVersion.Any` are recognized even when other commits came in between.
+     *
      * @private
-     * @param {string} idempotencyKey
-     * @param {string} streamName
-     * @param {number} revision The 1-based stream revision of the first event of the commit.
      */
     rememberIdempotencyKey(idempotencyKey, streamName, revision) {
         if (this.idempotencyCacheSize === 0) {
