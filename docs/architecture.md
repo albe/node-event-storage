@@ -17,6 +17,7 @@ This page describes the technical implementation and architecture of the `node-e
 | `Clock.js` | Monotonic microsecond clock for per-event timestamps |
 | `IndexEntry.js` | Binary layout of one index record (partition, position, size, sequence number) |
 | `IndexMatcher.js` | Discriminant lookup table that routes each written document to the matching secondary indexes in O(1) |
+| `InvertedIndex/` | Inverted index mapping terms (stream, type, tag) to ascending global positions in a few immutable segment files plus a memtable. Standalone building block; `EventStore` does not use it yet |
 | `FileHandlePool.js` | LRU pool of open file descriptors shared by partitions (bounded by `maxOpenPartitions`) |
 | `utils/util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
 | `utils/indexUtil.js` | Two-way lazy `union` and `intersect` over `index.range()` iterators and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |

@@ -86,6 +86,7 @@ No build step; source is plain ESM consumed directly. No linter configured.
 - `src/IndexMatcher.js`: O(1) discriminant-based routing of written documents to secondary indexes.
 - `src/utils/apiHelpers.js`: argument normalization for public APIs (commit overloads, revision clamping, predicate/raw shorthand).
 - `src/utils/metadataUtil.js`: object/raw matcher compilation, operator syntax, HMAC-protected function matchers.
+- `src/InvertedIndex/`: standalone LSM-style term → positions index (memtable, segment files, manifest, lazy posting ranges combined with `union`/`intersect` from `utils/indexUtil.js`). Positions must be added strictly ascending; the event log is its WAL, so callers re-add everything after `open()`'s returned `persistedUntil`.
 - `bench/` holds benchmarks, `stress-test/` the crash-safety validation; neither is part of `npm test`.
 
 ## Documentation

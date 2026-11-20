@@ -36,6 +36,8 @@
     "src/EventStream*.js",
     "src/Index*.js",
     "src/IndexEntry*.js",
+    "src/InvertedIndex*.js",
+    "src/InvertedIndex/*.js",
     "src/JoinEventStream*.js",
     "src/Partition*.js",
     "src/Storage*.js",
