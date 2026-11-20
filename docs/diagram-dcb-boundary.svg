@@ -19,6 +19,8 @@
     .ask-t { fill: #6b7280; }
     .dcb { fill: #9333ea; fill-opacity: 0.08; stroke: #9333ea; }
     .dcb-t { fill: #7e22ce; }
+    .cap { fill: #f59e0b; fill-opacity: 0.10; stroke: #d97706; }
+    .cap-t { fill: #b45309; }
     @media (prefers-color-scheme: dark) {
       .bg { fill: #0d1117; }
       .text { fill: #e6edf3; }
@@ -35,6 +37,8 @@
       .ask { stroke: #6b7280; }
       .dcb { fill: #a855f7; fill-opacity: 0.14; stroke: #c084fc; }
       .dcb-t { fill: #d8b4fe; }
+      .cap { fill: #f59e0b; fill-opacity: 0.12; stroke: #fbbf24; }
+      .cap-t { fill: #fcd34d; }
     }
   </style>
   <rect class="bg" width="860" height="464" rx="12"/>
@@ -45,6 +49,9 @@
   <rect class="dcb" x="14" y="144" width="832" height="176" rx="16" stroke-width="2.5"/>
   <text class="text dcb-t" x="710.0" y="272.0" text-anchor="middle" font-size="13" font-weight="700">Subscribe student</text>
   <text class="text dcb-t" x="710.0" y="289.0" text-anchor="middle" font-size="13" font-weight="700">to course</text>
+  <path class="cap" d="M 52.0 158 H 248.0 Q 258.0 158 258.0 168 V 220 Q 258.0 230 268.0 230 H 535 Q 545 230 545 240 V 296 Q 545 306 535 306 H 52.0 Q 42.0 306 42.0 296 V 168 Q 42.0 158 52.0 158 Z" stroke-width="2" stroke-dasharray="7 4"/>
+  <text class="text cap-t" x="430" y="192" text-anchor="middle" font-size="13" font-weight="700">Change course</text>
+  <text class="text cap-t" x="430" y="209" text-anchor="middle" font-size="13" font-weight="700">capacity</text>
   <rect class="course" x="50.0" y="64" width="200" height="54" rx="8" stroke-width="1.5"/>
   <text class="text" x="150" y="87" text-anchor="middle" font-size="12.5" font-weight="600">CourseRoomAssigned</text>
   <text class="text muted mono" x="150" y="105" text-anchor="middle" font-size="10.5">course/c1</text>
@@ -69,5 +76,5 @@
   <rect class="shared" x="325.0" y="240" width="210" height="54" rx="8" stroke-width="1.5"/>
   <text class="text" x="430" y="263" text-anchor="middle" font-size="12.5" font-weight="600">StudentSubscribedToCourse</text>
   <text class="text muted mono" x="430" y="281" text-anchor="middle" font-size="10.5">course/c1 student/s1</text>
-  <text class="text muted" x="430.0" y="446" text-anchor="middle" font-size="12">DCB: the boundary follows the decision, not the entity, and encloses exactly the events it needs, wherever they are.</text>
+  <text class="text muted" x="430.0" y="446" text-anchor="middle" font-size="12">DCB: each boundary follows its decision, not the entity, and encloses exactly the events it needs. Boundaries may overlap.</text>
 </svg>

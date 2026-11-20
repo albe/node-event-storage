@@ -19,6 +19,8 @@
     .ask-t { fill: #6b7280; }
     .dcb { fill: #9333ea; fill-opacity: 0.08; stroke: #9333ea; }
     .dcb-t { fill: #7e22ce; }
+    .cap { fill: #f59e0b; fill-opacity: 0.10; stroke: #d97706; }
+    .cap-t { fill: #b45309; }
     @media (prefers-color-scheme: dark) {
       .bg { fill: #0d1117; }
       .text { fill: #e6edf3; }
@@ -35,6 +37,8 @@
       .ask { stroke: #6b7280; }
       .dcb { fill: #a855f7; fill-opacity: 0.14; stroke: #c084fc; }
       .dcb-t { fill: #d8b4fe; }
+      .cap { fill: #f59e0b; fill-opacity: 0.12; stroke: #fbbf24; }
+      .cap-t { fill: #fcd34d; }
     }
   </style>
   <rect class="bg" width="860" height="464" rx="12"/>
