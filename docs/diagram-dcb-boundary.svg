@@ -69,5 +69,5 @@
   <rect class="shared" x="325.0" y="240" width="210" height="54" rx="8" stroke-width="1.5"/>
   <text class="text" x="430" y="263" text-anchor="middle" font-size="12.5" font-weight="600">StudentSubscribedToCourse</text>
   <text class="text muted mono" x="430" y="281" text-anchor="middle" font-size="10.5">course/c1 student/s1</text>
-  <text class="text muted" x="430.0" y="446" text-anchor="middle" font-size="12">DCB: the boundary follows the decision and runs horizontally across both entities, enclosing exactly the events it needs.</text>
+  <text class="text muted" x="430.0" y="446" text-anchor="middle" font-size="12">DCB: the boundary follows the decision, not the entity, and encloses exactly the events it needs, wherever they are.</text>
 </svg>

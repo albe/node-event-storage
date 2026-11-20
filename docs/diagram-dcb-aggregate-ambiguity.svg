@@ -72,5 +72,5 @@
   <path class="ask" d="M 539 267.0 L 588.0 267.0" stroke-width="1.5" stroke-dasharray="5 4"/>
   <path class="ask" d="M 580.0 261.0 L 588.0 267.0 L 580.0 273.0" stroke-width="1.5"/>
   <text class="ask-t" x="564.5" y="257.0" text-anchor="middle" font-size="16" font-weight="700" font-family="sans-serif">?</text>
-  <text class="text muted" x="430.0" y="446" text-anchor="middle" font-size="12">Classic: one boundary per aggregate, running vertically. The subscription belongs to both and fits neither.</text>
+  <text class="text muted" x="430.0" y="446" text-anchor="middle" font-size="12">Classic: one fixed boundary per aggregate. The subscription belongs to both and fits neither.</text>
 </svg>
