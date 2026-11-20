@@ -298,6 +298,8 @@ try {
 
 A decision may depend on fewer events than the decision model reads. A course's free seats count subscriptions and unsubscriptions, but a concurrent unsubscription cannot make a new subscription invalid. `commitCondition.without(...types)` returns a new condition at the same position that ignores new events of those types:
 
+![A commit condition can be a subset of the decision model: the model reads four event types, the condition narrowed with without('StudentUnsubscribedFromCourse') checks three; a concurrent unsubscription lets the commit succeed, a concurrent subscription conflicts](diagram-dcb-commit-condition.svg)
+
 ```javascript
 const model = buildDecisionModel(store, {
     capacity: CourseCapacity(courseId),
