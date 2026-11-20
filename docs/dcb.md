@@ -16,7 +16,7 @@ Consider the classic example from Sara Pellegrini's talk: students subscribing t
 
 DCB resolves this by letting each command handler declare exactly which events it needs to be consistent with. The boundary follows the decision instead of the entity, so it runs across the aggregates rather than along them. Different commands define different boundaries, which may overlap freely:
 
-![Dynamic consistency boundary: Subscribe student to course runs across Course and Student and encloses CourseCreated, CourseCapacityChanged, StudentCreated and StudentSubscribedToCourse](diagram-dcb-boundary.svg)
+![Two overlapping dynamic consistency boundaries: Subscribe student to course runs across Course and Student and encloses CourseCreated, CourseCapacityChanged, StudentCreated and StudentSubscribedToCourse; Change course capacity encloses CourseCreated, CourseCapacityChanged and StudentSubscribedToCourse](diagram-dcb-boundary.svg)
 
 ---
 
