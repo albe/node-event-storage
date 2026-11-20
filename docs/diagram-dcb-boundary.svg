@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 288" width="860" height="288" role="img" aria-labelledby="dcb-boundary-title dcb-boundary-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 464" width="860" height="464" role="img" aria-labelledby="dcb-boundary-title dcb-boundary-desc">
   <title id="dcb-boundary-title">Dynamic consistency boundary: horizontal across course and student</title>
-  <desc id="dcb-boundary-desc">The same events, with the aggregates only as faint outlines. The boundary of the command Subscribe student to course runs horizontally across both and encloses CourseCapacityChanged and StudentSubscribedToCourse.</desc>
+  <desc id="dcb-boundary-desc">The same events, with the aggregates only as faint outlines and not in chronological order. The boundary of the command Subscribe student to course runs horizontally across both and encloses CourseCreated, CourseCapacityChanged, StudentCreated and StudentSubscribedToCourse.</desc>
   <style>
     .bg { fill: #ffffff; }
     .text { fill: #1f2937; font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; }
@@ -37,25 +37,37 @@
       .dcb-t { fill: #d8b4fe; }
     }
   </style>
-  <rect class="bg" width="860" height="288" rx="12"/>
-  <rect class="ghost" x="34.0" y="16" width="232" height="224" rx="12" stroke-width="1.5" stroke-dasharray="6 5"/>
-  <rect class="ghost" x="594.0" y="16" width="232" height="224" rx="12" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <rect class="bg" width="860" height="464" rx="12"/>
+  <rect class="ghost" x="34.0" y="16" width="232" height="400" rx="12" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <rect class="ghost" x="594.0" y="16" width="232" height="400" rx="12" stroke-width="1.5" stroke-dasharray="6 5"/>
   <text class="ghost-t" x="150" y="44" text-anchor="middle" font-size="13" font-weight="600" font-family="sans-serif">Course</text>
   <text class="ghost-t" x="710" y="44" text-anchor="middle" font-size="13" font-weight="600" font-family="sans-serif">Student</text>
-  <rect class="dcb" x="14" y="136" width="832" height="102" rx="16" stroke-width="2.5"/>
-  <text class="text dcb-t" x="710.0" y="202.0" text-anchor="middle" font-size="13" font-weight="700">Subscribe student</text>
-  <text class="text dcb-t" x="710.0" y="219.0" text-anchor="middle" font-size="13" font-weight="700">to course</text>
+  <rect class="dcb" x="14" y="144" width="832" height="176" rx="16" stroke-width="2.5"/>
+  <text class="text dcb-t" x="710.0" y="272.0" text-anchor="middle" font-size="13" font-weight="700">Subscribe student</text>
+  <text class="text dcb-t" x="710.0" y="289.0" text-anchor="middle" font-size="13" font-weight="700">to course</text>
   <rect class="course" x="50.0" y="64" width="200" height="54" rx="8" stroke-width="1.5"/>
-  <text class="text" x="150" y="87" text-anchor="middle" font-size="12.5" font-weight="600">CourseCreated</text>
+  <text class="text" x="150" y="87" text-anchor="middle" font-size="12.5" font-weight="600">CourseRoomAssigned</text>
   <text class="text muted mono" x="150" y="105" text-anchor="middle" font-size="10.5">course/c1</text>
   <rect class="course" x="50.0" y="170" width="200" height="54" rx="8" stroke-width="1.5"/>
-  <text class="text" x="150" y="193" text-anchor="middle" font-size="12.5" font-weight="600">CourseCapacityChanged</text>
+  <text class="text" x="150" y="193" text-anchor="middle" font-size="12.5" font-weight="600">CourseCreated</text>
   <text class="text muted mono" x="150" y="211" text-anchor="middle" font-size="10.5">course/c1</text>
+  <rect class="course" x="50.0" y="240" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="150" y="263" text-anchor="middle" font-size="12.5" font-weight="600">CourseCapacityChanged</text>
+  <text class="text muted mono" x="150" y="281" text-anchor="middle" font-size="10.5">course/c1</text>
+  <rect class="course" x="50.0" y="346" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="150" y="369" text-anchor="middle" font-size="12.5" font-weight="600">CourseDescriptionUpdated</text>
+  <text class="text muted mono" x="150" y="387" text-anchor="middle" font-size="10.5">course/c1</text>
   <rect class="student" x="610.0" y="64" width="200" height="54" rx="8" stroke-width="1.5"/>
-  <text class="text" x="710" y="87" text-anchor="middle" font-size="12.5" font-weight="600">StudentCreated</text>
+  <text class="text" x="710" y="87" text-anchor="middle" font-size="12.5" font-weight="600">StudentEmailChanged</text>
   <text class="text muted mono" x="710" y="105" text-anchor="middle" font-size="10.5">student/s1</text>
-  <rect class="shared" x="325.0" y="170" width="210" height="54" rx="8" stroke-width="1.5"/>
-  <text class="text" x="430" y="193" text-anchor="middle" font-size="12.5" font-weight="600">StudentSubscribedToCourse</text>
-  <text class="text muted mono" x="430" y="211" text-anchor="middle" font-size="10.5">course/c1 student/s1</text>
-  <text class="text muted" x="430.0" y="270" text-anchor="middle" font-size="12">DCB: the boundary follows the decision and runs horizontally across both entities, enclosing exactly the events it needs.</text>
+  <rect class="student" x="610.0" y="170" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="710" y="193" text-anchor="middle" font-size="12.5" font-weight="600">StudentCreated</text>
+  <text class="text muted mono" x="710" y="211" text-anchor="middle" font-size="10.5">student/s1</text>
+  <rect class="student" x="610.0" y="346" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="710" y="369" text-anchor="middle" font-size="12.5" font-weight="600">StudentAddressChanged</text>
+  <text class="text muted mono" x="710" y="387" text-anchor="middle" font-size="10.5">student/s1</text>
+  <rect class="shared" x="325.0" y="240" width="210" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="430" y="263" text-anchor="middle" font-size="12.5" font-weight="600">StudentSubscribedToCourse</text>
+  <text class="text muted mono" x="430" y="281" text-anchor="middle" font-size="10.5">course/c1 student/s1</text>
+  <text class="text muted" x="430.0" y="446" text-anchor="middle" font-size="12">DCB: the boundary follows the decision and runs horizontally across both entities, enclosing exactly the events it needs.</text>
 </svg>
