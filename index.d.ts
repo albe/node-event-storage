@@ -43,7 +43,7 @@ export class CommitCondition {
     raw: boolean;
     noneMatchAfter: number;
     /** A narrowed condition at the same position that ignores new events in the given streams (e.g. event types). */
-    without(...streams: Array<string | string[]>): CommitCondition;
+    without(...types: Array<string | string[]>): CommitCondition;
 }
 
 export class OptimisticConcurrencyError extends Error {}

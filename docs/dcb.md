@@ -59,7 +59,7 @@ const store = new EventStore('my-store', {
 });
 ```
 
-`typeAccessor` creates one dedicated stream per distinct event-type value — `CourseCreated`, `StudentSubscribedToCourse`, etc. `tagsAccessor` creates one stream per tag value under `tags/{tag}` — `'course/jdsj4'` becomes stream `tags/course/jdsj4`. Tag values are recommended to use `/` as a hierarchy separator.
+`typeAccessor` creates one stream per event-type value under `types/{type}` — `CourseCreated` becomes stream `types/CourseCreated`. `tagsAccessor` creates one stream per tag value under `tags/{tag}` — `'course/jdsj4'` becomes stream `tags/course/jdsj4`. Tag values are recommended to use `/` as a hierarchy separator.
 
 Both property paths are automatically registered in the IndexMatcher discriminant table so stream routing on every write is O(1).
 
@@ -154,7 +154,7 @@ store.on('ready', () => {
 
     function handleRegisterCustomer(command) {
         const { stream, condition } = store.query(
-            ['CustomerRegistered'],
+            ['types/CustomerRegistered'],
             (event) => event.email === command.email
         );
 
@@ -296,7 +296,7 @@ try {
 
 ### Narrowing the commit condition
 
-A decision may depend on fewer events than the decision model reads. A course's free seats count subscriptions and unsubscriptions, but a concurrent unsubscription cannot make a new subscription invalid. `commitCondition.without(...streams)` returns a new condition at the same position that ignores new events in those streams. With `typeAccessor`, a type stream is named like the event type, so you pass the types:
+A decision may depend on fewer events than the decision model reads. A course's free seats count subscriptions and unsubscriptions, but a concurrent unsubscription cannot make a new subscription invalid. `commitCondition.without(...types)` returns a new condition at the same position that ignores new events of those types:
 
 ![A commit condition can be a subset of the decision model: the model reads four event types, the condition narrowed with without('StudentUnsubscribedFromCourse') checks three; a concurrent unsubscription lets the commit succeed, a concurrent subscription conflicts](diagram-dcb-commit-condition.svg)
 
@@ -318,10 +318,10 @@ if (model.state.taken >= model.state.capacity) throw new Error('Course is full')
 store.commit(`semester-${semesterId}`, [subscription], model.commitCondition.without('StudentUnsubscribedFromCourse'));
 ```
 
-- The original condition is unchanged; `without()` accepts several streams or an array.
-- It works on the compiled selector and treats the named streams as empty: they are removed where alternatives are combined (OR), and a combination that requires one of them (AND, e.g. a tag plus a single type) is removed as a whole. The condition therefore only ever gets narrower, never wider.
+- The original condition is unchanged; `without()` accepts several types or an array.
+- It works on the compiled selector and treats the type streams `types/<type>` as empty: they are removed where alternatives are combined (OR), and a combination that requires one of them (AND, e.g. a tag plus a single type) is removed as a whole. The condition therefore only ever gets narrower, never wider.
 - A query item without `types` only reads tag streams, so excluding a type does not narrow it.
-- It works the same for conditions created from a selector, and for tag or custom streams (e.g. `without('tags/course/c1')`).
+- It works the same for conditions created from a selector that names type streams. Tag and other streams are never excluded.
 - It throws when no stream would be left; commit without a condition instead.
 
 ### Mapping to the dcb.events specification
@@ -334,7 +334,7 @@ event-storage implements the semantics of the [DCB specification](https://dcb.ev
 | Sequence position | Global event number (1-based) | `store.length` is the position of the last event |
 | `read(query, { from })` | `query(dcbQuery, null, minRevision)` | Returns `{ stream, condition }` |
 | `AppendCondition` | `CommitCondition` returned by `query()` / `buildDecisionModel()` | Passed as the third argument of `commit()` |
-| `AppendCondition.failIfEventsMatch` | `CommitCondition.selector`, compiled from the `DcbQuery` (+ optional `matcher`) | Narrow it with `condition.without(...streams)` |
+| `AppendCondition.failIfEventsMatch` | `CommitCondition.selector`, compiled from the `DcbQuery` (+ optional `matcher`) | Narrow it with `condition.without(...types)` |
 | `AppendCondition.after` | `CommitCondition.noneMatchAfter` | `store.length` at query time |
 | `append(events, condition)` | `commit(streamName, events, condition)` | See below |
 | `createProjection`, `composeProjections`, `buildDecisionModel` | Same names in `event-storage/projections` | |
@@ -357,7 +357,7 @@ const studentId = 'student/gfh3j';
 
 // $has performs an array-containment check on payload.tags without a function matcher.
 const { stream, condition } = store.query(
-    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    ['types/CourseCreated', 'types/CourseCapacityChanged', 'types/StudentCreated', 'types/StudentSubscribedToCourse'],
     {
         payload: { tags: { $has: courseId } }
     }
@@ -365,7 +365,7 @@ const { stream, condition } = store.query(
 
 // $hasAny matches events whose tags contain any of the listed values.
 const { stream, condition } = store.query(
-    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    ['types/CourseCreated', 'types/CourseCapacityChanged', 'types/StudentCreated', 'types/StudentSubscribedToCourse'],
     {
         payload: { tags: { $hasAny: [courseId, studentId] } }
     }
@@ -376,7 +376,7 @@ If the per-item logic really needs cross-field OR/AND semantics that the object 
 
 ```javascript
 const { stream, condition } = store.query(
-    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    ['types/CourseCreated', 'types/CourseCapacityChanged', 'types/StudentCreated', 'types/StudentSubscribedToCourse'],
     (event, meta) =>
         (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(event.type)
             && event.tags?.includes(courseId))
@@ -416,11 +416,11 @@ The compiled form of the earlier DcbQuery example is equivalent to:
 
 ```javascript
 const { stream, condition } = store.query([
-    ['tags/course/jdsj4', ['CourseCreated', 'CourseCapacityChanged']],
-    ['tags/student/gfh3j', ['StudentCreated']]
+    ['tags/course/jdsj4', ['types/CourseCreated', 'types/CourseCapacityChanged']],
+    ['tags/student/gfh3j', ['types/StudentCreated']]
 ]);
 ```
 
 Selection happens at the index level: only events at the intersection of the tag stream and the relevant type streams are yielded, without deserializing unrelated documents.
 
-You can pass the nested array form directly to `query()` when the query shape cannot be expressed as a flat list of `{ types, tags }` items, or when you want full control over which streams are joined. A flat `['TypeA', 'TypeB']` is a top-level OR join over those streams. `query()` also supports raw mode — see [Writing and Reading Events](reading-writing.md#raw-mode-ndjson-for-network-streaming).
+You can pass the nested array form directly to `query()` when the query shape cannot be expressed as a flat list of `{ types, tags }` items, or when you want full control over which streams are joined. A flat `['types/TypeA', 'types/TypeB']` is a top-level OR join over those streams. `query()` also supports raw mode — see [Writing and Reading Events](reading-writing.md#raw-mode-ndjson-for-network-streaming).
