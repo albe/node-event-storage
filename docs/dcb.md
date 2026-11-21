@@ -59,7 +59,7 @@ const store = new EventStore('my-store', {
 });
 ```
 
-`typeAccessor` creates one dedicated stream per distinct event-type value — `CourseCreated`, `StudentSubscribedToCourse`, etc. `tagsAccessor` creates one stream per tag value under `tags/{tag}` — `'course/jdsj4'` becomes stream `tags/course/jdsj4`. Tag values are recommended to use `/` as a hierarchy separator.
+`typeAccessor` creates one stream per event-type value under `types/{type}` — `CourseCreated` becomes stream `types/CourseCreated`. `tagsAccessor` creates one stream per tag value under `tags/{tag}` — `'course/jdsj4'` becomes stream `tags/course/jdsj4`. Tag values are recommended to use `/` as a hierarchy separator.
 
 Both property paths are automatically registered in the IndexMatcher discriminant table so stream routing on every write is O(1).
 
@@ -154,7 +154,7 @@ store.on('ready', () => {
 
     function handleRegisterCustomer(command) {
         const { stream, condition } = store.query(
-            ['CustomerRegistered'],
+            ['types/CustomerRegistered'],
             (event) => event.email === command.email
         );
 
@@ -190,7 +190,7 @@ const studentId = 'student/gfh3j';
 
 // $has performs an array-containment check on payload.tags without a function matcher.
 const { stream, condition } = store.query(
-    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    ['types/CourseCreated', 'types/CourseCapacityChanged', 'types/StudentCreated', 'types/StudentSubscribedToCourse'],
     {
         payload: { tags: { $has: courseId } }
     }
@@ -198,7 +198,7 @@ const { stream, condition } = store.query(
 
 // $hasAny matches events whose tags contain any of the listed values.
 const { stream, condition } = store.query(
-    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    ['types/CourseCreated', 'types/CourseCapacityChanged', 'types/StudentCreated', 'types/StudentSubscribedToCourse'],
     {
         payload: { tags: { $hasAny: [courseId, studentId] } }
     }
@@ -209,7 +209,7 @@ If the per-item logic really needs cross-field OR/AND semantics that the object 
 
 ```javascript
 const { stream, condition } = store.query(
-    ['CourseCreated', 'CourseCapacityChanged', 'StudentCreated', 'StudentSubscribedToCourse'],
+    ['types/CourseCreated', 'types/CourseCapacityChanged', 'types/StudentCreated', 'types/StudentSubscribedToCourse'],
     (event, meta) =>
         (['CourseCreated', 'CourseCapacityChanged', 'StudentSubscribedToCourse'].includes(event.type)
             && event.tags?.includes(courseId))
@@ -249,11 +249,11 @@ The compiled form of the earlier DcbQuery example is equivalent to:
 
 ```javascript
 const { stream, condition } = store.query([
-    ['tags/course/jdsj4', ['CourseCreated', 'CourseCapacityChanged']],
-    ['tags/student/gfh3j', ['StudentCreated']]
+    ['tags/course/jdsj4', ['types/CourseCreated', 'types/CourseCapacityChanged']],
+    ['tags/student/gfh3j', ['types/StudentCreated']]
 ]);
 ```
 
 Selection happens at the index level: only events at the intersection of the tag stream and the relevant type streams are yielded, without deserializing unrelated documents.
 
-You can pass the nested array form directly to `query()` when the query shape cannot be expressed as a flat list of `{ types, tags }` items, or when you want full control over which streams are joined. A flat `['TypeA', 'TypeB']` is a top-level OR join over those streams. `query()` also supports raw mode — see [Writing and Reading Events](reading-writing.md#raw-mode-ndjson-for-network-streaming).
+You can pass the nested array form directly to `query()` when the query shape cannot be expressed as a flat list of `{ types, tags }` items, or when you want full control over which streams are joined. A flat `['types/TypeA', 'types/TypeB']` is a top-level OR join over those streams. `query()` also supports raw mode — see [Writing and Reading Events](reading-writing.md#raw-mode-ndjson-for-network-streaming).

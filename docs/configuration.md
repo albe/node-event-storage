@@ -20,7 +20,7 @@ const eventstore = new EventStore('my-store', {
 | `storageDirectory` | `string` | `'./data'` | Directory for data files. |
 | `streamsDirectory` | `string` | `'{storageDirectory}/streams'` | Directory for stream index files. |
 | `readOnly` | `boolean` | `false` | Open the store in read-only mode. See [Multiple Processes](multi-process.md). |
-| `typeAccessor` | `string` | — | Dot-notation path to the event type. Maintains one stream per type value and enables `types` in `DcbQuery`. See [DCB](dcb.md). |
+| `typeAccessor` | `string` | — | Dot-notation path to the event type. Maintains one stream `types/<type>` per type value and enables `types` in `DcbQuery`. See [DCB](dcb.md). |
 | `tagsAccessor` | `string` | — | Dot-notation path to an array of tag strings. Maintains one stream `tags/<tag>` per tag value and enables `tags` in `DcbQuery`. |
 | `streamSources` | `Array<{ path, nameBuilder }>` | `[]` | Generic automatically maintained streams. See [Organizing Streams](organizing-streams.md#automatically-maintained-streams). |
 | `streamMetadata` | `object\|function` | — | Metadata stored once per stream at creation: a `{ streamName: metadata }` map or `(streamName) => object`. Used by [access control hooks](customization.md#access-control-hooks). Ignored when `storageConfig.metadata` is set. |

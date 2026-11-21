@@ -91,7 +91,7 @@ class EventStore extends events.EventEmitter {
      *   element produces its own stream. Non-string and empty values are skipped silently. The resulting
      *   stream names must satisfy the stream-name pattern. Each entry's `path` is automatically registered
      *   in `matcherProperties` for O(1) IndexMatcher routing.
-     * @param {string} [config.typeAccessor] Shorthand for a `streamSources` entry with `nameBuilder = v => v`.
+     * @param {string} [config.typeAccessor] Shorthand for a `streamSources` entry with `nameBuilder = v => \`types/${v}\``.
      *   Dot-notation path to the event type field (e.g. `'type'`). Enables type-based
      *   {@link EventStore#query} selectors and {@link DcbQuery} `types` items.
      * @param {string} [config.tagsAccessor] Shorthand for a `streamSources` entry with
@@ -117,7 +117,7 @@ class EventStore extends events.EventEmitter {
 
         if (config.typeAccessor) {
             assert(typeof config.typeAccessor === 'string', 'typeAccessor must be a dot-notation string path (e.g. \'type\').');
-            this.typeSource = buildStreamSource(config.typeAccessor, (v) => v);
+            this.typeSource = buildStreamSource(config.typeAccessor, (v) => `types/${v}`);
             this.streamSources.push(this.typeSource);
         }
 
@@ -183,6 +183,7 @@ class EventStore extends events.EventEmitter {
         this.mountStorage(storage, () => {
             if (storageConfig.readOnly !== true) {
                 this.checkUnfinishedCommits();
+                this.migrateTypeStreams();
             }
             this.emit('ready');
         });
@@ -201,6 +202,33 @@ class EventStore extends events.EventEmitter {
         this.streams._all = { index: this.storage.index };
         this.storage.on('index-created', this.registerStream.bind(this));
         this.storage.open(onOpened);
+    }
+
+    /**
+     * Move type streams created before type streams were namespaced (named like the type, e.g. `CourseCreated`)
+     * to `types/<type>`. A stream counts as a type stream when its stored matcher is exactly the `typeAccessor`
+     * matcher for its name. The entries are copied, so no document is read, and the old stream is deleted.
+     * @private
+     */
+    migrateTypeStreams() {
+        if (this.typeSource === null) return;
+        const typeMatcher = this.typeSource.matcherFn(undefined);
+        for (const streamName of Object.keys(this.streams)) {
+            if (streamName === '_all' || streamName.includes('/') || this.streams[streamName].closed) continue;
+            const stored = this.storage.secondaryIndexes['stream-' + streamName]?.matcher;
+            if (!stored || typeof stored !== 'object' || JSON.stringify(stored) !== JSON.stringify(typeMatcher(streamName))) continue;
+            const target = this.typeSource.nameBuilder(streamName);
+            if (!(target in this.streams)) {
+                this.createEventStream(target, stored, false);
+                const index = this.streams[target].index;
+                for (const entry of this.streams[streamName].index.all()) {
+                    index.add(entry);
+                }
+                index.flush();
+            }
+            this.deleteEventStream(streamName);
+            this.emit('stream-migrated', streamName, target);
+        }
     }
 
     /**
@@ -775,6 +803,7 @@ class EventStore extends events.EventEmitter {
         if (!(streamName in this.streams)) {
             return;
         }
+        this.storage.removeSecondaryIndex('stream-' + streamName);
         this.streams[streamName].index.destroy();
         delete this.streams[streamName];
         this.emit('stream-deleted', streamName);

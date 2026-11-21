@@ -317,6 +317,7 @@ Asynchronously scan all consumer state files.
 | `'stream-available'` | `streamName` | Emitted when an existing stream is discovered on disk. |
 | `'stream-deleted'` | `streamName` | Emitted after `deleteEventStream()`. |
 | `'stream-closed'` | `streamName` | Emitted after `closeEventStream()`. |
+| `'stream-migrated'` | `streamName`, `newName` | Emitted when a writer moves a type stream from a version before 1.5 to its `types/<type>` name on open. |
 | `'unfinished-commit'` | `lastEvent` | Emitted when a partial commit is detected on open. |
 
 ---
