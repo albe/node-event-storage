@@ -67,4 +67,21 @@ function compileDcbItem(item, resolveType, resolveTag) {
     return terms; // inner array = AND level
 }
 
-export {isDcbQuery, compileDcbQuery};
+/**
+ * Check in memory whether an event with the given type and tags matches a {@link DcbQuery}.
+ * Mirrors the semantics of {@link compileDcbQuery}: items are ORed, tags within an item are ANDed,
+ * types within an item are ORed, and a missing/empty `types` or `tags` constraint matches anything.
+ *
+ * @param {object} query A DcbQuery with an `items` array.
+ * @param {string|undefined} type The event type.
+ * @param {string[]} tags The event tags (empty array when the event has none).
+ * @returns {boolean}
+ */
+function matchesDcbQuery(query, type, tags) {
+    return query.items.some(item =>
+        (!item.types?.length || item.types.includes(type)) &&
+        (item.tags ?? []).every(tag => tags.includes(tag))
+    );
+}
+
+export {isDcbQuery, compileDcbQuery, matchesDcbQuery};

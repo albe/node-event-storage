@@ -12,11 +12,11 @@ This removes the need to route every command through a fixed aggregate, enabling
 
 Consider the classic example from Sara Pellegrini's talk: students subscribing to courses. The event `StudentSubscribedToCourse` concerns both a Student and a Course — in a traditional aggregate model it is unclear which aggregate owns it, and the Course aggregate keeps growing with every new event type:
 
-![Traditional aggregate model — the Course aggregate grows while StudentSubscribedToCourse is ambiguous between Course and Student](diagram-dcb-aggregate-ambiguity.svg)
+![Classic aggregates: Course and Student each enclose their own events, StudentSubscribedToCourse sits between them and belongs to neither](diagram-dcb-aggregate-ambiguity.svg)
 
-DCB resolves this by letting each command handler declare exactly which events it needs to be consistent with. Different commands define different boundaries that can freely overlap:
+DCB resolves this by letting each command handler declare exactly which events it needs to be consistent with. The boundary follows the decision instead of the entity, so it runs across the aggregates rather than along them. Different commands define different boundaries, which may overlap freely:
 
-![Multiple overlapping Dynamic Consistency Boundaries — Rename Course, Change Course Capacity, and the cross-aggregate Subscribe Student to Course boundary](diagram-dcb-boundary.svg)
+![Two overlapping dynamic consistency boundaries: Subscribe student to course runs across Course and Student and encloses CourseCreated, CourseCapacityChanged, StudentCreated and StudentSubscribedToCourse; Change course capacity encloses CourseCreated, CourseCapacityChanged and StudentSubscribedToCourse](diagram-dcb-boundary.svg)
 
 ---
 
@@ -175,6 +175,173 @@ store.on('ready', () => {
     handleRegisterCustomer({ customerId: 'cust-1', email: 'alice@example.com' });
 });
 ```
+
+---
+
+## Projections and Decision Models
+
+Instead of folding the query stream by hand (Step 3), you can describe the decision model as a set of small **projections** in the format used by [dcb.events](https://dcb.events/topics/projections/). The projection API lives in the `event-storage/projections` subpath.
+
+A projection declares its initial state, one pure reducer per event type, and the tags every handled event must carry. Its DCB query is derived from that: the handler keys become `types`, the `tagFilter` becomes `tags`.
+
+```javascript
+import { createProjection } from 'event-storage/projections';
+
+const CourseExists = (courseId) => createProjection({
+    initialState: false,
+    when: { CourseDefined: () => true },
+    tagFilter: [`course/${courseId}`]
+});
+
+const CourseCapacity = (courseId) => createProjection({
+    initialState: 0,
+    when: {
+        CourseDefined: (state, event) => event.capacity,
+        CourseCapacityChanged: (state, event) => event.newCapacity
+    },
+    tagFilter: [`course/${courseId}`]
+});
+
+const CourseSubscriptions = (courseId) => createProjection({
+    initialState: 0,
+    when: { StudentSubscribedToCourse: (state) => state + 1 },
+    tagFilter: [`course/${courseId}`]
+});
+
+CourseCapacity('c1').query;
+// { items: [{ types: ['CourseDefined', 'CourseCapacityChanged'], tags: ['course/c1'] }] }
+```
+
+Handlers receive `(state, event, metadata)`. `event` is the stored payload itself (not a `{ type, data, tags }` wrapper), and `metadata` is the storage metadata (e.g. `committedAt`). Handlers must be pure and return the new state.
+
+`buildDecisionModel(store, projections)` composes the projections, runs one `query()` for all of them, and applies each event only to the projections whose query it matches. It returns the composed state and the condition to pass to `commit()`:
+
+```javascript
+import { buildDecisionModel } from 'event-storage/projections';
+
+function subscribeStudent({ studentId, courseId, semesterId }) {
+    const { state, commitCondition } = buildDecisionModel(store, {
+        exists: CourseExists(courseId),
+        capacity: CourseCapacity(courseId),
+        subscriptions: CourseSubscriptions(courseId)
+    });
+
+    if (!state.exists) throw new Error('Unknown course');
+    if (state.subscriptions >= state.capacity) throw new Error('Course is full');
+
+    store.commit(`semester-${semesterId}`, [
+        { type: 'StudentSubscribedToCourse', courseId, studentId, tags: [`course/${courseId}`, `student/${studentId}`] }
+    ], commitCondition);
+}
+```
+
+- A single projection can be passed instead of a map; `state` is then that projection's state.
+- `composeProjections({ ... })` builds the composed projection without reading, e.g. for unit tests without a store.
+- Projections require `typeAccessor`, and `tagsAccessor` when any projection uses a `tagFilter`.
+- The returned `DecisionModel` is immutable. `model.update()` reads only the events committed since the model was built, applies them to its state and returns a new model with a new `commitCondition` (or the same model when nothing was committed).
+
+### Updating a decision model
+
+After an `OptimisticConcurrencyError`, update the model instead of rebuilding it and decide again:
+
+```javascript
+function subscribeStudent({ studentId, courseId, semesterId }, attempts = 3) {
+    let model = buildDecisionModel(store, { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) });
+    for (let attempt = 1; ; attempt++) {
+        if (model.state.subscriptions >= model.state.capacity) throw new Error('Course is full');
+        try {
+            store.commit(`semester-${semesterId}`, [
+                { type: 'StudentSubscribedToCourse', courseId, studentId, tags: [`course/${courseId}`, `student/${studentId}`] }
+            ], model.commitCondition);
+            return;
+        } catch (e) {
+            if (!(e instanceof OptimisticConcurrencyError) || attempt === attempts) throw e;
+            model = model.update(); // reads only the new events
+        }
+    }
+}
+```
+
+A process that handles many commands for the same boundary can also keep the model in memory and call `update()` before each decision. When nothing changed, `update()` costs one length comparison; otherwise it reads only the new matching events through the indexes.
+
+```javascript
+const courses = new Map(); // courseId -> DecisionModel
+
+function courseModel(courseId) {
+    const model = courses.get(courseId)?.update()
+        ?? buildDecisionModel(store, { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) });
+    courses.set(courseId, model);
+    return model;
+}
+```
+
+This stays correct because the conflict check runs at `commit()` against the store, not against the cached model: a stale model only leads to an `OptimisticConcurrencyError`, never to a wrong commit. Bounding the cache (e.g. an LRU over the ids) is up to the application, as one model is kept per id.
+
+### Finding the conflicting events
+
+After an `OptimisticConcurrencyError`, `model.since()` returns the events that block the commit: the events matching the model's condition that were committed after the model was built. It is an `EventStream`, so it can be iterated or read with `forEach((event, metadata) => ...)`.
+
+```javascript
+try {
+    store.commit(`semester-${semesterId}`, events, model.commitCondition);
+} catch (e) {
+    if (!(e instanceof OptimisticConcurrencyError)) throw e;
+    for (const event of model.since()) {
+        console.log('conflicting', event.type);
+    }
+}
+```
+
+`model.since(condition)` does the same for any other condition with the model's position, e.g. a narrowed one.
+
+### Narrowing the commit condition
+
+A decision may depend on fewer events than the decision model reads. A course's free seats count subscriptions and unsubscriptions, but a concurrent unsubscription cannot make a new subscription invalid. `commitCondition.without(...streams)` returns a new condition at the same position that ignores new events in those streams. With `typeAccessor`, a type stream is named like the event type, so you pass the types:
+
+![A commit condition can be a subset of the decision model: the model reads four event types, the condition narrowed with without('StudentUnsubscribedFromCourse') checks three; a concurrent unsubscription lets the commit succeed, a concurrent subscription conflicts](diagram-dcb-commit-condition.svg)
+
+```javascript
+const model = buildDecisionModel(store, {
+    capacity: CourseCapacity(courseId),
+    taken: createProjection({
+        initialState: 0,
+        when: {
+            StudentSubscribedToCourse: (state) => state + 1,
+            StudentUnsubscribedFromCourse: (state) => state - 1
+        },
+        tagFilter: [`course/${courseId}`]
+    })
+});
+
+if (model.state.taken >= model.state.capacity) throw new Error('Course is full');
+
+store.commit(`semester-${semesterId}`, [subscription], model.commitCondition.without('StudentUnsubscribedFromCourse'));
+```
+
+- The original condition is unchanged; `without()` accepts several streams or an array.
+- It works on the compiled selector and treats the named streams as empty: they are removed where alternatives are combined (OR), and a combination that requires one of them (AND, e.g. a tag plus a single type) is removed as a whole. The condition therefore only ever gets narrower, never wider.
+- A query item without `types` only reads tag streams, so excluding a type does not narrow it.
+- It works the same for conditions created from a selector, and for tag or custom streams (e.g. `without('tags/course/c1')`).
+- It throws when no stream would be left; commit without a condition instead.
+
+### Mapping to the dcb.events specification
+
+event-storage implements the semantics of the [DCB specification](https://dcb.events/specification/) but keeps its own API names. The translation:
+
+| dcb.events | event-storage | Notes |
+|---|---|---|
+| `Query` with `QueryItem { types, tags }` | `DcbQuery { items: [{ types, tags }] }` passed to `query()` | Same semantics: items OR, tags AND, types OR |
+| Sequence position | Global event number (1-based) | `store.length` is the position of the last event |
+| `read(query, { from })` | `query(dcbQuery, null, minRevision)` | Returns `{ stream, condition }` |
+| `AppendCondition` | `CommitCondition` returned by `query()` / `buildDecisionModel()` | Passed as the third argument of `commit()` |
+| `AppendCondition.failIfEventsMatch` | `CommitCondition.selector`, compiled from the `DcbQuery` (+ optional `matcher`) | Narrow it with `condition.without(...streams)` |
+| `AppendCondition.after` | `CommitCondition.noneMatchAfter` | `store.length` at query time |
+| `append(events, condition)` | `commit(streamName, events, condition)` | See below |
+| `createProjection`, `composeProjections`, `buildDecisionModel` | Same names in `event-storage/projections` | |
+| Projection `handlers` | `when` | `{ when: { CourseDefined: (state, event, metadata) => ... } }` |
+| Decision model `appendCondition` | `commitCondition` | Same object as `condition` from `query()` |
+
+`commit()` requires a stream name where the specification has none. The stream does not take part in the DCB conflict check, which runs only over the condition's query. It decides the **physical partition** the events are written to. Choosing a domain partition (e.g. `semester-${id}`) keeps related events together and lets reads stay selective, which is what makes the semester-bounded mode in the benchmark below the fastest.
 
 ---
 
