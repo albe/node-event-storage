@@ -37,8 +37,11 @@ nav:
     - Operations: operations.md
   - Guarantees and Internals:
     - Guarantees: guarantees.md
+    - Storage Format: storage-format.md
     - Implementation Architecture: architecture.md
     - Performance: performance.md
+    - Limitations: limitations.md
+    - Verify It Yourself: verify.md
   - Reference:
     - API Reference: api.md
     - Configuration: configuration.md
@@ -48,3 +51,4 @@ nav:
       - 0.x to 1.0: upgrading/1.0.md
       - To 1.2: upgrading/1.2.md
       - To 1.4: upgrading/1.4.md
+      - To 1.5: upgrading/1.5.md

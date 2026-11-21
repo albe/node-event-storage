@@ -29,7 +29,7 @@ eventstore.on('ready', () => {
 });
 ```
 
-On open, the store truncates an incomplete (torn) commit and, if the primary index lags behind the data files, calls `reindex()` automatically. `'ready'` fires only after the repair is complete. What can be lost in a crash is described in [Guarantees](guarantees.md#quantifying-the-data-loss-window).
+On open, the store truncates an incomplete (torn) commit and, if the primary index lags behind the data files, calls `reindex()` automatically. `'ready'` fires only after the repair is complete. What can be lost in a crash is described in [Guarantees](guarantees.md#what-can-be-lost-in-a-crash).
 
 > **Warning:** `LOCK_RECLAIM` bypasses the single-writer lock. Only use it when you are sure no other process is writing to the store.
 

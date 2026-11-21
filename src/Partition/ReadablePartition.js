@@ -364,22 +364,45 @@ class ReadablePartition extends events.EventEmitter {
         // Optimization if we are at an exact document boundary, where we can just read the document size
         let reader = this.prepareReadBufferBackwards(position);
         const block = reader.buffer.toString('ascii', reader.cursor - separatorSize, reader.cursor);
-        if (block === DOCUMENT_SEPARATOR) {
-            const dataSize = reader.buffer.readUInt32BE(reader.cursor - separatorSize - 4);
-            return position - this.documentWriteSize(dataSize);
+        const documentStart = block === DOCUMENT_SEPARATOR && this.documentStartBefore(position);
+        if (documentStart !== false) {
+            return documentStart;
         }
 
-        do {
+        while (position - separatorSize >= DOCUMENT_HEADER_SIZE + DOCUMENT_FOOTER_SIZE) {
             reader = this.prepareReadBufferBackwards(position - separatorSize);
 
             const bufferSeparatorPosition = reader.buffer.lastIndexOf(DOCUMENT_SEPARATOR, reader.cursor - separatorSize, 'ascii');
             if (bufferSeparatorPosition >= 0) {
                 position = this.readBufferPos + bufferSeparatorPosition + separatorSize;
-                break;
+                // The separator bytes can also occur inside a document header, e.g. in the timestamp
+                if (this.documentStartBefore(position) !== false) {
+                    return position;
+                }
+            } else {
+                // Continue so that a separator crossing the start of the buffer is found as well
+                position = this.readBufferPos + 2 * separatorSize;
             }
-            position -= this.readBufferLength;
-        } while (position > 0);
-        return Math.max(0, position);
+        }
+        return 0;
+    }
+
+    /**
+     * Verify that a document ends at the given position and return its start.
+     *
+     * @private
+     * @param {number} documentEnd The position right after a document separator.
+     * @returns {number|boolean} The start position of the document or false if no document ends at that position.
+     */
+    documentStartBefore(documentEnd) {
+        if (documentEnd % DOCUMENT_ALIGNMENT !== 0 || documentEnd < DOCUMENT_HEADER_SIZE + DOCUMENT_FOOTER_SIZE) {
+            return false;
+        }
+        const footer = this.prepareReadBufferBackwards(documentEnd);
+        const dataSize = footer.buffer.readUInt32BE(footer.cursor - DOCUMENT_FOOTER_SIZE);
+        const documentStart = documentEnd - this.documentWriteSize(dataSize);
+        const header = documentStart >= 0 && this.prepareReadBuffer(documentStart);
+        return header?.buffer?.readUInt32BE(header.cursor) === dataSize ? documentStart : false;
     }
 
     /**

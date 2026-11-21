@@ -766,6 +766,57 @@ describe('Partition', function() {
 
     });
 
+    describe('findDocumentPositionBefore', function() {
+
+        function expectDocumentStarts(reader, starts, size) {
+            for (let position = 1; position <= size; position++) {
+                const expected = starts.filter(start => start < position - (position % 4) || (position % 4 === 0 && start < position)).pop();
+                expect(reader.findDocumentPositionBefore(position)).to.be(expected ?? false);
+            }
+        }
+
+        it('ignores separator bytes inside the timestamp of a document header', function() {
+            // A timestamp whose big-endian bytes contain the document separator 00 00 1E 0A at a non-aligned offset
+            const time = Buffer.from([0x40, 0x10, 0x00, 0x00, 0x1E, 0x0A, 0x00, 0x00]).readDoubleBE(0);
+            class SeparatorClock { time() { return time; } }
+            partition = new Partition('.part', { dataDirectory, readBufferSize: 4*1024, clock: SeparatorClock });
+            partition.open();
+            const starts = [];
+            for (let i = 1; i <= 5; i++) starts.push(partition.write('doc-' + i, i));
+            partition.flush();
+
+            const reader = createReader();
+            reader.open();
+            expectDocumentStarts(reader, starts, reader.size);
+        });
+
+        it('finds separators that cross the start of the read buffer', function() {
+            partition.open();
+            const starts = [];
+            for (let i = 1; i <= 10; i++) starts.push(partition.write('x'.repeat(13 * i), i));
+            partition.flush();
+
+            for (const readBufferSize of [61, 64, 67, 100]) {
+                const reader = createReader({ readBufferSize });
+                reader.open();
+                expectDocumentStarts(reader, starts, reader.size);
+            }
+        });
+
+        it('ignores separator bytes in the sequence number of a document header', function() {
+            // Sequence number 7690 is 00 00 1E 0A in big-endian, aligned like a real separator
+            partition.open();
+            const starts = [];
+            for (let i = 7688; i <= 7692; i++) starts.push(partition.write('doc-' + i, i));
+            partition.flush();
+
+            const reader = createReader();
+            reader.open();
+            expectDocumentStarts(reader, starts, reader.size);
+        });
+
+    });
+
     describe('findDocument', function() {
 
         it('returns null for an empty partition', function() {
