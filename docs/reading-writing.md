@@ -152,11 +152,11 @@ Every event carries storage-level metadata alongside the event payload. Access i
 stream.forEach((event, metadata, streamName) => {
     console.log(metadata);
     // {
-    //   commitId: '…',         unique ID for the whole commit
+    //   commitId: 17,          global position (0-based) at which the commit started
     //   committedAt: 1700000000000,  ms timestamp
-    //   commitVersion: 1,      sequence number within the commit (1-based)
+    //   commitVersion: 1,      position within the commit (0-based)
     //   commitSize: 2,         total events in the commit
-    //   streamVersion: 5       version of this event within the stream
+    //   streamVersion: 5       position of this event within the stream (0-based)
     // }
 });
 ```

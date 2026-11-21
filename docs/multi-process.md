@@ -37,4 +37,4 @@ Read-only instances discover new events through recursive `fs.watch`. This is su
 
 ## Stale locks
 
-If the writer process crashed, its lock directory remains. Open the next writer with `storageConfig: { lock: LOCK_RECLAIM }` to take over the lock and repair the store; see [Operations](operations.md#crash-recovery). Only do this when you are sure the previous writer is no longer running.
+If the writer process crashed, its lock directory remains. The next writer on the same machine reclaims it automatically and repairs the store, because the lock records which process held it. A lock from another host or container is not reclaimed automatically; see [Operations](operations.md#crash-recovery).

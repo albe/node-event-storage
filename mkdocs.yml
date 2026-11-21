@@ -37,8 +37,11 @@ nav:
     - Operations: operations.md
   - Guarantees and Internals:
     - Guarantees: guarantees.md
+    - Storage Format: storage-format.md
     - Implementation Architecture: architecture.md
     - Performance: performance.md
+    - Limitations: limitations.md
+    - Verify It Yourself: verify.md
   - Reference:
     - API Reference: api.md
     - Configuration: configuration.md

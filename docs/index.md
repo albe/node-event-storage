@@ -19,7 +19,7 @@ npm install event-storage
 
 **New to event sourcing?** Read [Event Sourcing in 5 Minutes](event-sourcing.md) for the core ideas and good references, then [When to Use node-event-storage](when-to-use.md) and the [Getting Started](getting-started.md) tutorial.
 
-**Evaluating the implementation?** Start with [Guarantees](guarantees.md) (atomicity, consistency, isolation, durability, crash recovery), then [Implementation Architecture](architecture.md) and [Performance](performance.md). Each page explains the mechanism behind its claims.
+**Evaluating the implementation?** Start with [Guarantees](guarantees.md) (atomicity, concurrency control, isolation, durability, crash recovery), then [Storage Format](storage-format.md), [Limitations](limitations.md) and [Verify It Yourself](verify.md). Every guarantee names the code and tests that back it.
 
 ---
 
@@ -44,5 +44,5 @@ npm install event-storage
 |---------|-------|
 | Getting started | [Event Sourcing in 5 Minutes](event-sourcing.md), [When to Use](when-to-use.md), [Getting Started](getting-started.md) |
 | Guides | [Writing and Reading Events](reading-writing.md), [Organizing Streams](organizing-streams.md), [Matchers](matchers.md), [DCB](dcb.md), [Consumers](consumers.md), [Multiple Processes](multi-process.md), [Customization](customization.md), [Operations](operations.md) |
-| Guarantees and internals | [Guarantees](guarantees.md), [Implementation Architecture](architecture.md), [Performance](performance.md) |
+| Guarantees and internals | [Guarantees](guarantees.md), [Storage Format](storage-format.md), [Implementation Architecture](architecture.md), [Performance](performance.md), [Limitations](limitations.md), [Verify It Yourself](verify.md) |
 | Reference | [API](api.md), [Configuration](configuration.md), [Changelog](changelog.md), [Upgrading](upgrading/index.md) |
