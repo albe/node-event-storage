@@ -1,8 +1,9 @@
 import fs from 'fs';
-import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC } from './ReadableIndex.js';
+import path from 'path';
+import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC, CHUNK_CAPACITY, createChunk } from './ReadableIndex.js';
 import { assert, assertEqual } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
-import { ensureDirectory } from '../utils/fsUtil.js';
+import { ensureDirectory, syncDirectory } from '../utils/fsUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 /**
@@ -23,7 +24,7 @@ class WritableIndex extends ReadableIndex {
      * @param {object} [options] An object with additional index options.
      * @param {EntryInterface} [options.EntryClass] The entry class to use for index items. Must implement the EntryInterface methods.
      * @param {string} [options.dataDirectory] The directory to store the index file in. Default '.'.
-     * @param {number} [options.writeBufferSize] The number of bytes to use for the write buffer. Default 4096.
+     * @param {number} [options.writeBufferSize] The amount of bytes of unwritten entries after which they are flushed. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
      */
@@ -47,11 +48,13 @@ class WritableIndex extends ReadableIndex {
         ensureDirectory(options.dataDirectory);
 
         this.fileMode = 'a+';
-        this.writeBuffer = Buffer.allocUnsafe(options.writeBufferSize >>> 0); // jshint ignore:line
-        this.writeBufferCursor = 0;
+        // New entries are only written into the in-memory entries. Those behind `flushedLength` are the write buffer.
+        this.writeBufferSize = options.writeBufferSize >>> 0; // jshint ignore:line
+        this.flushedLength = 0;
         this.flushCallbacks = [];
         this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
         this.syncOnFlush = !!options.syncOnFlush;
+        this.syncNewFile = this.syncOnFlush || options.syncInterval > 0;
     }
 
     /**
@@ -92,9 +95,10 @@ class WritableIndex extends ReadableIndex {
         if (this.opened) {
             return false;
         }
-        this.writeBufferCursor = 0;
         this.flushCallbacks = [];
-        return super.open();
+        const opened = super.open();
+        this.flushedLength = this.length;
+        return opened;
     }
 
     /**
@@ -110,6 +114,9 @@ class WritableIndex extends ReadableIndex {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeSync(this.getFileHandle(), metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = metadataBuffer.byteLength;
+        if (this.syncNewFile) {
+            syncDirectory(path.dirname(this.fileName));
+        }
     }
 
     /**
@@ -118,11 +125,22 @@ class WritableIndex extends ReadableIndex {
      * @param {number} fd
      */
     onBeforeClose(fd) {
-        if (!this.writeBuffer) {
+        if (!this.flushCallbacks) {
             return;
         }
         this.flush();
         fs.fdatasyncSync(fd);
+    }
+
+    /**
+     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it
+     * since the last write, so no buffered entry is lost.
+     *
+     * @api
+     */
+    close() {
+        this.flush();
+        super.close();
     }
 
     /**
@@ -147,21 +165,38 @@ class WritableIndex extends ReadableIndex {
             clearTimeout(this.flushTimeout);
             this.flushTimeout = null;
         }
-        if (this.writeBufferCursor === 0) {
+        if (this.flushedLength === this.length) {
             return false;
         }
 
         const fd = this.getFileHandle();
-        fs.writeSync(fd, this.writeBuffer, 0, this.writeBufferCursor);
+        this.writeUnflushedEntries(fd);
         if (this.syncOnFlush) {
             fs.fsyncSync(fd);
         }
 
-        this.writeBufferCursor = 0;
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
         for (let i = 0; i < callbacks.length; i += 2) callbacks[i](callbacks[i + 1]);
         return true;
+    }
+
+    /**
+     * Write the in-memory entries that are not in the file yet. They are already in the binary file format,
+     * so this writes them directly from memory, one write per chunk they span.
+     *
+     * @private
+     * @param {number} fd
+     */
+    writeUnflushedEntries(fd) {
+        const entrySize = this.EntryClass.size;
+        while (this.flushedLength < this.length) {
+            const chunkIndex = Math.floor(this.flushedLength / CHUNK_CAPACITY);
+            const from = this.flushedLength - chunkIndex * CHUNK_CAPACITY;
+            const until = Math.min(CHUNK_CAPACITY, this.length - chunkIndex * CHUNK_CAPACITY);
+            fs.writeSync(fd, this.chunks[chunkIndex].buffer, from * entrySize, (until - from) * entrySize);
+            this.flushedLength += until - from;
+        }
     }
 
     /**
@@ -190,25 +225,40 @@ class WritableIndex extends ReadableIndex {
         assertEqual(entry.constructor.name, this.EntryClass.name, `Wrong entry object.`);
         assertEqual(entry.constructor.size, this.EntryClass.size, `Invalid entry size.`);
 
-        const dataLen = this.data.length;
-        assert(dataLen === 0 || this.data.at(-1).number < entry.number, 'Consistency error. Tried to add an index that should come before existing last entry.');
+        const dataLen = this.length;
+        assert(dataLen === 0 || this.numberAt(dataLen - 1) < entry.number, 'Consistency error. Tried to add an index that should come before existing last entry.');
 
-        if (this.readUntil === dataLen - 1) {
-            this.readUntil++;
-        }
-        this.data[dataLen] = entry;
-
-        if (this.writeBufferCursor === 0) {
+        if (this.flushedLength === dataLen) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
         }
 
-        this.writeBufferCursor += entry.toBuffer(this.writeBuffer, this.writeBufferCursor);
+        this.appendEntry(entry);
         this.onFlush(callback, this.length);
-        if (this.writeBufferCursor >= this.writeBuffer.byteLength) {
+        if ((this.length - this.flushedLength) * this.EntryClass.size >= this.writeBufferSize) {
             this.flush();
         }
 
         return this.length;
+    }
+
+    /**
+     * Write the entry into memory behind the last entry. It reaches the file with the next flush.
+     *
+     * @private
+     * @param {EntryInterface} entry
+     */
+    appendEntry(entry) {
+        const chunkIndex = Math.floor(this.length / CHUNK_CAPACITY);
+        const position = this.length - chunkIndex * CHUNK_CAPACITY;
+        let chunk = position > 0 ? this.chunkFor(this.length - 1) : createChunk(this.EntryClass.size, 1);
+        assert(chunk, 'Can not append to the index, because its last entries could not be read.');
+        if (chunk.capacity === position) {
+            chunk = createChunk(this.EntryClass.size, position + 1, chunk);
+        }
+        this.chunks[chunkIndex] = chunk;
+        entry.toBuffer(chunk.buffer, position * this.EntryClass.size);
+        chunk.filled = position + 1;
+        this.setLength(this.length + 1);
     }
 
     /**
@@ -232,8 +282,8 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
-        this.data.splice(after);
-        this.readUntil = Math.min(this.readUntil, after);
+        this.setLength(after);
+        this.flushedLength = Math.min(this.flushedLength, after);
     }
 }
 

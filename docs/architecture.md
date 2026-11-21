@@ -19,7 +19,7 @@ This page describes the technical implementation and architecture of the `node-e
 | `IndexMatcher.js` | Discriminant lookup table that routes each written document to the matching secondary indexes in O(1) |
 | `FileHandlePool.js` | LRU pool of open file descriptors shared by partitions (bounded by `maxOpenPartitions`) |
 | `utils/util.js` | Shared helpers: assertions, HMAC, matcher serialization, alignment maths |
-| `utils/indexUtil.js` | Set operations on index-entry ranges (`union`, `intersect`) and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
+| `utils/indexUtil.js` | Two-way lazy `union` and `intersect` over `index.range()` iterators and selector-tree normalization (`normalizeSelector`) used by `JoinEventStream` |
 | `utils/apiHelpers.js` | Argument normalization helpers shared across the public API (revision clamping, commit overloads, predicate/raw shorthand) |
 | `utils/metadataUtil.js` | Object matcher evaluation, raw-buffer matcher compilation, and HMAC metadata helpers |
 | `utils/fsUtil.js` | File-system utilities: path resolution, directory creation, recursive file scanning |
@@ -32,6 +32,7 @@ This page describes the technical implementation and architecture of the `node-e
 | `Storage/WritableStorage.js` | Append-only storage with write buffering and a global primary index |
 | `Storage/ReadableStorage.js` | Base class for read access: sequential scan, dirty reads, HMAC verification |
 | `Storage/ReadOnlyStorage.js` | Read-only storage that reacts to new files written by a sibling writer process |
+| `Storage/StorageLock.js` | Single-writer lock directory with an owner file (pid, host, pid namespace); reclaims the lock of a crashed writer |
 | `Partition/WritablePartition.js` | Append-only single-file partition with a write buffer and torn-write detection |
 | `Partition/ReadablePartition.js` | Buffered reading, document header/footer parsing, and metadata deserialization |
 | `Partition/ReadOnlyPartition.js` | Read-only partition that uses `WatchesFile` to detect appended data |
@@ -115,7 +116,7 @@ graph TD
 
 ### JoinEventStream
 
-`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved to sorted index-entry ranges using `union` and `intersect` before any document is read. Used by `EventStore.fromStreams()` and `EventStore.query()` for multi-stream queries and DCB context reads.
+`JoinEventStream` evaluates a selector tree over stream indexes and produces one globally-ordered virtual stream. Selector levels alternate by depth (`OR` at depth 0, `AND` at depth 1, repeating). The selector is normalized and optimized at construction time via `utils/indexUtil.js` (`normalizeSelector`), then resolved into one lazy range: each stream index becomes an `index.range()` iterator over its revision-bounded entries, and the ranges of a selector level are combined pairwise with `union` or `intersect`. A range fills one reused entry object, and `intersect` lets the lagging side skip ahead to the other side's number (binary search), so no entry arrays or per-entry objects are built and the first document is read as soon as the first match is found. Used by `EventStore.fromStreams()` and `EventStore.query()` for multi-stream queries and DCB context reads.
 
 ### Consumer
 
@@ -149,7 +150,7 @@ graph TD
 
 | Class | Purpose |
 |-------|---------|
-| `ReadableIndex` | Loads a binary position-list file into memory; provides O(log n) `find()` and O(1) range iteration; verifies persisted matcher HMACs. |
+| `ReadableIndex` | Reads a binary position-list file lazily into memory as chunks of raw entry bytes (about 16 bytes per entry instead of one object each); provides O(log n) `find()` without creating entry objects and lazy `range()` iteration; verifies persisted matcher HMACs. |
 | `WritableIndex` | Extends `ReadableIndex`; appends new `IndexEntry` records on every commit and detects divergence between the index and its data partition on open. |
 | `ReadOnlyIndex` | Extends `ReadableIndex`; uses `WatchesFile` to pick up entries appended by a remote writer and emits an `append` event for `ReadOnlyStorage`. |
 
@@ -217,7 +218,7 @@ The global order of events is defined by the sequence number assigned by the sin
 
 ### Crash Recovery via Torn-Write Detection
 
-When a process is killed mid-commit, two things can be incomplete: the last document in a partition file (a *torn write*), and the last commit (only some of its events were written). A torn write is detected because every document repeats its size in a footer, so a document whose announced size extends beyond the end of the file is incomplete. An unfinished commit is detected by comparing `commitVersion` and `commitSize` of the last event in the log, and rolled back by `EventStore` on every writer open. When the store is opened with `LOCK_RECLAIM` after a crash, `WritableStorage` finds the torn-write boundary, lets each `WritablePartition` truncate to its last complete document (keeping the removed bytes in a `.branch` file), truncates the indexes accordingly and calls `reindex()` for index entries that lag behind the data, all before `'ready'` is emitted. This gives bounded, predictable recovery without manual intervention.
+When a process is killed mid-commit, two things can be incomplete: the last document in a partition file (a *torn write*), and the last commit (only some of its events were written). A torn write is detected because every document repeats its size in a footer, so a document whose announced size extends beyond the end of the file is incomplete. An unfinished commit is detected by comparing `commitVersion` and `commitSize` of the last event in the log, and rolled back by `EventStore` on every writer open. When `WritableStorage` reclaims the lock of a crashed writer (automatically when the owner process is gone, or forced with `LOCK_RECLAIM`), it finds the torn-write boundary, lets each `WritablePartition` truncate to its last complete document (keeping the removed bytes in a `.branch` file), truncates the indexes accordingly and calls `reindex()` for index entries that lag behind the data, all before `'ready'` is emitted. This gives bounded, predictable recovery without manual intervention.
 
 ### Three-Tier Variant Design (Writable / Readable / ReadOnly)
 

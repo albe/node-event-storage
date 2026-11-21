@@ -42,6 +42,8 @@ export class CommitCondition {
     matcher: EventMatcher | null;
     raw: boolean;
     noneMatchAfter: number;
+    /** A narrowed condition at the same position that ignores new events in the given streams (e.g. event types). */
+    without(...streams: Array<string | string[]>): CommitCondition;
 }
 
 export class OptimisticConcurrencyError extends Error {}
@@ -78,6 +80,7 @@ export class EventStream extends Readable {
         options: { concurrency?: number; signal?: AbortSignal }
     ): Readable;
     next(): any | false;
+    [Symbol.iterator](): Iterator<any>;
 }
 
 export class Consumer extends Readable {
@@ -96,6 +99,7 @@ export class Storage extends EventEmitter {
     static StorageLockedError: typeof StorageLockedError;
     static LOCK_THROW: number;
     static LOCK_RECLAIM: number;
+    static LOCK_AUTO: number;
 
     initialized: boolean | null;
     length: number;
@@ -158,6 +162,7 @@ export class EventStore extends EventEmitter {
 
 export const LOCK_THROW: number;
 export const LOCK_RECLAIM: number;
+export const LOCK_AUTO: number;
 
 export function matches(document: Record<string, unknown>, matcher: Record<string, unknown>): boolean;
 export function buildRawBufferMatcher(matcher: Record<string, unknown>): (buffer: Buffer, startOffset?: number) => boolean;

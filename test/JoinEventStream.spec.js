@@ -128,6 +128,13 @@ describe('JoinEventStream', function() {
         expect(fetchedEvents).to.eql(Array.from(events).reverse());
     });
 
+    it('treats empty selector groups as empty streams', function(){
+        stream = new JoinEventStream('foo-bar', ['foo', [], 'bar'], eventstore);
+        expect(stream.events).to.eql(events);
+        stream = new JoinEventStream('foo-bar', [['foo', []]], eventstore);
+        expect(stream.events).to.eql([]);
+    });
+
     it('is empty when stream does not exist', function(){
         stream = new JoinEventStream('foo-bar', ['baz'], eventstore);
         expect(stream.events).to.be.eql([]);

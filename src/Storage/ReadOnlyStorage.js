@@ -27,7 +27,7 @@ class ReadOnlyStorage extends ReadableStorage {
         if (!filename) {
             return true;
         }
-        return !filename.endsWith('.branch') && (filename === this.storageFile || filename.substring(0, this.storageFile.length + 1) === this.storageFile + '.');
+        return !filename.endsWith('.branch') && !filename.endsWith('.lock') && (filename === this.storageFile || filename.substring(0, this.storageFile.length + 1) === this.storageFile + '.');
     }
 
     /**
@@ -124,12 +124,7 @@ class ReadOnlyStorage extends ReadableStorage {
                 // If the watcher has been removed, this means this storage was closed and we don't want to handle events any more
                 return;
             }
-            const entries = index.range(prevLength + 1, newLength);
-            /* c8 ignore next 3 */
-            if (entries === false) {
-                return;
-            }
-            this.processAppendedEntries(index, indexShortName, entries);
+            this.processAppendedEntries(index, indexShortName, prevLength + 1, newLength);
         });
         index.on('truncate', (prevLength, newLength) => {
             if (index === this.index) {
@@ -149,15 +144,19 @@ class ReadOnlyStorage extends ReadableStorage {
      * @private
      * @param {ReadableIndex} index
      * @param {string} indexShortName
-     * @param {IndexEntry[]} entries
-     * @param {number} [startIndex] The entry offset to resume from on a retry.
+     * @param {number} from The 1-based index position of the first appended entry.
+     * @param {number} until The 1-based index position of the last appended entry.
      */
-    processAppendedEntries(index, indexShortName, entries, startIndex = 0) {
-        for (let i = startIndex; i < entries.length; i++) {
-            const entry = entries[i];
+    processAppendedEntries(index, indexShortName, from, until) {
+        for (let position = from; position <= until; position++) {
+            const entry = index.get(position);
+            /* c8 ignore next 3 */
+            if (entry === false) {
+                return;
+            }
             if (!(entry.partition in this.partitions)) {
                 this.scheduleScan(() => {
-                    this.processAppendedEntries(index, indexShortName, entries, i);
+                    this.processAppendedEntries(index, indexShortName, position, until);
                 });
                 return;
             }

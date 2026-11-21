@@ -47,15 +47,29 @@ describe('Consumer', function() {
     it('cleans up failed write left-overs', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();
-        fs.writeFileSync(consumer.fileName + '.1', 'failed write!');
+        fs.writeFileSync(consumer.fileName + '.1.tmp', 'failed write!');
         consumer = new Consumer(storage, 'foobar', 'consumer1');
-        expect(fs.existsSync(consumer.fileName + '.1')).to.be(false);
+        expect(fs.existsSync(consumer.fileName + '.1.tmp')).to.be(false);
+    });
+
+    it('does not remove state files of consumers whose name extends this one', function() {
+        const other = new Consumer(storage, 'foobar', 'consumer1.archive');
+        other.stop();
+        fs.writeFileSync(other.fileName, 'state of another consumer');
+        const otherStream = new Consumer(storage, 'foobar', 'consumer1.2');
+        otherStream.stop();
+        fs.writeFileSync(otherStream.fileName, 'state of another consumer');
+
+        consumer = new Consumer(storage, 'foobar', 'consumer1');
+
+        expect(fs.existsSync(other.fileName)).to.be(true);
+        expect(fs.existsSync(otherStream.fileName)).to.be(true);
     });
 
     it('rethrows cleanup unlink errors other than ENOENT', function() {
         consumer = new Consumer(storage, 'foobar', 'consumer1');
         consumer.stop();
-        const failedWriteFile = consumer.fileName + '.1';
+        const failedWriteFile = consumer.fileName + '.1.tmp';
         fs.writeFileSync(failedWriteFile, 'failed write!');
 
         const originalUnlinkSync = fsNative.unlinkSync;
@@ -197,6 +211,19 @@ describe('Consumer', function() {
                 });
             }
         });
+    });
+
+    it('restores positions above 2^31 after restart', function(done){
+        consumer = new Consumer(storage, 'foobar', 'consumer1');
+        consumer.stop();
+        consumer.position = 2 ** 31 + 5;
+        consumer.once('persisted', () => {
+            const restarted = new Consumer(storage, 'foobar', 'consumer1');
+            restarted.stop();
+            expect(restarted.position).to.be(2 ** 31 + 5);
+            done();
+        });
+        consumer.persist();
     });
 
     it('continues from last position after restart', function(done){
@@ -350,7 +377,7 @@ describe('Consumer', function() {
         consumer.position = 1;
         consumer.state = Object.freeze({ foo: 1 });
 
-        const tmpFile = consumer.fileName + '.1';
+        const tmpFile = consumer.fileName + '.1.tmp';
         const originalWriteFileSync = fsNative.writeFileSync;
         fsNative.writeFileSync = () => {
             const error = new Error('disk full');
@@ -376,6 +403,23 @@ describe('Consumer', function() {
             consumer.once('persisted', () => {
                 consumer = new Consumer(storage, 'foobar', 'consumer-1');
                 expect(consumer.state.foo).to.be(1);
+                done();
+            });
+            consumer.stop();
+        });
+
+        storage.write({ type: 'Foobar', id: 1 });
+    });
+
+    it('restores state with multi-byte characters after reopening', function(done) {
+        const state = { name: 'Müller', city: 'Zürich', note: '日本語 🚀' };
+        consumer = new Consumer(storage, 'foobar', 'consumer-1');
+        consumer.on('data', () => {
+            consumer.setState(state);
+            consumer.once('persisted', () => {
+                consumer = new Consumer(storage, 'foobar', 'consumer-1');
+                expect(consumer.state).to.eql(state);
+                expect(consumer.position).to.be(1);
                 done();
             });
             consumer.stop();

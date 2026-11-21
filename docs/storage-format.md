@@ -11,6 +11,7 @@ For a store named `eventstore` with default settings (`storageDirectory: './data
 ```
 data/
   eventstore.lock/                      lock directory, exists while a writer is open
+    owner.lock                          JSON: pid, hostname, pidNamespace, lockedAt of the writer
   eventstore.order-42                   partition: all events of stream "order-42"
   eventstore.user/                      partition directory for hierarchical names ("user/1", "user/2")
     1
@@ -28,7 +29,7 @@ data/
 
 - **Partitions** hold the events. `EventStore` writes each stream into its own partition, named `<storeName>.<streamName>`. A custom `partitioner` changes this mapping.
 - **Indexes** hold positions only. Every stream, derived stream, type and tag stream is one index file. The primary index covers all events.
-- **The lock** is a directory, because `mkdir` either succeeds or fails atomically on all supported platforms.
+- **The lock** is a directory, because `mkdir` either succeeds or fails atomically on all supported platforms. The `owner.lock` file inside lets the next writer decide whether the lock belongs to a process that is gone. While a writer reclaims a stale lock, it creates a `reclaim.lock` directory inside it, so that only one writer removes it.
 
 ## File header
 
@@ -85,7 +86,7 @@ Entries are sorted by sequence number, so a lookup by revision is an array acces
 
 ## Consumer files
 
-A consumer file contains the position (int32 LE, 4 bytes) followed by the consumer state as JSON. It is replaced atomically by writing a temporary file `<name>.<position>` and renaming it.
+A consumer file contains the position (uint32 LE, 4 bytes) followed by the consumer state as UTF-8 JSON. It is replaced atomically by writing a temporary file `<name>.<position>.tmp` and renaming it.
 
 ## Inspecting a store
 

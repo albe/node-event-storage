@@ -794,6 +794,17 @@ describe('EventStore', function() {
             });
         });
 
+        it('filters by $startsWith in object and raw mode', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('orders', [{ type: 'OrderPlaced' }, { type: 'PaymentReceived' }, { type: 'OrderShipped' }], () => {
+                const matcher = { payload: { type: { $startsWith: 'Order' } } };
+                expect(eventstore.getAllEvents(1, -1, matcher).events.map(event => event.type)).to.eql(['OrderPlaced', 'OrderShipped']);
+                const chunks = [...eventstore.getAllEvents(1, -1, matcher, true)];
+                expect(chunks.map(chunk => JSON.parse(chunk.toString('utf8')).payload.type)).to.eql(['OrderPlaced', 'OrderShipped']);
+                done();
+            });
+        });
+
         it('activates raw mode via predicate shorthand (true as 3rd arg)', function(done) {
             eventstore = new EventStore({ storageDirectory });
             eventstore.commit('foo', [{ type: 'A' }], () => {
@@ -1444,6 +1455,29 @@ describe('EventStore', function() {
     });
 
     describe('getConsumer', function() {
+
+        it('persists consumers of hierarchical streams in a subdirectory', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.on('ready', () => {
+                eventstore.commit('tags/course/c1', { n: 1 });
+                const consumer = eventstore.getConsumer('tags/course/c1', 'course-reader', { n: 0 });
+                consumer.on('data', () => consumer.setState({ n: 1 }));
+                consumer.once('persisted', () => {
+                    expect(fs.existsSync(consumer.fileName)).to.be(true);
+                    done();
+                });
+            });
+        });
+
+        it('rejects consumer identifiers that escape the consumers directory', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo', { n: 1 });
+            expect(() => eventstore.getConsumer('foo', '../../../outside')).to.throwError(/outside of the consumers directory/);
+        });
 
         it('returns a Consumer instance', function() {
             eventstore = new EventStore({

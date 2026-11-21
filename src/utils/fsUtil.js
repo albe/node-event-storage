@@ -15,6 +15,59 @@ function resolvePath(fileOrDirectory, ...directories) {
 }
 
 /**
+ * Unlink a file, ignoring the error if it does not exist.
+ * @param {string} fileName
+ * @throws {Error} For any error other than ENOENT.
+ */
+function safeUnlink(fileName) {
+    try {
+        fs.unlinkSync(fileName);
+    } catch (e) {
+        if (e.code !== 'ENOENT') {
+            throw e;
+        }
+    }
+}
+
+/**
+ * Replace a file atomically: write to a temporary file, then rename it over the target.
+ * A failed or interrupted write never leaves a partially written target file behind.
+ *
+ * @param {string} fileName Target file.
+ * @param {string|Buffer} data
+ * @param {string} [tmpFileName] Temporary file to write first. Defaults to `fileName + '.tmp'`.
+ * @throws {Error} When writing or renaming fails; the temporary file is removed in that case.
+ */
+function writeFileAtomic(fileName, data, tmpFileName = fileName + '.tmp') {
+    try {
+        fs.writeFileSync(tmpFileName, data);
+        fs.renameSync(tmpFileName, fileName);
+    } catch (e) {
+        safeUnlink(tmpFileName);
+        throw e;
+    }
+}
+
+/**
+ * A new file is only guaranteed to survive a power loss once its directory entry is synced as well.
+ * Platforms that can not open a directory for syncing (Windows) are skipped silently.
+ *
+ * @param {string} dirName
+ */
+function syncDirectory(dirName) {
+    let fd;
+    try {
+        fd = fs.openSync(dirName, 'r');
+        fs.fsyncSync(fd);
+    } catch (e) {
+    } finally {
+        if (fd !== undefined) {
+            fs.closeSync(fd);
+        }
+    }
+}
+
+/**
  * Ensure that the given directory exists.
  * @param {string} dirName Target directory.
  * @returns {boolean} True when the directory already existed.
@@ -150,5 +203,8 @@ export {
     resolvePath,
     ensureDirectory,
     scanForFiles,
-    isSameOrParentDirectory
+    isSameOrParentDirectory,
+    safeUnlink,
+    syncDirectory,
+    writeFileAtomic
 };
