@@ -251,6 +251,12 @@ export const LOCK_AUTO: number;
 export function matches(document: Record<string, unknown>, matcher: Record<string, unknown>): boolean;
 export function buildRawBufferMatcher(matcher: Record<string, unknown>): (buffer: Buffer, startOffset?: number) => boolean;
 
+/** The event source over a store in the same process, for decision models and read models. Requires `typeAccessor`. */
+export function localSource(store: EventStore): import('./projections.js').EventSource<CommitCondition>;
+
+/** A read model snapshot store that keeps one JSON file per read model name in `directory`. */
+export function fileSnapshotStore(directory: string): import('./projections.js').SnapshotStore;
+
 export default EventStore;
 
 

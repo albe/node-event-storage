@@ -214,13 +214,16 @@ CourseCapacity('c1').query;
 
 Handlers receive `(state, event, metadata)`. `event` is the stored payload itself (not a `{ type, data, tags }` wrapper), and `metadata` is the storage metadata (e.g. `committedAt`). Handlers must be pure and return the new state.
 
-`buildDecisionModel(store, projections)` composes the projections, runs one `query()` for all of them, and applies each event only to the projections whose query it matches. It returns the composed state and the condition to pass to `commit()`:
+`buildDecisionModel(source, projections)` composes the projections, runs one query for all of them, and applies each event only to the projections whose query it matches. It resolves to the composed state and the condition to pass to `commit()`. The `source` is where the events are read from: `localSource(store)` for a store in the same process, or `httpSource(client)` from `event-storage-http/client` for a store behind the HTTP API (see [Event sources](#event-sources)).
 
 ```javascript
+import { localSource } from 'event-storage';
 import { buildDecisionModel } from 'event-storage/projections';
 
-function subscribeStudent({ studentId, courseId, semesterId }) {
-    const { state, commitCondition } = buildDecisionModel(store, {
+const source = localSource(store);
+
+async function subscribeStudent({ studentId, courseId, semesterId }) {
+    const { state, commitCondition } = await buildDecisionModel(source, {
         exists: CourseExists(courseId),
         capacity: CourseCapacity(courseId),
         subscriptions: CourseSubscriptions(courseId)
@@ -238,15 +241,15 @@ function subscribeStudent({ studentId, courseId, semesterId }) {
 - A single projection can be passed instead of a map; `state` is then that projection's state.
 - `composeProjections({ ... })` builds the composed projection without reading, e.g. for unit tests without a store.
 - Projections require `typeAccessor`, and `tagsAccessor` when any projection uses a `tagFilter`.
-- The returned `DecisionModel` is immutable. `model.update()` reads only the events committed since the model was built, applies them to its state and returns a new model with a new `commitCondition` (or the same model when nothing was committed).
+- The returned `DecisionModel` is immutable. `await model.update()` reads only the events committed since the model was built, applies them to its state and resolves to a new model with a new `commitCondition` (or the same model when nothing was committed).
 
 ### Updating a decision model
 
 After an `OptimisticConcurrencyError`, update the model instead of rebuilding it and decide again:
 
 ```javascript
-function subscribeStudent({ studentId, courseId, semesterId }, attempts = 3) {
-    let model = buildDecisionModel(store, { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) });
+async function subscribeStudent({ studentId, courseId, semesterId }, attempts = 3) {
+    let model = await buildDecisionModel(source, { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) });
     for (let attempt = 1; ; attempt++) {
         if (model.state.subscriptions >= model.state.capacity) throw new Error('Course is full');
         try {
@@ -256,20 +259,22 @@ function subscribeStudent({ studentId, courseId, semesterId }, attempts = 3) {
             return;
         } catch (e) {
             if (!(e instanceof OptimisticConcurrencyError) || attempt === attempts) throw e;
-            model = model.update(); // reads only the new events
+            model = await model.update(); // reads only the new events
         }
     }
 }
 ```
 
-A process that handles many commands for the same boundary can also keep the model in memory and call `update()` before each decision. When nothing changed, `update()` costs one length comparison; otherwise it reads only the new matching events through the indexes.
+A process that handles many commands for the same boundary can also keep the model in memory and call `update()` before each decision. `update()` reads only the new matching events through the indexes.
 
 ```javascript
 const courses = new Map(); // courseId -> DecisionModel
 
-function courseModel(courseId) {
-    const model = courses.get(courseId)?.update()
-        ?? buildDecisionModel(store, { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) });
+async function courseModel(courseId) {
+    const cached = courses.get(courseId);
+    const model = cached
+        ? await cached.update()
+        : await buildDecisionModel(source, { capacity: CourseCapacity(courseId), subscriptions: CourseSubscriptions(courseId) });
     courses.set(courseId, model);
     return model;
 }
@@ -279,15 +284,15 @@ This stays correct because the conflict check runs at `commit()` against the sto
 
 ### Finding the conflicting events
 
-After an `OptimisticConcurrencyError`, `model.since()` returns the events that block the commit: the events matching the model's condition that were committed after the model was built. It is an `EventStream`, so it can be iterated or read with `forEach((event, metadata) => ...)`.
+After an `OptimisticConcurrencyError`, `model.since()` returns the events that block the commit: the events matching the model's condition that were committed after the model was built. It is an async iterable of `{ event, metadata, position, type, tags }`.
 
 ```javascript
 try {
     store.commit(`semester-${semesterId}`, events, model.commitCondition);
 } catch (e) {
     if (!(e instanceof OptimisticConcurrencyError)) throw e;
-    for (const event of model.since()) {
-        console.log('conflicting', event.type);
+    for await (const { event, position } of model.since()) {
+        console.log('conflicting', event.type, 'at', position);
     }
 }
 ```
@@ -301,7 +306,7 @@ A decision may depend on fewer events than the decision model reads. A course's 
 ![A commit condition can be a subset of the decision model: the model reads four event types, the condition narrowed with without('StudentUnsubscribedFromCourse') checks three; a concurrent unsubscription lets the commit succeed, a concurrent subscription conflicts](diagram-dcb-commit-condition.svg)
 
 ```javascript
-const model = buildDecisionModel(store, {
+const model = await buildDecisionModel(source, {
     capacity: CourseCapacity(courseId),
     taken: createProjection({
         initialState: 0,
@@ -326,9 +331,10 @@ store.commit(`semester-${semesterId}`, [subscription], model.commitCondition.wit
 
 ### Read models
 
-A read model is the same projection, kept up to date for queries instead of for one decision. `createReadModel(store, projections, options)` catches up through the stream indexes asynchronously, in batches of `batchSize` global positions (default 1000) so a large store does not block the event loop, and then applies every new matching event synchronously as it is written:
+A read model is the same projection, kept up to date for queries instead of for one decision. `createReadModel(source, projections, options)` catches up on the matching events, yielding to the event loop after every `batchSize` events (default 1000) so a large store does not block it, and then follows the source and applies every new matching event:
 
 ```javascript
+import { localSource, fileSnapshotStore } from 'event-storage';
 import { createProjection, createReadModel } from 'event-storage/projections';
 
 const CourseOverview = createProjection({
@@ -342,23 +348,63 @@ const CourseOverview = createProjection({
     }
 });
 
-const overview = createReadModel(store, CourseOverview, { name: 'course-overview', persist: true, version: 1 });
+const overview = createReadModel(localSource(store), CourseOverview, {
+    name: 'course-overview',
+    snapshots: fileSnapshotStore('./data/readmodels'),
+    version: 1
+});
 
-overview.on('caught-up', (state, position) => { /* serve queries from here */ });
+await overview.ready;  // resolves once the catch-up reached the end of the store
 overview.on('progress', (position) => { /* after each catch-up batch */ });
-overview.caughtUp;  // true once it follows new commits live
-overview.update();  // catch up synchronously right now, e.g. at startup when the state is needed immediately
+overview.caughtUp;     // true once it follows new commits live
 
-overview.state;     // current state
-overview.position;  // global position of the last event it has seen
+overview.state;        // current state
+overview.position;     // global position of the last event it applied
 overview.on('change', (state, position) => { /* e.g. invalidate an HTTP cache */ });
-overview.close();   // stop following, write a pending persist
+await overview.close(); // stop following, save a pending snapshot
 ```
 
 - **Decision model vs. read model:** both are a projection's state at a global position. A decision model is narrow (its query is the consistency boundary) and updated on demand right before a decision. A read model is usually broad (e.g. all courses), follows the store by itself and may be read at any time. Deciding on a broad read model works, but any change within its query causes a conflict.
-- **Persistence (optional):** with `persist: true` and a `name`, state and position are written atomically to `<indexDirectory>/readmodels/`. After a restart only the events committed since are read. The state must be JSON-serializable. Change `version` when the handlers change; a persisted state of another version, or of another query, is rebuilt.
-- **Read-only processes:** a read model in a store opened with `readOnly: true` follows the events written by the writer process.
-- **Warm decision model:** `readModel.decisionModel()` returns a `DecisionModel` from the read model's current state, so a narrow read model kept up to date anyway can serve decisions without replaying its events.
+- **New commits** are applied asynchronously, shortly after `commit()` returns. Wait for `'change'` when you need to read your own write.
+- **Snapshots (optional):** with a `snapshots` store and a `name`, state and position are saved after changes (at most once per tick) and on `close()`. After a restart only the events committed since are read. The state must be JSON-serializable. Change `version` when the handlers change; a saved state of another version, or of another query, or beyond the end of the store, is rebuilt. `fileSnapshotStore(directory)` writes one JSON file per name; any object with `load(name)` and `save(name, snapshot)` (sync or async) works, e.g. to keep snapshots in a database or encrypted at rest.
+- **Read-only processes:** a read model on `localSource()` of a store opened with `readOnly: true` follows the events written by the writer process.
+- **Warm decision model:** `await readModel.decisionModel()` returns a `DecisionModel` from the read model's current state, reading only the events it has not applied yet, so a narrow read model kept up to date anyway can serve decisions without replaying its events.
+
+### Event sources
+
+Decision models and read models do not use the store directly but an event source, which has three methods:
+
+| Method | Returns |
+|--------|---------|
+| `query(dcbQuery, { from })` | `Promise<{ events, condition }>`: the matching events from a global position up to the position of `condition`, and the commit condition at the time of the query |
+| `read(selection, { from })` | The events of a selection (a condition, or `{ selector, matcher? }`) from a global position to the end of the store |
+| `follow(selection, { from, signal })` | The same, and then every new matching event until `signal` aborts |
+
+Events are delivered as async iterables of `{ event, metadata, position, type, tags }`. `type` and `tags` are read from the stored event with the store's `typeAccessor` and `tagsAccessor`.
+
+- `localSource(store)` from `event-storage` reads from a store in the same process, writer or read-only.
+- `httpSource(client)` from `event-storage-http/client` reads from a store behind the HTTP API. Committing stays with the store or client: pass `model.commitCondition` to `store.commit()` or `client.commit(stream, events, { condition })`.
+
+#### Transforming events before the projection
+
+`transformEvents(source, transform)` wraps a source so that every event passes through `transform(event, metadata)` before a projection sees it, e.g. to decrypt fields. The transform may be async, e.g. to load a key:
+
+```javascript
+import { buildDecisionModel, createReadModel, transformEvents } from 'event-storage/projections';
+
+const source = transformEvents(localSource(store), async (event, metadata) => ({
+    ...event,
+    email: await decrypt(event.email)
+}));
+
+const model = await buildDecisionModel(source, CustomerEmails);
+const overview = createReadModel(source, CustomerOverview);
+```
+
+- It applies to decision models, read models and `since()` alike, locally and over HTTP.
+- `type` and `tags` are read from the stored event before the transformation, because the store selects events by them. They must stay readable, i.e. unencrypted.
+- Matchers in a commit condition run in the store on the stored event, so they cannot match transformed fields.
+- A read model's snapshots contain the transformed state. Encrypting them at rest is up to the snapshot store.
 
 ### Mapping to the dcb.events specification
 
@@ -373,7 +419,7 @@ event-storage implements the semantics of the [DCB specification](https://dcb.ev
 | `AppendCondition.failIfEventsMatch` | `CommitCondition.selector`, compiled from the `DcbQuery` (+ optional `matcher`) | Narrow it with `condition.without(...streams)` |
 | `AppendCondition.after` | `CommitCondition.noneMatchAfter` | `store.length` at query time |
 | `append(events, condition)` | `commit(streamName, events, condition)` | See below |
-| `createProjection`, `composeProjections`, `buildDecisionModel` | Same names in `event-storage/projections` | |
+| `createProjection`, `composeProjections`, `buildDecisionModel` | Same names in `event-storage/projections`; `buildDecisionModel` takes an event source and is async | |
 | Projection `handlers` | `when` | `{ when: { CourseDefined: (state, event, metadata) => ... } }` |
 | Decision model `appendCondition` | `commitCondition` | Same object as `condition` from `query()` |
 

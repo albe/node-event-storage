@@ -8,6 +8,7 @@ Each page covers one release with breaking changes. When skipping several versio
 | 1.0 / 1.1 | 1.2 | [Consumer scanning, stream-name validation](1.2.md) |
 | 1.2 / 1.3 | 1.4 | [Missing streams, string-only `typeAccessor`](1.4.md) |
 | 1.4 | 1.5 | [Lazy `Index.range()`, automatic lock recovery](1.5.md) |
+| 1.5 | 1.6 | [Projections read from an event source](1.6.md) |
 
 All other releases are backwards compatible; see the [Changelog](../changelog.md).
 
