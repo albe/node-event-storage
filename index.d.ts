@@ -36,6 +36,83 @@ export interface DcbQuery {
 
 export type CommitCallback = (commit: Record<string, unknown>) => void;
 
+export interface Serializer {
+    serialize(document: any): string | Buffer;
+    deserialize(data: string | Buffer): any;
+}
+
+export interface LockOwner {
+    pid: number;
+    hostname: string;
+    pidNamespace: string | null;
+    lockedAt: string;
+}
+
+export interface StorageConfig {
+    /** Directory for partition (event) files. Defaults to `storageDirectory`. */
+    dataDirectory?: string;
+    /** Directory for index files. Defaults to `streamsDirectory`. */
+    indexDirectory?: string;
+    /** File name of the primary index. Default `'{storeName}.index'`. */
+    indexFile?: string;
+    /** Returns the partition (file) name for a document. */
+    partitioner?: (document: any, sequenceNumber: number) => string;
+    /** Custom serialization or compression. Default JSON. */
+    serializer?: Serializer;
+    /** Read buffer size in bytes. Default 4096. */
+    readBufferSize?: number;
+    /** Write buffer size in bytes. Default 16384. */
+    writeBufferSize?: number;
+    /** Flush after this many buffered documents. Default 0 (unlimited). */
+    maxWriteBufferDocuments?: number;
+    /** Call fsync on every flush. Default false. */
+    syncOnFlush?: boolean;
+    /** Group commit: fsync each partition at most every this many ms and only then invoke the commit callbacks. Default 0 (off). */
+    syncInterval?: number;
+    /** Let the writer read events that are still in the write buffer. Default true. */
+    dirtyReads?: boolean;
+    /** How to handle an existing lock on open: `LOCK_AUTO` (default), `LOCK_THROW` or `LOCK_RECLAIM`. */
+    lock?: number;
+    /** Secret used to verify persisted function matchers. */
+    hmacSecret?: string;
+    /** Metadata written to each partition header. */
+    metadata?: Record<string, unknown> | ((partitionName: string) => Record<string, unknown>);
+    /** Document paths used for O(1) routing of writes to indexes. Default `['stream', 'payload.type']`. */
+    matcherProperties?: string[];
+    /** Maximum open partition file descriptors (0 = unlimited). Default 1024. */
+    maxOpenPartitions?: number;
+    /** Maximum open index file descriptors (0 = unlimited). Default 1024. */
+    maxOpenIndexes?: number;
+    /** Options passed to every index on construction. */
+    indexOptions?: Record<string, unknown>;
+}
+
+export interface StreamSource {
+    /** Dot-notation path into the event payload. */
+    path: string;
+    /** Builds the stream name from the value at `path`. */
+    nameBuilder: (value: string) => string;
+}
+
+export interface EventStoreConfig {
+    /** Directory for data files. Default `'./data'`. */
+    storageDirectory?: string;
+    /** Directory for stream index files. Default `'{storageDirectory}/streams'`. */
+    streamsDirectory?: string;
+    /** Open the store in read-only mode. Default false. */
+    readOnly?: boolean;
+    /** Dot-notation path to the event type; maintains one stream per type value. */
+    typeAccessor?: string;
+    /** Dot-notation path to an array of tag strings; maintains one stream `tags/<tag>` per tag value. */
+    tagsAccessor?: string;
+    /** Generic automatically maintained streams. */
+    streamSources?: StreamSource[];
+    /** Metadata stored once per stream at creation. */
+    streamMetadata?: Record<string, Record<string, unknown>> | ((streamName: string) => Record<string, unknown>);
+    /** Storage options. */
+    storageConfig?: StorageConfig;
+}
+
 export class CommitCondition {
     constructor(selector: StreamSelector | string, matcher: EventMatcher | null | undefined, noneMatchAfter: number, raw?: boolean);
     selector: StreamSelector | string;
@@ -101,10 +178,16 @@ export class Storage extends EventEmitter {
     static LOCK_RECLAIM: number;
     static LOCK_AUTO: number;
 
+    constructor(storageName?: string, config?: StorageConfig);
+    constructor(config: StorageConfig);
+
     initialized: boolean | null;
     length: number;
     indexDirectory: string;
     storageFile: string;
+
+    /** The process holding the lock, or null if the storage is not locked or the lock has no owner information. */
+    readLockOwner(): LockOwner | null;
 }
 
 export class StorageLockedError extends Error {}
@@ -127,7 +210,8 @@ export class EventStore extends EventEmitter {
     consumers: Map<string, Consumer>;
     length: number;
 
-    constructor(storeName?: string, config?: Record<string, unknown>);
+    constructor(storeName?: string, config?: EventStoreConfig);
+    constructor(config: EventStoreConfig);
 
     open(callback?: (err?: Error | null) => void): void;
     close(callback?: (err?: Error | null) => void): void;
