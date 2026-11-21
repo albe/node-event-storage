@@ -2,6 +2,10 @@
 
 Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation for a released version is available through the version selector on Read the Docs.
 
+## Unreleased
+
+- Added `createReadModel()` in `event-storage/projections`: the same projections as read models that follow the store, optionally persisted, also in read-only processes. The initial catch-up runs asynchronously in batches (`'progress'`, `'caught-up'`); `update()` catches up synchronously.
+
 ## 1.5.0
 
 See the [upgrade guide](upgrading/1.5.md) for the breaking changes.

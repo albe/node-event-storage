@@ -54,6 +54,7 @@
     "index.d.ts",
     "src/utils/*.js",
     "src/Projection.js",
+    "src/ReadModel.js",
     "projections.js",
     "projections.d.ts"
   ],

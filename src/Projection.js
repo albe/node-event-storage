@@ -136,13 +136,36 @@ class DecisionModel {
  */
 function readDecisionModel(eventStore, projection, state, from) {
     const { stream, condition } = eventStore.query(projection.query, null, from);
-    const typeOf = eventStore.typeSource.accessor;
-    const tagsOf = eventStore.tagsSource ? eventStore.tagsSource.accessor : () => [];
     stream.forEach((event, metadata) => {
-        const context = { type: typeOf(event), tags: tagsOf(event) ?? [] };
-        state = projection.apply(state, event, metadata, context);
+        state = applyEvent(eventStore, projection, state, event, metadata);
     });
     return new DecisionModel(eventStore, projection, state, condition);
+}
+
+/**
+ * Apply one stored event to the projection, resolving its type and tags through the store's accessors.
+ *
+ * @param {import('./EventStore.js').default} eventStore
+ * @param {Projection} projection
+ * @param {any} state
+ * @param {object} event The event payload.
+ * @param {object} metadata The storage metadata.
+ * @returns {any} The new state.
+ */
+function applyEvent(eventStore, projection, state, event, metadata) {
+    const type = eventStore.typeSource.accessor(event);
+    const tags = (eventStore.tagsSource ? eventStore.tagsSource.accessor(event) : null) ?? [];
+    return projection.apply(state, event, metadata, { type, tags });
+}
+
+/**
+ * @param {import('./EventStore.js').default} eventStore
+ * @param {Projection|Object<string, Projection>} projectionOrMap
+ * @returns {Projection} The projection, composed when a map was given.
+ */
+function resolveProjection(eventStore, projectionOrMap) {
+    assert(eventStore.typeSource !== null, 'Projections need the store to be configured with a typeAccessor.');
+    return isProjection(projectionOrMap) ? projectionOrMap : composeProjections(projectionOrMap);
 }
 
 /**
@@ -156,9 +179,8 @@ function readDecisionModel(eventStore, projection, state, from) {
  * @returns {DecisionModel}
  */
 function buildDecisionModel(eventStore, projectionOrMap) {
-    assert(eventStore.typeSource !== null, 'Projections need the store to be configured with a typeAccessor.');
-    const projection = isProjection(projectionOrMap) ? projectionOrMap : composeProjections(projectionOrMap);
+    const projection = resolveProjection(eventStore, projectionOrMap);
     return readDecisionModel(eventStore, projection, projection.initialState, 1);
 }
 
-export { createProjection, composeProjections, buildDecisionModel, DecisionModel };
+export { createProjection, composeProjections, buildDecisionModel, DecisionModel, applyEvent, resolveProjection };
