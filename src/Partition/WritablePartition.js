@@ -174,6 +174,22 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
+     * Invoke the callback once everything written so far is on disk, just like the callback of a write would be.
+     *
+     * @api
+     * @param {function} callback
+     */
+    afterPendingWrites(callback) {
+        if (this.writeBufferCursor > 0) {
+            this.flushCallbacks.push(callback);
+        } else if (this.syncCallbacks.length > 0) {
+            this.syncCallbacks.push(callback);
+        } else {
+            process.nextTick(callback);
+        }
+    }
+
+    /**
      * Group commit: many flushes share one fsync, and their callbacks only fire once the data is on disk.
      *
      * @private

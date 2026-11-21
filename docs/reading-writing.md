@@ -77,13 +77,14 @@ eventstore.commit('order-42', newEvents, expectedVersion, { idempotencyKey }, (c
 });
 ```
 
-If a commit with the same key already exists in the stream, nothing is written and the callback receives the original commit (with its original `commitId`, `committedAt` and events) plus `duplicate: true`. No `'commit'` event is emitted for it. Reusing a key for a commit with a different number of events throws an `IdempotencyError`.
+If a commit with the same key already exists in the stream, nothing is written and the callback receives the original commit (with its original `commitId` and `committedAt`) plus `duplicate: true`. Like a normal commit callback, it fires only once the original commit is on disk with the configured durability (see `syncInterval` / `syncOnFlush`). No `'commit'` event is emitted for it. Reusing a key for a commit with a different number of events throws an `IdempotencyError`.
 
-The key is stored in the metadata of every event of the commit. The store looks for it in these places, in this order:
+The key is stored in the metadata of every event of the commit. The store looks for it in two places, which also works after a restart:
 
-1. The commit right after `expectedVersion`, if the stream has moved past it. This always works, also after a restart.
-2. The last commit of the stream. This covers the common case of a retry right after a timeout, also after a restart, and with `ExpectedVersion.Any` or a `CommitCondition`.
-3. An in-memory cache of the last `idempotencyCacheSize` keys (default 1000). This catches retries with `ExpectedVersion.Any` or a `CommitCondition` when other commits were written to the stream in between. The cache is lost on restart.
+1. The commit right after `expectedVersion`, if the stream has moved past it.
+2. The last commit of the stream. This covers a retry with `ExpectedVersion.Any` or a `CommitCondition` right after a timeout.
+
+A retry with `ExpectedVersion.Any` or a `CommitCondition` after other commits were written to the stream in between is not recognized and writes the events again. Use a concrete `expectedVersion` where that matters.
 
 A key is only checked against the stream it is committed to. Keys are compared by value only, the events themselves are not compared.
 
@@ -179,11 +180,11 @@ Every event carries storage-level metadata alongside the event payload. Access i
 stream.forEach((event, metadata, streamName) => {
     console.log(metadata);
     // {
-    //   commitId: '…',         unique ID for the whole commit
+    //   commitId: 17,          global position (0-based) at which the commit started
     //   committedAt: 1700000000000,  ms timestamp
-    //   commitVersion: 1,      sequence number within the commit (1-based)
+    //   commitVersion: 1,      position within the commit (0-based)
     //   commitSize: 2,         total events in the commit
-    //   streamVersion: 5       version of this event within the stream
+    //   streamVersion: 5       position of this event within the stream (0-based)
     // }
 });
 ```

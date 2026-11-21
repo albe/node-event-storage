@@ -9,7 +9,7 @@ import Consumer from './Consumer.js';
 import { assert } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
-import { normalizeSelector, buildStreamSource } from "./utils/indexUtil.js";
+import { normalizeSelector, buildStreamSource, excludeStreams } from "./utils/indexUtil.js";
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
 const ExpectedVersion = {
@@ -28,7 +28,6 @@ const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 class OptimisticConcurrencyError extends Error {}
 class IdempotencyError extends Error {}
 
-const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000;
 
 /**
  * @typedef {string | SelectorNode[]} SelectorNode
@@ -71,6 +70,27 @@ class CommitCondition {
         this.raw = raw;
         this.noneMatchAfter = noneMatchAfter;
     }
+
+    /**
+     * Narrow this condition so that new events in the given streams no longer cause a conflict, e.g. because the
+     * decision only depends on part of the queried events: a concurrent unsubscribe cannot invalidate a new
+     * subscription, even though the decision model counts it.
+     *
+     * The streams are treated as empty: they are removed from OR levels, and an AND level containing one of them is
+     * removed as a whole. The condition therefore never gets wider. Event types address their type streams, which
+     * are named like the type when `typeAccessor` is configured.
+     *
+     * @api
+     * @param {...(string|string[])} streams The stream names (e.g. event types) to ignore in the conflict check.
+     * @returns {CommitCondition} A new condition at the same position.
+     * @throws {Error} When no stream would be left to check.
+     */
+    without(...streams) {
+        const selector = excludeStreams(this.selector, new Set(streams.flat()));
+        assert(selector !== null, 'without() would leave no streams to check. Commit without a condition instead.');
+        const normalized = normalizeSelector(selector);
+        return new CommitCondition(Array.isArray(normalized) ? normalized : [normalized], this.matcher, this.noneMatchAfter, this.raw);
+    }
 }
 
 /**
@@ -105,9 +125,6 @@ class EventStore extends events.EventEmitter {
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
      *   `config.storageConfig.metadata` is not also set.
-     * @param {number} [config.idempotencyCacheSize=1000] How many recent `idempotencyKey`s to remember in memory, so that
-     *   a retried commit is also recognized when other commits were written to the stream in between. Set to 0 to only
-     *   check the commit at the expected version, or the last commit of the stream.
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
@@ -138,10 +155,6 @@ class EventStore extends events.EventEmitter {
             assert(typeof nameBuilder === 'function', 'Each streamSources entry must have a nameBuilder function.');
             this.streamSources.push(buildStreamSource(path, nameBuilder));
         }
-
-        this.idempotencyCacheSize = config.idempotencyCacheSize ?? DEFAULT_IDEMPOTENCY_CACHE_SIZE;
-        assert(Number.isInteger(this.idempotencyCacheSize) && this.idempotencyCacheSize >= 0, 'idempotencyCacheSize must be a non-negative integer.');
-        this.idempotencyCache = new Map();
 
         this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
         let defaults = {
@@ -531,13 +544,11 @@ class EventStore extends events.EventEmitter {
             assert(typeof idempotencyKey === 'string' && idempotencyKey !== '', 'idempotencyKey must be a non-empty string.');
             const original = this.findCommitByIdempotencyKey(streamName, idempotencyKey, expectedVersion);
             if (original !== null) {
-                assert(original.events.length === events.length,
-                    `Idempotency key "${idempotencyKey}" was already used for a commit with ${original.events.length} events to stream "${streamName}".`,
+                assert(original.commitSize === events.length,
+                    `Idempotency key "${idempotencyKey}" was already used for a commit with ${original.commitSize} events to stream "${streamName}".`,
                     IdempotencyError
                 );
-                // The original commit may still be in the write buffer and must be on disk before it is acknowledged.
-                this.storage.flush();
-                process.nextTick(() => callback(original));
+                this.acknowledgeDuplicate(streamName, original, events, callback);
                 return;
             }
         }
@@ -577,9 +588,6 @@ class EventStore extends events.EventEmitter {
             streamVersion,
             events: []
         });
-        if (idempotencyKey !== undefined) {
-            this.rememberIdempotencyKey(idempotencyKey, streamName, streamVersion + 1);
-        }
         const commitCallback = () => {
             this.emit('commit', commit);
             callback(commit);
@@ -595,76 +603,37 @@ class EventStore extends events.EventEmitter {
     }
 
     /**
-     * Lookups are verified against the stored events, so a stale cache entry (e.g. after a truncate) is harmless.
+     * A retry either comes with the `expectedVersion` the original commit was written at, or right after it, so only the
+     * commit after `expectedVersion` and the last commit of the stream are checked.
      *
      * @private
-     * @returns {object|null} The original commit with `duplicate: true`, or null.
+     * @returns {object|null} The metadata of an event of the original commit, or null.
      */
     findCommitByIdempotencyKey(streamName, idempotencyKey, expectedVersion) {
-        if (!(streamName in this.streams)) {
-            return null;
-        }
-        const streamVersion = this.streams[streamName].index.length;
-        const candidates = [];
-        if (typeof expectedVersion === 'number' && expectedVersion >= 0 && streamVersion > expectedVersion) {
-            candidates.push(expectedVersion + 1);
-        }
-        if (streamVersion > 0) {
-            candidates.push(streamVersion);
-        }
-        const cached = this.idempotencyCache.get(idempotencyKey);
-        if (cached && cached.streamName === streamName && cached.revision <= streamVersion) {
-            candidates.push(cached.revision);
-        }
-        for (const revision of candidates) {
-            const commit = this.readCommitAt(streamName, revision, idempotencyKey);
-            if (commit !== null) {
-                return commit;
+        const length = streamName in this.streams ? this.streams[streamName].index.length : 0;
+        const candidates = typeof expectedVersion === 'number' && expectedVersion >= 0 && length > expectedVersion
+            ? [expectedVersion + 1, length]
+            : [length];
+        for (const revision of candidates.filter(revision => revision > 0)) {
+            const event = this.getEventStream(streamName, revision, revision).next();
+            if (event && event.metadata.idempotencyKey === idempotencyKey) {
+                return Object.assign({}, event.metadata, { revision: revision - event.metadata.commitVersion });
             }
         }
         return null;
     }
 
     /**
-     * @private
-     * @param {number} revision The 1-based revision of any event of the commit.
-     * @returns {object|null}
-     */
-    readCommitAt(streamName, revision, idempotencyKey) {
-        const probe = this.getEventStream(streamName, revision, revision).next();
-        if (!probe || !probe.metadata || probe.metadata.idempotencyKey !== idempotencyKey) {
-            return null;
-        }
-        const { commitVersion = 0, commitSize = 1 } = probe.metadata;
-        const firstRevision = revision - commitVersion;
-        const events = [];
-        let first = null;
-        this.getEventStream(streamName, firstRevision, firstRevision + commitSize - 1).forEach((payload, metadata) => {
-            if (first === null) {
-                first = metadata;
-            }
-            events.push(payload);
-        });
-        const commit = Object.assign({}, first, { streamName, events, duplicate: true });
-        delete commit.commitVersion;
-        delete commit.commitSize;
-        return commit;
-    }
-
-    /**
-     * Remembers keys so that retries with `ExpectedVersion.Any` are recognized even when other commits came in between.
+     * The original commit may still be in the write buffer or waiting for its fsync, so the duplicate is acknowledged
+     * only once all writes to its partition so far are done, with the same durability as a normal commit callback.
      *
      * @private
      */
-    rememberIdempotencyKey(idempotencyKey, streamName, revision) {
-        if (this.idempotencyCacheSize === 0) {
-            return;
-        }
-        this.idempotencyCache.delete(idempotencyKey);
-        this.idempotencyCache.set(idempotencyKey, { streamName, revision });
-        if (this.idempotencyCache.size > this.idempotencyCacheSize) {
-            this.idempotencyCache.delete(this.idempotencyCache.keys().next().value);
-        }
+    acknowledgeDuplicate(streamName, original, events, callback) {
+        const { revision, commitVersion, commitSize, streamVersion, ...commitMetadata } = original;
+        const commit = Object.assign(commitMetadata, { streamName, streamVersion: revision - 1, events, duplicate: true });
+        const entry = this.streams[streamName].index.get(revision + commitSize - 1);
+        this.storage.getPartition(entry.partition).afterPendingWrites(() => callback(commit));
     }
 
     /**

@@ -1,39 +1,80 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 215" width="880" height="215" role="img" aria-labelledby="dcb-boundary-title">
-  <title id="dcb-boundary-title">DCB model: same events with three non-nested dynamic consistency boundary bars — Rename Course, Change Course Capacity, and the cross-aggregate Subscribe Student to Course</title>
-
-  <rect width="880" height="215" fill="#ffffff"/>
-
-  <!-- CourseCreated (same position as diagram 1) -->
-  <rect x="10" y="85" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
-  <text x="75" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCreated</text>
-
-  <!-- CourseRenamed -->
-  <rect x="148" y="85" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
-  <text x="213" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseRenamed</text>
-
-  <!-- CourseCapacityChanged -->
-  <rect x="286" y="85" width="182" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
-  <text x="377" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">CourseCapacityChanged</text>
-
-  <!-- StudentSubscribedToCourse (same position as diagram 1) -->
-  <rect x="520" y="85" width="200" height="36" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1.5"/>
-  <text x="620" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" font-weight="bold" fill="#78350f">StudentSubscribedToCourse</text>
-
-  <!-- StudentCreated (same position as diagram 1) -->
-  <rect x="760" y="85" width="104" height="36" rx="5" fill="#dcfce7" stroke="#86efac" stroke-width="1.2"/>
-  <text x="812" y="108" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#374151">StudentCreated</text>
-
-  <!-- Boundary bars (stacked below events, each at its own row — no nesting) -->
-
-  <!-- Rename Course (amber): CourseCreated + CourseRenamed -->
-  <rect x="8" y="137" width="272" height="20" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
-  <text x="144" y="151" text-anchor="middle" font-size="10" font-family="sans-serif" font-weight="bold" fill="#92400e">Rename Course</text>
-
-  <!-- Change Course Capacity (blue): CourseCreated + CourseCapacityChanged -->
-  <rect x="8" y="160" width="462" height="20" rx="4" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="239" y="174" text-anchor="middle" font-size="10" font-family="sans-serif" font-weight="bold" fill="#1e40af">Change Course Capacity</text>
-
-  <!-- Subscribe Student to Course (purple): spans all events, cross-aggregate -->
-  <rect x="8" y="183" width="856" height="20" rx="4" fill="#faf5ff" stroke="#a855f7" stroke-width="1.5"/>
-  <text x="436" y="197" text-anchor="middle" font-size="10" font-family="sans-serif" font-weight="bold" fill="#6b21a8">Subscribe Student to Course</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 464" width="860" height="464" role="img" aria-labelledby="dcb-boundary-title dcb-boundary-desc">
+  <title id="dcb-boundary-title">Dynamic consistency boundary: horizontal across course and student</title>
+  <desc id="dcb-boundary-desc">The same events, with the aggregates only as faint outlines and not in chronological order. The boundary of the command Subscribe student to course runs horizontally across both and encloses CourseCreated, CourseCapacityChanged, StudentCreated and StudentSubscribedToCourse.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    .text { fill: #1f2937; font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; }
+    .muted { fill: #6b7280; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .course { fill: #dbeafe; stroke: #60a5fa; }
+    .student { fill: #dcfce7; stroke: #4ade80; }
+    .shared { fill: #fef3c7; stroke: #f59e0b; }
+    .agg-course { fill: #eff6ff; stroke: #3b82f6; }
+    .agg-student { fill: #f0fdf4; stroke: #22c55e; }
+    .agg-course-t { fill: #1d4ed8; }
+    .agg-student-t { fill: #15803d; }
+    .ghost { fill: none; stroke: #d1d5db; }
+    .ghost-t { fill: #9ca3af; }
+    .ask { stroke: #9ca3af; fill: none; }
+    .ask-t { fill: #6b7280; }
+    .dcb { fill: #9333ea; fill-opacity: 0.08; stroke: #9333ea; }
+    .dcb-t { fill: #7e22ce; }
+    .cap { fill: #f59e0b; fill-opacity: 0.10; stroke: #d97706; }
+    .cap-t { fill: #b45309; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .text { fill: #e6edf3; }
+      .muted, .ask-t { fill: #9ca3af; }
+      .course { fill: #1e3a5f; stroke: #3b82f6; }
+      .student { fill: #14532d; stroke: #22c55e; }
+      .shared { fill: #4a3410; stroke: #f59e0b; }
+      .agg-course { fill: #0f1d33; stroke: #3b82f6; }
+      .agg-student { fill: #0d2618; stroke: #22c55e; }
+      .agg-course-t { fill: #93c5fd; }
+      .agg-student-t { fill: #86efac; }
+      .ghost { stroke: #30363d; }
+      .ghost-t { fill: #6e7681; }
+      .ask { stroke: #6b7280; }
+      .dcb { fill: #a855f7; fill-opacity: 0.14; stroke: #c084fc; }
+      .dcb-t { fill: #d8b4fe; }
+      .cap { fill: #f59e0b; fill-opacity: 0.12; stroke: #fbbf24; }
+      .cap-t { fill: #fcd34d; }
+    }
+  </style>
+  <rect class="bg" width="860" height="464" rx="12"/>
+  <rect class="ghost" x="34.0" y="16" width="232" height="400" rx="12" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <rect class="ghost" x="594.0" y="16" width="232" height="400" rx="12" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text class="ghost-t" x="150" y="44" text-anchor="middle" font-size="13" font-weight="600" font-family="sans-serif">Course</text>
+  <text class="ghost-t" x="710" y="44" text-anchor="middle" font-size="13" font-weight="600" font-family="sans-serif">Student</text>
+  <rect class="dcb" x="14" y="144" width="832" height="176" rx="16" stroke-width="2.5"/>
+  <text class="text dcb-t" x="710.0" y="272.0" text-anchor="middle" font-size="13" font-weight="700">Subscribe student</text>
+  <text class="text dcb-t" x="710.0" y="289.0" text-anchor="middle" font-size="13" font-weight="700">to course</text>
+  <path class="cap" d="M 52.0 158 H 248.0 Q 258.0 158 258.0 168 V 220 Q 258.0 230 268.0 230 H 535 Q 545 230 545 240 V 296 Q 545 306 535 306 H 52.0 Q 42.0 306 42.0 296 V 168 Q 42.0 158 52.0 158 Z" stroke-width="2" stroke-dasharray="7 4"/>
+  <text class="text cap-t" x="430" y="192" text-anchor="middle" font-size="13" font-weight="700">Change course</text>
+  <text class="text cap-t" x="430" y="209" text-anchor="middle" font-size="13" font-weight="700">capacity</text>
+  <rect class="course" x="50.0" y="64" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="150" y="87" text-anchor="middle" font-size="12.5" font-weight="600">CourseRoomAssigned</text>
+  <text class="text muted mono" x="150" y="105" text-anchor="middle" font-size="10.5">course/c1</text>
+  <rect class="course" x="50.0" y="170" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="150" y="193" text-anchor="middle" font-size="12.5" font-weight="600">CourseCreated</text>
+  <text class="text muted mono" x="150" y="211" text-anchor="middle" font-size="10.5">course/c1</text>
+  <rect class="course" x="50.0" y="240" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="150" y="263" text-anchor="middle" font-size="12.5" font-weight="600">CourseCapacityChanged</text>
+  <text class="text muted mono" x="150" y="281" text-anchor="middle" font-size="10.5">course/c1</text>
+  <rect class="course" x="50.0" y="346" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="150" y="369" text-anchor="middle" font-size="12.5" font-weight="600">CourseDescriptionUpdated</text>
+  <text class="text muted mono" x="150" y="387" text-anchor="middle" font-size="10.5">course/c1</text>
+  <rect class="student" x="610.0" y="64" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="710" y="87" text-anchor="middle" font-size="12.5" font-weight="600">StudentEmailChanged</text>
+  <text class="text muted mono" x="710" y="105" text-anchor="middle" font-size="10.5">student/s1</text>
+  <rect class="student" x="610.0" y="170" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="710" y="193" text-anchor="middle" font-size="12.5" font-weight="600">StudentCreated</text>
+  <text class="text muted mono" x="710" y="211" text-anchor="middle" font-size="10.5">student/s1</text>
+  <rect class="student" x="610.0" y="346" width="200" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="710" y="369" text-anchor="middle" font-size="12.5" font-weight="600">StudentAddressChanged</text>
+  <text class="text muted mono" x="710" y="387" text-anchor="middle" font-size="10.5">student/s1</text>
+  <rect class="shared" x="325.0" y="240" width="210" height="54" rx="8" stroke-width="1.5"/>
+  <text class="text" x="430" y="263" text-anchor="middle" font-size="12.5" font-weight="600">StudentSubscribedToCourse</text>
+  <text class="text muted mono" x="430" y="281" text-anchor="middle" font-size="10.5">course/c1 student/s1</text>
+  <text class="text muted" x="430.0" y="446" text-anchor="middle" font-size="12">DCB: each boundary follows its decision, not the entity, and encloses exactly the events it needs. Boundaries may overlap.</text>
 </svg>

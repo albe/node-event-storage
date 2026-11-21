@@ -569,32 +569,38 @@ describe('EventStore', function() {
             });
         });
 
-        it('recognizes an older commit through the in-memory cache', function(done) {
+        it('writes again when other commits came in between with ExpectedVersion.Any', function() {
             eventstore = new EventStore({ storageDirectory });
-            eventstore.commit('order-1', [{ a: 1 }, { a: 2 }], { idempotencyKey: 'k1' });
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
             eventstore.commit('order-1', [{ b: 1 }], { idempotencyKey: 'k2' });
-            eventstore.commit('order-1', [{ a: 1 }, { a: 2 }], { idempotencyKey: 'k1' }, (commit) => {
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
+            expect(eventstore.length).to.be(3);
+        });
+
+        it('acknowledges a duplicate only after the original commit is synced', function(done) {
+            eventstore = new EventStore({ storageDirectory, storageConfig: { syncInterval: 50 } });
+            const acknowledged = [];
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, () => acknowledged.push('original'));
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, (commit) => {
+                acknowledged.push('duplicate');
                 expect(commit.duplicate).to.be(true);
-                expect(commit.streamVersion).to.be(0);
-                expect(eventstore.length).to.be(3);
+                expect(acknowledged).to.eql(['original', 'duplicate']);
+                expect(eventstore.storage.getPartition('order-1').syncCallbacks.length).to.be(0);
                 done();
             });
+            expect(acknowledged).to.eql([]);
         });
 
-        it('writes again when the key fell out of the cache', function() {
-            eventstore = new EventStore({ storageDirectory, idempotencyCacheSize: 1 });
-            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
-            eventstore.commit('order-1', [{ b: 1 }], { idempotencyKey: 'k2' });
-            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
-            expect(eventstore.length).to.be(3);
-        });
-
-        it('does not check the cache when idempotencyCacheSize is 0', function() {
-            eventstore = new EventStore({ storageDirectory, idempotencyCacheSize: 0 });
-            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
-            eventstore.commit('order-1', [{ b: 1 }], { idempotencyKey: 'k2' });
-            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
-            expect(eventstore.length).to.be(3);
+        it('acknowledges a duplicate of an already durable commit on the next tick', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, () => {
+                let acknowledged = false;
+                eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, () => {
+                    acknowledged = true;
+                    done();
+                });
+                expect(acknowledged).to.be(false);
+            });
         });
 
         it('only checks the stream the commit goes to', function() {
@@ -631,11 +637,10 @@ describe('EventStore', function() {
             });
         });
 
-        it('throws on an invalid key or cache size', function() {
+        it('throws on an invalid key', function() {
             eventstore = new EventStore({ storageDirectory });
             expect(() => eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: '' })).to.throwError(/idempotencyKey/);
             expect(() => eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 42 })).to.throwError(/idempotencyKey/);
-            expect(() => new EventStore({ storageDirectory, idempotencyCacheSize: -1 })).to.throwError(/idempotencyCacheSize/);
         });
     });
 
