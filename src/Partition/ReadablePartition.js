@@ -365,21 +365,61 @@ class ReadablePartition extends events.EventEmitter {
         let reader = this.prepareReadBufferBackwards(position);
         const block = reader.buffer.toString('ascii', reader.cursor - separatorSize, reader.cursor);
         if (block === DOCUMENT_SEPARATOR) {
-            const dataSize = reader.buffer.readUInt32BE(reader.cursor - separatorSize - 4);
-            return position - this.documentWriteSize(dataSize);
+            const documentStart = this.documentStartBefore(position);
+            if (documentStart !== false) {
+                return documentStart;
+            }
         }
 
-        do {
-            reader = this.prepareReadBufferBackwards(position - separatorSize);
-
-            const bufferSeparatorPosition = reader.buffer.lastIndexOf(DOCUMENT_SEPARATOR, reader.cursor - separatorSize, 'ascii');
-            if (bufferSeparatorPosition >= 0) {
-                position = this.readBufferPos + bufferSeparatorPosition + separatorSize;
-                break;
+        // The separator bytes can also occur inside a document header (e.g. in the timestamp or a sequence number),
+        // so every match is verified against the size footer and the header of the document it would end.
+        let searchEnd = position - separatorSize;
+        while (searchEnd > 0) {
+            reader = this.prepareReadBufferBackwards(searchEnd);
+            const searchFrom = reader.cursor - separatorSize;
+            const bufferSeparatorPosition = searchFrom >= 0 ? reader.buffer.lastIndexOf(DOCUMENT_SEPARATOR, searchFrom, 'ascii') : -1;
+            if (bufferSeparatorPosition < 0) {
+                if (this.readBufferPos <= 0) {
+                    break;
+                }
+                // A separator may straddle the start of the buffer
+                searchEnd = this.readBufferPos + separatorSize - 1;
+                continue;
             }
-            position -= this.readBufferLength;
-        } while (position > 0);
-        return Math.max(0, position);
+            const documentEnd = this.readBufferPos + bufferSeparatorPosition + separatorSize;
+            if (this.documentStartBefore(documentEnd) !== false) {
+                return documentEnd;
+            }
+            searchEnd = documentEnd - 1;
+        }
+        return 0;
+    }
+
+    /**
+     * Verify that a document ends at the given position and return its start.
+     *
+     * @private
+     * @param {number} documentEnd The position right after a document separator.
+     * @returns {number|boolean} The start position of the document or false if no document ends at that position.
+     */
+    documentStartBefore(documentEnd) {
+        if (documentEnd % DOCUMENT_ALIGNMENT !== 0 || documentEnd < DOCUMENT_HEADER_SIZE + DOCUMENT_FOOTER_SIZE) {
+            return false;
+        }
+        let reader = this.prepareReadBufferBackwards(documentEnd);
+        if (!reader.buffer || reader.cursor < DOCUMENT_FOOTER_SIZE) {
+            return false;
+        }
+        const dataSize = reader.buffer.readUInt32BE(reader.cursor - DOCUMENT_FOOTER_SIZE);
+        const documentStart = documentEnd - this.documentWriteSize(dataSize);
+        if (documentStart < 0) {
+            return false;
+        }
+        reader = this.prepareReadBuffer(documentStart);
+        if (!reader.buffer || reader.cursor + 4 > reader.length) {
+            return false;
+        }
+        return reader.buffer.readUInt32BE(reader.cursor) === dataSize ? documentStart : false;
     }
 
     /**
