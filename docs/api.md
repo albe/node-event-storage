@@ -334,7 +334,8 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `OptimisticConcurrencyError` | `Error` subclass | Thrown when an expected-version or `CommitCondition` check fails. |
 | `IdempotencyError` | class | Thrown by `commit()` when an `idempotencyKey` is reused for a different commit. |
 | `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. |
-| `LOCK_THROW` | constant | Throw if storage lock is held (default). |
+| `LOCK_AUTO` | constant | Reclaim the storage lock only if the process holding it is gone, otherwise throw (default). |
+| `LOCK_THROW` | constant | Always throw if the storage lock is held. |
 | `LOCK_RECLAIM` | constant | Forcefully reclaim storage lock on open. |
 | `VERSION` | `string` | Package version (also available as `EventStore.VERSION`). |
 | `matches`, `buildRawBufferMatcher` | functions | Low-level matcher utilities. |
@@ -600,7 +601,7 @@ Accepts the same options except the write-specific ones. In addition to the read
 storage.open() → boolean
 ```
 
-Open the storage and all loaded indexes.  Emits `'opened'`.  The writable variant also acquires a lock; throws `StorageLockedError` if the storage is already locked by another process (unless `config.lock = LOCK_RECLAIM`).
+Open the storage and all loaded indexes.  Emits `'opened'`.  The writable variant also acquires a lock; throws `StorageLockedError` if the storage is already locked by another process that is still running (unless `config.lock = LOCK_RECLAIM`).
 
 ---
 

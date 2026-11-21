@@ -27,7 +27,7 @@ class ReadOnlyStorage extends ReadableStorage {
         if (!filename) {
             return true;
         }
-        return !filename.endsWith('.branch') && (filename === this.storageFile || filename.substring(0, this.storageFile.length + 1) === this.storageFile + '.');
+        return !filename.endsWith('.branch') && !filename.endsWith('.lock') && (filename === this.storageFile || filename.substring(0, this.storageFile.length + 1) === this.storageFile + '.');
     }
 
     /**

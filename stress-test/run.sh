@@ -8,7 +8,7 @@
 #  3. Let it write for a configurable number of seconds.
 #  4. Kill the writer process with SIGKILL (simulates a hard crash).
 #  5. Run the recovery script, which:
-#       a. Opens the store with LOCK_RECLAIM.
+#       a. Opens the store with the default LOCK_AUTO, which reclaims the killed writer's lock.
 #       b. Checks readability and writability.
 #       c. Reports data loss and verifies it is within the expected bounds.
 #

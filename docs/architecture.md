@@ -32,6 +32,7 @@ This page describes the technical implementation and architecture of the `node-e
 | `Storage/WritableStorage.js` | Append-only storage with write buffering and a global primary index |
 | `Storage/ReadableStorage.js` | Base class for read access: sequential scan, dirty reads, HMAC verification |
 | `Storage/ReadOnlyStorage.js` | Read-only storage that reacts to new files written by a sibling writer process |
+| `Storage/StorageLock.js` | Single-writer lock directory with an owner file (pid, host, pid namespace); reclaims the lock of a crashed writer |
 | `Partition/WritablePartition.js` | Append-only single-file partition with a write buffer and torn-write detection |
 | `Partition/ReadablePartition.js` | Buffered reading, document header/footer parsing, and metadata deserialization |
 | `Partition/ReadOnlyPartition.js` | Read-only partition that uses `WatchesFile` to detect appended data |
@@ -217,7 +218,7 @@ Every event is stamped with a `Clock` value that increments in microseconds and 
 
 ### Crash Recovery via Torn-Write Detection
 
-When a process is killed mid-commit, the last write to a partition file may be incomplete. On the next open, `ReadablePartition` detects the torn write by checking whether the `commitId` in the final document matches the expected `commitSize`. When a torn write is detected, `WritableStorage` delegates the actual file truncation to `WritablePartition`, which truncates the file to the position before the incomplete commit began. Combined with `LOCK_RECLAIM`, `WritableStorage` also detects when the primary index lags behind the data file and automatically calls `reindex()` before emitting `'ready'`. This gives bounded, predictable recovery with no manual intervention required.
+When a process is killed mid-commit, the last write to a partition file may be incomplete. On the next open, `ReadablePartition` detects the torn write by checking whether the `commitId` in the final document matches the expected `commitSize`. When a torn write is detected, `WritableStorage` delegates the actual file truncation to `WritablePartition`, which truncates the file to the position before the incomplete commit began. When it reclaims the lock of a crashed writer (automatically when the owner process is gone, or forced with `LOCK_RECLAIM`), `WritableStorage` also detects when the primary index lags behind the data file and automatically calls `reindex()` before emitting `'ready'`. This gives bounded, predictable recovery with no manual intervention required.
 
 ### Three-Tier Variant Design (Writable / Readable / ReadOnly)
 
