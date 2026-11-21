@@ -3,7 +3,7 @@ import JoinEventStream from './JoinEventStream.js';
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
+import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert } from './utils/util.js';
@@ -921,4 +921,4 @@ EventStore.Storage = Storage;
 EventStore.Index = Index;
 
 export default EventStore;
-export { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM };
+export { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO };
