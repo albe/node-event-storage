@@ -364,33 +364,24 @@ class ReadablePartition extends events.EventEmitter {
         // Optimization if we are at an exact document boundary, where we can just read the document size
         let reader = this.prepareReadBufferBackwards(position);
         const block = reader.buffer.toString('ascii', reader.cursor - separatorSize, reader.cursor);
-        if (block === DOCUMENT_SEPARATOR) {
-            const documentStart = this.documentStartBefore(position);
-            if (documentStart !== false) {
-                return documentStart;
-            }
+        const documentStart = block === DOCUMENT_SEPARATOR && this.documentStartBefore(position);
+        if (documentStart !== false) {
+            return documentStart;
         }
 
-        // The separator bytes can also occur inside a document header (e.g. in the timestamp or a sequence number),
-        // so every match is verified against the size footer and the header of the document it would end.
-        let searchEnd = position - separatorSize;
-        while (searchEnd > 0) {
-            reader = this.prepareReadBufferBackwards(searchEnd);
-            const searchFrom = reader.cursor - separatorSize;
-            const bufferSeparatorPosition = searchFrom >= 0 ? reader.buffer.lastIndexOf(DOCUMENT_SEPARATOR, searchFrom, 'ascii') : -1;
-            if (bufferSeparatorPosition < 0) {
-                if (this.readBufferPos <= 0) {
-                    break;
+        while (position - separatorSize >= DOCUMENT_HEADER_SIZE + DOCUMENT_FOOTER_SIZE) {
+            reader = this.prepareReadBufferBackwards(position - separatorSize);
+
+            const bufferSeparatorPosition = reader.buffer.lastIndexOf(DOCUMENT_SEPARATOR, reader.cursor - separatorSize, 'ascii');
+            if (bufferSeparatorPosition >= 0) {
+                position = this.readBufferPos + bufferSeparatorPosition + separatorSize;
+                // The separator bytes can also occur inside a document header, e.g. in the timestamp
+                if (this.documentStartBefore(position) !== false) {
+                    return position;
                 }
-                // A separator may straddle the start of the buffer
-                searchEnd = this.readBufferPos + separatorSize - 1;
-                continue;
+            } else {
+                position -= this.readBufferLength;
             }
-            const documentEnd = this.readBufferPos + bufferSeparatorPosition + separatorSize;
-            if (this.documentStartBefore(documentEnd) !== false) {
-                return documentEnd;
-            }
-            searchEnd = documentEnd - 1;
         }
         return 0;
     }
@@ -406,20 +397,11 @@ class ReadablePartition extends events.EventEmitter {
         if (documentEnd % DOCUMENT_ALIGNMENT !== 0 || documentEnd < DOCUMENT_HEADER_SIZE + DOCUMENT_FOOTER_SIZE) {
             return false;
         }
-        let reader = this.prepareReadBufferBackwards(documentEnd);
-        if (!reader.buffer || reader.cursor < DOCUMENT_FOOTER_SIZE) {
-            return false;
-        }
-        const dataSize = reader.buffer.readUInt32BE(reader.cursor - DOCUMENT_FOOTER_SIZE);
+        const footer = this.prepareReadBufferBackwards(documentEnd);
+        const dataSize = footer.buffer.readUInt32BE(footer.cursor - DOCUMENT_FOOTER_SIZE);
         const documentStart = documentEnd - this.documentWriteSize(dataSize);
-        if (documentStart < 0) {
-            return false;
-        }
-        reader = this.prepareReadBuffer(documentStart);
-        if (!reader.buffer || reader.cursor + 4 > reader.length) {
-            return false;
-        }
-        return reader.buffer.readUInt32BE(reader.cursor) === dataSize ? documentStart : false;
+        const header = documentStart >= 0 && this.prepareReadBuffer(documentStart);
+        return header?.buffer?.readUInt32BE(header.cursor) === dataSize ? documentStart : false;
     }
 
     /**
