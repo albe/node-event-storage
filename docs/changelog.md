@@ -4,7 +4,6 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
-- TypeScript: typed the `EventStore` and storage options (`EventStoreConfig`, `StorageConfig`, including `syncOnFlush`, `syncInterval` and `lock`) instead of `Record<string, unknown>`, and added `Storage#readLockOwner()`.
 - Fix backwards scans of a partition (backwards reads, `findDocument()`, repair) picking a wrong document position, which could make reads fail with "Invalid read position" or return the wrong document. The separator bytes `00 00 1E 0A` can also occur inside a document header (e.g. in the timestamp or as sequence number 7690), so a match is now only accepted if the size footer before it matches the header of the document it ends. A separator crossing the start of the read buffer is no longer skipped.
 - Added `CommitCondition#without(...streams)` to narrow a condition, so that new events in those streams (e.g. event types) no longer cause a conflict. The streams are treated as empty, so the condition only gets narrower.
 - Added `event-storage/projections` with `createProjection`, `composeProjections` and `buildDecisionModel`, implementing the [dcb.events](https://dcb.events/topics/projections/) projection format (with `when` for the handlers and `commitCondition` for the append condition) for DCB decision models on top of `query()` and `commit()`. `model.update()` applies only the events committed since a decision model was built, e.g. after a conflict or to keep a model in memory. `model.since()` returns the events that block a commit.
