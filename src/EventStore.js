@@ -26,6 +26,9 @@ const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 
 class OptimisticConcurrencyError extends Error {}
+class IdempotencyError extends Error {}
+
+const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000;
 
 /**
  * @typedef {string | SelectorNode[]} SelectorNode
@@ -102,6 +105,9 @@ class EventStore extends events.EventEmitter {
      *   that is called whenever a new stream partition is created. The returned object is stored once in the partition
      *   file header and surfaced to `preCommit` / `preRead` hooks. Takes precedence only when
      *   `config.storageConfig.metadata` is not also set.
+     * @param {number} [config.idempotencyCacheSize=1000] How many recent `idempotencyKey`s to remember in memory, so that
+     *   a retried commit is also recognized when other commits were written to the stream in between. Set to 0 to only
+     *   check the commit at the expected version, or the last commit of the stream.
      */
     constructor(storeName = 'eventstore', config = {}) {
         super();
@@ -132,6 +138,10 @@ class EventStore extends events.EventEmitter {
             assert(typeof nameBuilder === 'function', 'Each streamSources entry must have a nameBuilder function.');
             this.streamSources.push(buildStreamSource(path, nameBuilder));
         }
+
+        this.idempotencyCacheSize = config.idempotencyCacheSize ?? DEFAULT_IDEMPOTENCY_CACHE_SIZE;
+        assert(Number.isInteger(this.idempotencyCacheSize) && this.idempotencyCacheSize >= 0, 'idempotencyCacheSize must be a non-negative integer.');
+        this.idempotencyCache = new Map();
 
         this.storageDirectory = resolvePath(config.storageDirectory || /* istanbul ignore next */ './data');
         let defaults = {
@@ -494,9 +504,13 @@ class EventStore extends events.EventEmitter {
      * @param {number|CommitCondition} [expectedVersion] One of the `ExpectedVersion` constants, a positive
      *   stream version number, or a {@link CommitCondition} obtained from {@link EventStore#query}.
      * @param {object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
+     *   Set `metadata.idempotencyKey` to a unique string per logical commit to make retries safe: if a commit with the
+     *   same key was already written to this stream, nothing is written again and the callback receives the original
+     *   commit with `duplicate: true`.
      * @param {function} [callback] A function that will be executed when all events have been committed.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version, or if a
      *   {@link CommitCondition} was provided and conflicting events have been committed since it was obtained.
+     * @throws {IdempotencyError} if the `idempotencyKey` was already used for a commit with a different number of events.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
@@ -511,6 +525,22 @@ class EventStore extends events.EventEmitter {
             ExpectedVersion.Any,
             CommitCondition
         ));
+
+        const idempotencyKey = metadata.idempotencyKey;
+        if (idempotencyKey !== undefined) {
+            assert(typeof idempotencyKey === 'string' && idempotencyKey !== '', 'idempotencyKey must be a non-empty string.');
+            const original = this.findCommitByIdempotencyKey(streamName, idempotencyKey, expectedVersion);
+            if (original !== null) {
+                assert(original.events.length === events.length,
+                    `Idempotency key "${idempotencyKey}" was already used for a commit with ${original.events.length} events to stream "${streamName}".`,
+                    IdempotencyError
+                );
+                // The original commit may still be in the write buffer and must be on disk before it is acknowledged.
+                this.storage.flush();
+                process.nextTick(() => callback(original));
+                return;
+            }
+        }
 
         // Perform DCB-style concurrency check when a CommitCondition is provided.
         if (expectedVersion instanceof CommitCondition) {
@@ -547,6 +577,9 @@ class EventStore extends events.EventEmitter {
             streamVersion,
             events: []
         });
+        if (idempotencyKey !== undefined) {
+            this.rememberIdempotencyKey(idempotencyKey, streamName, streamVersion + 1);
+        }
         const commitCallback = () => {
             this.emit('commit', commit);
             callback(commit);
@@ -558,6 +591,79 @@ class EventStore extends events.EventEmitter {
             streamVersion++;
             commit.events.push(event);
             this.storage.write(storedEvent, commitVersion !== events.length ? undefined : commitCallback);
+        }
+    }
+
+    /**
+     * Lookups are verified against the stored events, so a stale cache entry (e.g. after a truncate) is harmless.
+     *
+     * @private
+     * @returns {object|null} The original commit with `duplicate: true`, or null.
+     */
+    findCommitByIdempotencyKey(streamName, idempotencyKey, expectedVersion) {
+        if (!(streamName in this.streams)) {
+            return null;
+        }
+        const streamVersion = this.streams[streamName].index.length;
+        const candidates = [];
+        if (typeof expectedVersion === 'number' && expectedVersion >= 0 && streamVersion > expectedVersion) {
+            candidates.push(expectedVersion + 1);
+        }
+        if (streamVersion > 0) {
+            candidates.push(streamVersion);
+        }
+        const cached = this.idempotencyCache.get(idempotencyKey);
+        if (cached && cached.streamName === streamName && cached.revision <= streamVersion) {
+            candidates.push(cached.revision);
+        }
+        for (const revision of candidates) {
+            const commit = this.readCommitAt(streamName, revision, idempotencyKey);
+            if (commit !== null) {
+                return commit;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @private
+     * @param {number} revision The 1-based revision of any event of the commit.
+     * @returns {object|null}
+     */
+    readCommitAt(streamName, revision, idempotencyKey) {
+        const probe = this.getEventStream(streamName, revision, revision).next();
+        if (!probe || !probe.metadata || probe.metadata.idempotencyKey !== idempotencyKey) {
+            return null;
+        }
+        const { commitVersion = 0, commitSize = 1 } = probe.metadata;
+        const firstRevision = revision - commitVersion;
+        const events = [];
+        let first = null;
+        this.getEventStream(streamName, firstRevision, firstRevision + commitSize - 1).forEach((payload, metadata) => {
+            if (first === null) {
+                first = metadata;
+            }
+            events.push(payload);
+        });
+        const commit = Object.assign({}, first, { streamName, events, duplicate: true });
+        delete commit.commitVersion;
+        delete commit.commitSize;
+        return commit;
+    }
+
+    /**
+     * Remembers keys so that retries with `ExpectedVersion.Any` are recognized even when other commits came in between.
+     *
+     * @private
+     */
+    rememberIdempotencyKey(idempotencyKey, streamName, revision) {
+        if (this.idempotencyCacheSize === 0) {
+            return;
+        }
+        this.idempotencyCache.delete(idempotencyKey);
+        this.idempotencyCache.set(idempotencyKey, { streamName, revision });
+        if (this.idempotencyCache.size > this.idempotencyCacheSize) {
+            this.idempotencyCache.delete(this.idempotencyCache.keys().next().value);
         }
     }
 
@@ -900,4 +1006,4 @@ EventStore.Storage = Storage;
 EventStore.Index = Index;
 
 export default EventStore;
-export { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO };
+export { ExpectedVersion, OptimisticConcurrencyError, IdempotencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO };
