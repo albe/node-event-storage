@@ -56,13 +56,29 @@ Strict durability is intentionally traded for write performance:
 - Events are buffered in memory before being flushed to disk.
 - Flush does **not** call `fsync` by default, so OS/disk write-cache can still absorb and potentially lose recent writes on a crash.
 
-To enable strict durability (at significant performance cost):
+Three levels are available:
+
+| Setting | Commit callback fires when | Survives process crash | Survives OS crash / power loss | Write throughput |
+|---------|----------------------------|------------------------|--------------------------------|------------------|
+| default | the data was handed to the OS | yes | no | highest |
+| `syncInterval: <ms>` | the data was `fsync`ed, at most `<ms>` later | yes | yes, for acknowledged commits | close to the default |
+| `syncOnFlush: true` | the data was `fsync`ed on every flush | yes | yes, for acknowledged commits | lowest |
+
+`syncInterval` is a group commit: all flushes of a partition within the interval share one `fsync`, and their callbacks fire after it. A commit is therefore acknowledged up to `syncInterval` milliseconds later, but every acknowledged commit is on disk. Commits that are not yet acknowledged can still be lost.
 
 ```javascript
+// Acknowledge commits only once they are on disk, with at most one fsync per partition every 50 ms
 const eventstore = new EventStore('my-event-store', {
+    storageConfig: { syncInterval: 50 }
+});
+
+// fsync on every flush
+const strict = new EventStore('my-strict-store', {
     storageConfig: { syncOnFlush: true }
 });
 ```
+
+With either option, the directory is also synced after a new partition or index file is created, so a new stream does not disappear after a power loss.
 
 ## Global Order
 
@@ -80,7 +96,7 @@ node-event-storage is designed to survive hard process crashes (e.g. `SIGKILL`, 
 |-----------|---------|
 | **No silent corruption** | Torn writes (partial page writes caused by a crash) are detected on startup and automatically truncated. The store will never surface a partially-written event. |
 | **Atomic commits** | A multi-event commit is all-or-nothing. If the process crashes mid-commit, the incomplete commit is rolled back on the next open. |
-| **Consistent reads after recovery** | Once `'ready'` fires after a `LOCK_RECLAIM` open, all indexes are fully consistent with the data files. |
+| **Consistent reads after recovery** | Once `'ready'` fires after reclaiming a lock (automatically or with `LOCK_RECLAIM`), all indexes are fully consistent with the data files. |
 | **Bounded data loss** | Events that were in the in-memory write buffer at the time of the crash are lost. The maximum loss is deterministic and can be calculated from the buffer settings (see below). |
 
 ### Quantifying the data-loss window
@@ -90,7 +106,7 @@ Two factors bound how many events can be lost in a crash:
 1. **Partition write buffer** — each stream buffers up to `writeBufferSize` bytes or `maxWriteBufferDocuments` events before flushing. With a 16 KB buffer and ~100-byte events, that is at most ~160 events per stream.
 2. **In-flight commit** — at most one commit's worth of events (the number of events passed to that `commit()` call) may be torn.
 
-Index entries that were buffered but not yet flushed at the time of the crash are **not** lost: `LOCK_RECLAIM` automatically reindexes from the data files on the next open, making all on-disk events visible again.
+Index entries that were buffered but not yet flushed at the time of the crash are **not** lost: reclaiming the lock automatically reindexes from the data files on the next open, making all on-disk events visible again.
 
 With the default settings and a single stream the worst-case data loss is roughly:
 

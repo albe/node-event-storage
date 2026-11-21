@@ -2,7 +2,7 @@
  * Stress-test recovery script.
  *
  * Reopens the EventStore that was left in an unclean state (because the writer
- * was killed with SIGKILL) using the LOCK_RECLAIM option.  It then:
+ * was killed with SIGKILL) with the default LOCK_AUTO option, which reclaims the lock of the dead writer.  It then:
  *
  *  1. Verifies the store is readable after recovery.
  *  2. Writes new events to every stream to confirm the store is still writable.
@@ -23,7 +23,7 @@
 import path from 'path';
 import fs from 'fs';
 
-import EventStore, { LOCK_RECLAIM } from '../index.js';
+import EventStore from '../index.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -46,15 +46,12 @@ console.log(`  writeBufferSize            : ${stats.writeBufferSize}`);
 console.log(`  maxWriteBufferDocuments    : ${stats.maxWriteBufferDocuments}`);
 
 // ---------------------------------------------------------------------------
-// Open the store with LOCK_RECLAIM so torn writes are repaired automatically
+// Open the store with the default lock mode: the dead writer's lock is reclaimed and torn writes are repaired
 // ---------------------------------------------------------------------------
-console.log('\n[recovery] Opening store with LOCK_RECLAIM ...');
+console.log('\n[recovery] Opening store, reclaiming the lock of the killed writer ...');
 
 const store = new EventStore('stress', {
     storageDirectory: dataDir,
-    storageConfig: {
-        lock: LOCK_RECLAIM,
-    },
 });
 
 // ---------------------------------------------------------------------------
@@ -71,7 +68,7 @@ function fail(msg) {
 // Main recovery checks (run once the store emits 'ready')
 // ---------------------------------------------------------------------------
 store.on('ready', () => {
-    console.log('[recovery] Store ready after LOCK_RECLAIM.');
+    console.log('[recovery] Store ready after reclaiming the lock.');
 
     const totalAfterRecovery = store.length;
     console.log(`\n[recovery] Events in store after recovery: ${totalAfterRecovery}`);

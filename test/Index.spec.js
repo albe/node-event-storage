@@ -1,5 +1,6 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
+import fsSync from 'fs';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
@@ -54,6 +55,19 @@ describe('Index', function() {
         readers[readers.length] = reader;
         return reader;
     }
+
+    it('syncs the directory when creating a new file with a durability option', function() {
+        let fsyncCalls = 0;
+        const originalFsync = fsSync.fsyncSync;
+        fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
+        try {
+            index = createIndex('durable.index', { syncInterval: 10 });
+            index.open();
+            expect(fsyncCalls).to.be(1);
+        } finally {
+            fsSync.fsyncSync = originalFsync;
+        }
+    });
 
     it('is opened on instantiation', function() {
         index = setupIndexWithEntries();

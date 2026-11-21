@@ -1,5 +1,5 @@
 import packageJson from './package.json' with { type: 'json' };
-import EventStore, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM } from './src/EventStore.js';
+import EventStore, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './src/EventStore.js';
 import EventStream from './src/EventStream.js';
 import Storage, { StorageLockedError } from './src/Storage.js';
 import Index from './src/Index.js';
@@ -17,6 +17,7 @@ export {
 	CommitCondition,
 	LOCK_THROW,
 	LOCK_RECLAIM,
+	LOCK_AUTO,
 	VERSION,
 	EventStream,
 	Storage,
