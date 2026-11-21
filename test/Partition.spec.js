@@ -790,6 +790,19 @@ describe('Partition', function() {
             expectDocumentStarts(reader, starts, reader.size);
         });
 
+        it('finds separators that cross the start of the read buffer', function() {
+            partition.open();
+            const starts = [];
+            for (let i = 1; i <= 10; i++) starts.push(partition.write('x'.repeat(13 * i), i));
+            partition.flush();
+
+            for (const readBufferSize of [61, 64, 67, 100]) {
+                const reader = createReader({ readBufferSize });
+                reader.open();
+                expectDocumentStarts(reader, starts, reader.size);
+            }
+        });
+
         it('ignores separator bytes in the sequence number of a document header', function() {
             // Sequence number 7690 is 00 00 1E 0A in big-endian, aligned like a real separator
             partition.open();

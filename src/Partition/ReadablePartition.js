@@ -380,7 +380,8 @@ class ReadablePartition extends events.EventEmitter {
                     return position;
                 }
             } else {
-                position -= this.readBufferLength;
+                // Continue so that a separator crossing the start of the buffer is found as well
+                position = this.readBufferPos + 2 * separatorSize;
             }
         }
         return 0;
