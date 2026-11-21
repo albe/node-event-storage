@@ -236,9 +236,16 @@ describe('Projection', function () {
 
         it('works for conditions created from a selector', function () {
             store.commit('courses', [defineCourse('c1', 2)]);
-            const { condition } = store.query(['CourseDefined', 'CourseCapacityChanged']);
+            const { condition } = store.query(['types/CourseDefined', 'types/CourseCapacityChanged']);
             store.commit('courses', [{ type: 'CourseCapacityChanged', courseId: 'c1', capacity: 3, tags: ['course/c1'] }]);
             expect(() => store.commit('courses', [defineCourse('c2', 2)], condition.without('CourseCapacityChanged'))).to.not.throwError();
+        });
+
+        it('only excludes type streams', function () {
+            store.commit('courses', [defineCourse('c1', 2)]);
+            const { condition } = store.query(['types/CourseDefined', 'tags/course/c1']);
+            expect(JSON.stringify(condition.without('course/c1').selector)).to.contain('tags/course/c1');
+            expect(JSON.stringify(condition.without('CourseDefined').selector)).to.not.contain('types/CourseDefined');
         });
 
         it('does not narrow query items without types', function () {

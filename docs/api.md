@@ -331,7 +331,7 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `ExpectedVersion.Any` | `-1` | Skip version check. |
 | `ExpectedVersion.EmptyStream` | `0` | Assert the stream is new. |
 | `OptimisticConcurrencyError` | `Error` subclass | Thrown when an expected-version or `CommitCondition` check fails. |
-| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. `condition.without(...streams)` returns a narrowed condition at the same position that ignores new events in those streams (event types with `typeAccessor`). |
+| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. `condition.without(...types)` returns a narrowed condition at the same position that ignores new events of those types (requires `typeAccessor`). |
 | `LOCK_AUTO` | constant | Reclaim the storage lock only if the process holding it is gone, otherwise throw (default). |
 | `LOCK_THROW` | constant | Always throw if the storage lock is held. |
 | `LOCK_RECLAIM` | constant | Forcefully reclaim storage lock on open. |

@@ -22,6 +22,13 @@ const ExpectedVersion = {
  */
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
 const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
+/**
+ * The name of the stream that `typeAccessor` maintains for an event type.
+ * @param {string} type
+ * @returns {string}
+ */
+const typeStreamName = (type) => `types/${type}`;
+
 const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 
@@ -70,21 +77,20 @@ class CommitCondition {
     }
 
     /**
-     * Narrow this condition so that new events in the given streams no longer cause a conflict, e.g. because the
+     * Narrow this condition so that new events of the given types no longer cause a conflict, e.g. because the
      * decision only depends on part of the queried events: a concurrent unsubscribe cannot invalidate a new
      * subscription, even though the decision model counts it.
      *
-     * The streams are treated as empty: they are removed from OR levels, and an AND level containing one of them is
-     * removed as a whole. The condition therefore never gets wider. Event types address their type streams, which
-     * are named like the type when `typeAccessor` is configured.
+     * The type streams (`types/<type>`, maintained by `typeAccessor`) are treated as empty: they are removed from OR
+     * levels, and an AND level containing one of them is removed as a whole. The condition therefore never gets wider.
      *
      * @api
-     * @param {...(string|string[])} streams The stream names (e.g. event types) to ignore in the conflict check.
+     * @param {...(string|string[])} types The event types to ignore in the conflict check.
      * @returns {CommitCondition} A new condition at the same position.
      * @throws {Error} When no stream would be left to check.
      */
-    without(...streams) {
-        const selector = excludeStreams(this.selector, new Set(streams.flat()));
+    without(...types) {
+        const selector = excludeStreams(this.selector, new Set(types.flat().map(typeStreamName)));
         assert(selector !== null, 'without() would leave no streams to check. Commit without a condition instead.');
         const normalized = normalizeSelector(selector);
         return new CommitCondition(Array.isArray(normalized) ? normalized : [normalized], this.matcher, this.noneMatchAfter, this.raw);
@@ -138,7 +144,7 @@ class EventStore extends events.EventEmitter {
 
         if (config.typeAccessor) {
             assert(typeof config.typeAccessor === 'string', 'typeAccessor must be a dot-notation string path (e.g. \'type\').');
-            this.typeSource = buildStreamSource(config.typeAccessor, (v) => `types/${v}`);
+            this.typeSource = buildStreamSource(config.typeAccessor, typeStreamName);
             this.streamSources.push(this.typeSource);
         }
 

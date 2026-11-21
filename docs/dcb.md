@@ -296,7 +296,7 @@ try {
 
 ### Narrowing the commit condition
 
-A decision may depend on fewer events than the decision model reads. A course's free seats count subscriptions and unsubscriptions, but a concurrent unsubscription cannot make a new subscription invalid. `commitCondition.without(...streams)` returns a new condition at the same position that ignores new events in those streams. With `typeAccessor`, a type stream is named like the event type, so you pass the types:
+A decision may depend on fewer events than the decision model reads. A course's free seats count subscriptions and unsubscriptions, but a concurrent unsubscription cannot make a new subscription invalid. `commitCondition.without(...types)` returns a new condition at the same position that ignores new events of those types:
 
 ![A commit condition can be a subset of the decision model: the model reads four event types, the condition narrowed with without('StudentUnsubscribedFromCourse') checks three; a concurrent unsubscription lets the commit succeed, a concurrent subscription conflicts](diagram-dcb-commit-condition.svg)
 
@@ -318,10 +318,10 @@ if (model.state.taken >= model.state.capacity) throw new Error('Course is full')
 store.commit(`semester-${semesterId}`, [subscription], model.commitCondition.without('StudentUnsubscribedFromCourse'));
 ```
 
-- The original condition is unchanged; `without()` accepts several streams or an array.
-- It works on the compiled selector and treats the named streams as empty: they are removed where alternatives are combined (OR), and a combination that requires one of them (AND, e.g. a tag plus a single type) is removed as a whole. The condition therefore only ever gets narrower, never wider.
+- The original condition is unchanged; `without()` accepts several types or an array.
+- It works on the compiled selector and treats the type streams `types/<type>` as empty: they are removed where alternatives are combined (OR), and a combination that requires one of them (AND, e.g. a tag plus a single type) is removed as a whole. The condition therefore only ever gets narrower, never wider.
 - A query item without `types` only reads tag streams, so excluding a type does not narrow it.
-- It works the same for conditions created from a selector, and for tag or custom streams (e.g. `without('tags/course/c1')`).
+- It works the same for conditions created from a selector that names type streams. Tag and other streams are never excluded.
 - It throws when no stream would be left; commit without a condition instead.
 
 ### Mapping to the dcb.events specification
@@ -334,7 +334,7 @@ event-storage implements the semantics of the [DCB specification](https://dcb.ev
 | Sequence position | Global event number (1-based) | `store.length` is the position of the last event |
 | `read(query, { from })` | `query(dcbQuery, null, minRevision)` | Returns `{ stream, condition }` |
 | `AppendCondition` | `CommitCondition` returned by `query()` / `buildDecisionModel()` | Passed as the third argument of `commit()` |
-| `AppendCondition.failIfEventsMatch` | `CommitCondition.selector`, compiled from the `DcbQuery` (+ optional `matcher`) | Narrow it with `condition.without(...streams)` |
+| `AppendCondition.failIfEventsMatch` | `CommitCondition.selector`, compiled from the `DcbQuery` (+ optional `matcher`) | Narrow it with `condition.without(...types)` |
 | `AppendCondition.after` | `CommitCondition.noneMatchAfter` | `store.length` at query time |
 | `append(events, condition)` | `commit(streamName, events, condition)` | See below |
 | `createProjection`, `composeProjections`, `buildDecisionModel` | Same names in `event-storage/projections` | |
