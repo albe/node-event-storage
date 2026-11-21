@@ -2,7 +2,9 @@
 
 Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation for a released version is available through the version selector on Read the Docs.
 
-## Unreleased
+## 1.5.0
+
+See the [upgrade guide](upgrading/1.5.md) for the breaking changes.
 
 - Fix backwards scans of a partition (backwards reads, `findDocument()`, repair) picking a wrong document position, which could make reads fail with "Invalid read position" or return the wrong document. The separator bytes `00 00 1E 0A` can also occur inside a document header (e.g. in the timestamp or as sequence number 7690), so a match is now only accepted if the size footer before it matches the header of the document it ends. A separator crossing the start of the read buffer is no longer skipped.
 - Added `CommitCondition#without(...streams)` to narrow a condition, so that new events in those streams (e.g. event types) no longer cause a conflict. The streams are treated as empty, so the condition only gets narrower.
