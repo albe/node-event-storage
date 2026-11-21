@@ -223,25 +223,30 @@ describe('Projection', function () {
             const { commitCondition } = buildDecisionModel(store, CourseSeats('c1'));
             const narrowed = commitCondition.without(['StudentUnsubscribedFromCourse', 'CourseDefined']);
             expect(narrowed.noneMatchAfter).to.be(commitCondition.noneMatchAfter);
-            expect(narrowed.dcbQuery.items.flatMap(item => item.types)).to.eql(['CourseCapacityChanged', 'StudentSubscribedToCourse']);
-            expect(commitCondition.dcbQuery.items.flatMap(item => item.types)).to.contain('StudentUnsubscribedFromCourse');
+            expect(JSON.stringify(narrowed.selector)).to.not.contain('StudentUnsubscribedFromCourse');
+            expect(JSON.stringify(narrowed.selector)).to.not.contain('CourseDefined');
+            expect(JSON.stringify(commitCondition.selector)).to.contain('StudentUnsubscribedFromCourse');
         });
 
-        it('throws when no type would be left', function () {
+        it('throws when no stream would be left', function () {
             store.commit('courses', [defineCourse('c1', 2)]);
             const { commitCondition } = buildDecisionModel(store, CourseSubscriptions('c1'));
-            expect(() => commitCondition.without('StudentSubscribedToCourse')).to.throwError(/no event types/);
+            expect(() => commitCondition.without('StudentSubscribedToCourse')).to.throwError(/no streams/);
         });
 
-        it('throws for conditions not created from a DcbQuery', function () {
+        it('works for conditions created from a selector', function () {
             store.commit('courses', [defineCourse('c1', 2)]);
-            const { condition } = store.query(['CourseDefined']);
-            expect(() => condition.without('CourseDefined')).to.throwError(/DcbQuery/);
+            const { condition } = store.query(['CourseDefined', 'CourseCapacityChanged']);
+            store.commit('courses', [{ type: 'CourseCapacityChanged', courseId: 'c1', capacity: 3, tags: ['course/c1'] }]);
+            expect(() => store.commit('courses', [defineCourse('c2', 2)], condition.without('CourseCapacityChanged'))).to.not.throwError();
         });
 
-        it('throws for query items without types', function () {
+        it('does not narrow query items without types', function () {
+            store.commit('courses', [defineCourse('c1', 2)]);
             const { condition } = store.query({ items: [{ tags: ['course/c1'] }] });
-            expect(() => condition.without('CourseDefined')).to.throwError(/has no types/);
+            store.commit('courses', [defineCourse('c1', 3)]);
+            expect(() => store.commit('courses', [defineCourse('c1', 4)], condition.without('CourseDefined')))
+                .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
         });
     });
 

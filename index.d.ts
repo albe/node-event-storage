@@ -37,15 +37,13 @@ export interface DcbQuery {
 export type CommitCallback = (commit: Record<string, unknown>) => void;
 
 export class CommitCondition {
-    constructor(selector: StreamSelector | string, matcher: EventMatcher | null | undefined, noneMatchAfter: number, raw?: boolean, dcbQuery?: DcbQuery | null, compileDcbQuery?: ((query: DcbQuery) => StreamSelector) | null);
+    constructor(selector: StreamSelector | string, matcher: EventMatcher | null | undefined, noneMatchAfter: number, raw?: boolean);
     selector: StreamSelector | string;
     matcher: EventMatcher | null;
     raw: boolean;
     noneMatchAfter: number;
-    /** The DcbQuery the condition was created from, or null for selector queries. */
-    dcbQuery: DcbQuery | null;
-    /** A narrowed condition at the same position that ignores new events of the given types. DcbQuery conditions only. */
-    without(...types: Array<string | string[]>): CommitCondition;
+    /** A narrowed condition at the same position that ignores new events in the given streams (e.g. event types). */
+    without(...streams: Array<string | string[]>): CommitCondition;
 }
 
 export class OptimisticConcurrencyError extends Error {}

@@ -38,7 +38,7 @@ class ReadModel extends events.EventEmitter {
         this.version = version;
         this.fileName = persist ? this.resolveFileName(name) : null;
         this.persisting = null;
-        this.selector = eventStore.compileDcbQuery(this.projection.query);
+        this.selector = eventStore.query(this.projection.query).condition.selector;
         this.state = this.projection.initialState;
         this.position = 0;
         this.batchSize = batchSize;

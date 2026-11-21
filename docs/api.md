@@ -330,7 +330,7 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `ExpectedVersion.Any` | `-1` | Skip version check. |
 | `ExpectedVersion.EmptyStream` | `0` | Assert the stream is new. |
 | `OptimisticConcurrencyError` | `Error` subclass | Thrown when an expected-version or `CommitCondition` check fails. |
-| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. For a `DcbQuery`, `condition.without(...types)` returns a narrowed condition that ignores new events of those types. |
+| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. `condition.without(...streams)` returns a narrowed condition at the same position that ignores new events in those streams (event types with `typeAccessor`). |
 | `LOCK_THROW` | constant | Throw if storage lock is held (default). |
 | `LOCK_RECLAIM` | constant | Forcefully reclaim storage lock on open. |
 | `VERSION` | `string` | Package version (also available as `EventStore.VERSION`). |
