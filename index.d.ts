@@ -42,6 +42,8 @@ export class CommitCondition {
     matcher: EventMatcher | null;
     raw: boolean;
     noneMatchAfter: number;
+    /** A narrowed condition at the same position that ignores new events in the given streams (e.g. event types). */
+    without(...streams: Array<string | string[]>): CommitCondition;
 }
 
 export class OptimisticConcurrencyError extends Error {}
@@ -78,6 +80,7 @@ export class EventStream extends Readable {
         options: { concurrency?: number; signal?: AbortSignal }
     ): Readable;
     next(): any | false;
+    [Symbol.iterator](): Iterator<any>;
 }
 
 export class Consumer extends Readable {
