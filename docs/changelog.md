@@ -4,7 +4,9 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
-- Added `createReadModel()` in `event-storage/projections`: the same projections as read models that follow the store, optionally persisted, also in read-only processes. The initial catch-up runs asynchronously in batches (`'progress'`, `'caught-up'`); `update()` catches up synchronously.
+- **Breaking:** projections read from an event source instead of the store, so the same decision models and read models work over the HTTP API. `buildDecisionModel(source, projections)`, `model.update()` and `readModel.decisionModel()` are async, and `model.since()` returns an async iterable of `{ event, metadata, position, type, tags }`. Pass `localSource(store)` (new export of `event-storage`) for a local store, or `httpSource(client)` from `event-storage-http/client`. See the [upgrade guide](upgrading/1.6.md).
+- Added `transformEvents(source, transform)` in `event-storage/projections` to transform events, e.g. decrypt fields, before projections see them. Type and tags are read from the stored event.
+- Added `createReadModel(source, projections, { name, snapshots, version, batchSize })` in `event-storage/projections`: the same projections as read models that catch up and then follow the source, also in read-only processes and over HTTP. State and position can be kept in a snapshot store, e.g. `fileSnapshotStore(directory)` from `event-storage`, so a restart only reads newer events.
 
 ## 1.5.0
 

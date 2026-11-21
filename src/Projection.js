@@ -75,19 +75,55 @@ function isProjection(value) {
 }
 
 /**
+ * @typedef {object} Envelope One event as delivered by an {@link EventSource}.
+ * @property {object} event The event payload.
+ * @property {object} metadata The storage metadata.
+ * @property {number} position The global position of the event.
+ * @property {string} type The event type, read from the stored event.
+ * @property {string[]} tags The event tags, read from the stored event.
+ */
+
+/**
+ * @typedef {object} Selection The events to read: a compiled selector and an optional matcher, e.g. a commit condition.
+ * @property {Array<string|Array>} selector
+ * @property {object|function|null} [matcher]
+ */
+
+/**
+ * @typedef {object} EventSource The read side that projections need from a store. Implemented by `localSource(store)`
+ *   in `event-storage` and by `httpSource(client)` in `event-storage-http`.
+ * @property {function(object, {from?: number}=): Promise<{events: AsyncIterable<Envelope>, condition: object}>} query
+ *   Read the events matching a DcbQuery from a global position, together with the commit condition at the time of the
+ *   query. Only events up to the condition's position are delivered.
+ * @property {function(Selection, {from?: number}=): AsyncIterable<Envelope>} read Read the events of a selection from
+ *   a global position up to the end of the store.
+ * @property {function(Selection, {from?: number, signal?: AbortSignal}=): AsyncIterable<Envelope>} follow Read the
+ *   events of a selection from a global position and keep delivering new ones until the signal aborts.
+ */
+
+/**
+ * @param {any} source
+ */
+function assertSource(source) {
+    assert(source !== null && typeof source === 'object'
+        && typeof source.query === 'function' && typeof source.read === 'function' && typeof source.follow === 'function',
+    'Projections read from an event source. Pass localSource(store) or httpSource(client).');
+}
+
+/**
  * The state of one or more projections at a known position of the store, together with the append condition
  * that protects a decision made on it. Immutable: {@link DecisionModel#update} returns a new model.
  */
 class DecisionModel {
 
     /**
-     * @param {import('./EventStore.js').default} eventStore
+     * @param {EventSource} source
      * @param {Projection} projection
      * @param {any} state
-     * @param {import('./EventStore.js').CommitCondition} commitCondition
+     * @param {object} commitCondition The condition returned by the source.
      */
-    constructor(eventStore, projection, state, commitCondition) {
-        this.eventStore = eventStore;
+    constructor(source, projection, state, commitCondition) {
+        this.source = source;
         this.projection = projection;
         this.state = state;
         this.commitCondition = commitCondition;
@@ -99,72 +135,57 @@ class DecisionModel {
      * make a commit with that condition fail. Defaults to this model's `commitCondition`; pass a narrowed
      * condition (e.g. from `commitCondition.without(...)`) to get only the events that conflict with it.
      *
-     * @param {import('./EventStore.js').CommitCondition} [condition]
-     * @returns {import('./EventStream.js').default}
+     * @param {object} [condition]
+     * @returns {AsyncIterable<Envelope>}
      */
     since(condition = this.commitCondition) {
-        return this.eventStore.fromStreams(
-            '_since_' + condition.noneMatchAfter,
-            condition.selector,
-            condition.noneMatchAfter + 1,
-            -1,
-            condition.matcher,
-            condition.raw
-        );
+        return this.source.read(condition, { from: condition.noneMatchAfter + 1 });
     }
 
     /**
      * Apply the events committed since this model was built and return the updated model. Only those events are
-     * read. Returns this model unchanged when nothing new was committed.
+     * read. Resolves to this model when nothing new was committed.
      *
-     * @returns {DecisionModel}
+     * @returns {Promise<DecisionModel>}
      */
-    update() {
-        if (this.eventStore.length === this.commitCondition.noneMatchAfter) {
-            return this;
-        }
-        return readDecisionModel(this.eventStore, this.projection, this.state, this.commitCondition.noneMatchAfter + 1);
+    async update() {
+        const model = await readDecisionModel(this.source, this.projection, this.state, this.commitCondition.noneMatchAfter + 1);
+        return model.commitCondition.noneMatchAfter === this.commitCondition.noneMatchAfter ? this : model;
     }
 }
 
 /**
- * @param {import('./EventStore.js').default} eventStore
+ * @param {EventSource} source
  * @param {Projection} projection
  * @param {any} state The state to apply the events to.
  * @param {number} from The first global position to read.
- * @returns {DecisionModel}
+ * @returns {Promise<DecisionModel>}
  */
-function readDecisionModel(eventStore, projection, state, from) {
-    const { stream, condition } = eventStore.query(projection.query, null, from);
-    stream.forEach((event, metadata) => {
-        state = applyEvent(eventStore, projection, state, event, metadata);
-    });
-    return new DecisionModel(eventStore, projection, state, condition);
+async function readDecisionModel(source, projection, state, from) {
+    const { events, condition } = await source.query(projection.query, { from });
+    for await (const envelope of events) {
+        state = applyEnvelope(projection, state, envelope);
+    }
+    return new DecisionModel(source, projection, state, condition);
 }
 
 /**
- * Apply one stored event to the projection, resolving its type and tags through the store's accessors.
+ * Apply one event to the projection.
  *
- * @param {import('./EventStore.js').default} eventStore
  * @param {Projection} projection
  * @param {any} state
- * @param {object} event The event payload.
- * @param {object} metadata The storage metadata.
+ * @param {Envelope} envelope
  * @returns {any} The new state.
  */
-function applyEvent(eventStore, projection, state, event, metadata) {
-    const type = eventStore.typeSource.accessor(event);
-    const tags = (eventStore.tagsSource ? eventStore.tagsSource.accessor(event) : null) ?? [];
+function applyEnvelope(projection, state, { event, metadata, type, tags }) {
     return projection.apply(state, event, metadata, { type, tags });
 }
 
 /**
- * @param {import('./EventStore.js').default} eventStore
  * @param {Projection|Object<string, Projection>} projectionOrMap
  * @returns {Projection} The projection, composed when a map was given.
  */
-function resolveProjection(eventStore, projectionOrMap) {
-    assert(eventStore.typeSource !== null, 'Projections need the store to be configured with a typeAccessor.');
+function resolveProjection(projectionOrMap) {
     return isProjection(projectionOrMap) ? projectionOrMap : composeProjections(projectionOrMap);
 }
 
@@ -173,14 +194,43 @@ function resolveProjection(eventStore, projectionOrMap) {
  * The returned model carries the append condition that protects the decision. After a conflict, or to keep
  * a model in memory across commands, call `model.update()` to only apply the events committed since.
  *
- * @param {import('./EventStore.js').default} eventStore A store configured with `typeAccessor` (and `tagsAccessor`
- *   when projections use a tagFilter).
+ * @param {EventSource} source Where to read the events from, e.g. `localSource(store)` or `httpSource(client)`.
  * @param {Projection|Object<string, Projection>} projectionOrMap A projection, or a map of projections to compose.
- * @returns {DecisionModel}
+ * @returns {Promise<DecisionModel>}
  */
-function buildDecisionModel(eventStore, projectionOrMap) {
-    const projection = resolveProjection(eventStore, projectionOrMap);
-    return readDecisionModel(eventStore, projection, projection.initialState, 1);
+async function buildDecisionModel(source, projectionOrMap) {
+    assertSource(source);
+    const projection = resolveProjection(projectionOrMap);
+    return readDecisionModel(source, projection, projection.initialState, 1);
 }
 
-export { createProjection, composeProjections, buildDecisionModel, DecisionModel, applyEvent, resolveProjection };
+/**
+ * Wrap a source so that every event passes through `transform` before it reaches a projection, e.g. to decrypt
+ * fields. Type and tags are read from the stored event before the transformation, because the store selects
+ * events by them. Matchers in a commit condition also see the stored, untransformed event.
+ *
+ * @param {EventSource} source
+ * @param {function(object, object): (object|Promise<object>)} transform Receives `(event, metadata)` and returns
+ *   the event the projections see.
+ * @returns {EventSource}
+ */
+function transformEvents(source, transform) {
+    assertSource(source);
+    assert(typeof transform === 'function', 'transformEvents() needs a transform function.');
+    const map = async function* (envelopes) {
+        for await (const envelope of envelopes) {
+            yield { ...envelope, event: await transform(envelope.event, envelope.metadata) };
+        }
+    };
+    return Object.freeze({
+        ...source,
+        async query(query, options) {
+            const { events, condition } = await source.query(query, options);
+            return { events: map(events), condition };
+        },
+        read: (selection, options) => map(source.read(selection, options)),
+        follow: (selection, options) => map(source.follow(selection, options))
+    });
+}
+
+export { createProjection, composeProjections, buildDecisionModel, transformEvents, DecisionModel, applyEnvelope, resolveProjection, assertSource, readDecisionModel };

@@ -1,241 +1,215 @@
 import events from 'events';
-import fs from 'fs';
-import path from 'path';
 import { assert } from './utils/util.js';
-import { ensureDirectory, isSameOrParentDirectory, writeFileAtomic } from './utils/fsUtil.js';
-import { applyEvent, resolveProjection, DecisionModel } from './Projection.js';
-import { ReadOnly as ReadOnlyStorage } from './Storage.js';
+import { applyEnvelope, resolveProjection, assertSource, readDecisionModel } from './Projection.js';
 
-const DEFAULT_CATCHUP_BATCH = 1000;
+const DEFAULT_BATCH_SIZE = 1000;
+
+/** Let other tasks of the event loop run, also outside of node. */
+const nextTask = () => new Promise(resolve => (typeof setImmediate === 'function' ? setImmediate : setTimeout)(resolve));
 
 /**
- * A projection that follows the store: it catches up through the stream indexes and then applies every new matching
- * event as it is written. Optionally its state and position are persisted, so a restart only reads the events
- * committed since.
+ * @typedef {object} Snapshot
+ * @property {string|number|null} version
+ * @property {object} query
+ * @property {number} position
+ * @property {any} state
+ */
+
+/**
+ * @typedef {object} SnapshotStore Where a read model keeps its state between restarts, e.g. `fileSnapshotStore(dir)`.
+ * @property {function(string): (Snapshot|null|Promise<Snapshot|null>)} load
+ * @property {function(string, Snapshot): (void|Promise<void>)} save
+ */
+
+/**
+ * A projection that follows an event source: it catches up on the matching events and then applies every new one.
+ * With a snapshot store, its state and position are saved, so a restart only reads the events committed since.
  *
- * The initial catch-up runs asynchronously in batches of global positions, so a large store does not block the event
- * loop. `update()` catches up synchronously at any time, e.g. when the state is needed right away.
+ * The catch-up yields to the event loop after every `batchSize` events, so a large store does not block it.
  *
  * Emits `'change'` with `(state, position)` whenever the state changed, `'progress'` with `(position)` after each
- * catch-up batch and `'caught-up'` once it reached the end of the store and follows new commits live.
+ * catch-up batch, `'caught-up'` with `(state, position)` once the catch-up reached the end of the store,
+ * `'persisted'` with `(position)` after a snapshot was saved and `'error'` when reading or saving fails.
  */
 class ReadModel extends events.EventEmitter {
 
     /**
-     * @param {import('./EventStore.js').default} eventStore
+     * @param {import('./Projection.js').EventSource} source
      * @param {import('./Projection.js').Projection|Object<string, import('./Projection.js').Projection>} projectionOrMap
-     * @param {{ name?: string, persist?: boolean, version?: string|number, batchSize?: number }} [options]
-     *   `persist` stores state and position under `name` (required then); `version` invalidates a persisted
-     *   state when the handlers changed; `batchSize` is the number of global positions read per catch-up batch.
+     * @param {{ name?: string, snapshots?: SnapshotStore, version?: string|number, batchSize?: number }} [options]
+     *   `snapshots` keeps state and position under `name` (required then); `version` invalidates a saved state when
+     *   the handlers changed; `batchSize` is the number of events applied before yielding to the event loop.
      */
-    constructor(eventStore, projectionOrMap, { name = null, persist = false, version = null, batchSize = DEFAULT_CATCHUP_BATCH } = {}) {
+    constructor(source, projectionOrMap, { name = null, snapshots = null, version = null, batchSize = DEFAULT_BATCH_SIZE } = {}) {
         super();
-        assert(!persist || (typeof name === 'string' && name !== ''), 'A persisted read model needs a name.');
-        assert(Number.isInteger(batchSize) && batchSize > 0, 'The catch-up batch size must be a positive integer.');
-        this.eventStore = eventStore;
-        this.projection = resolveProjection(eventStore, projectionOrMap);
+        assertSource(source);
+        assert(!snapshots || (typeof name === 'string' && name !== ''), 'A read model with snapshots needs a name.');
+        assert(Number.isInteger(batchSize) && batchSize > 0, 'The batch size must be a positive integer.');
+        this.source = source;
+        this.projection = resolveProjection(projectionOrMap);
         this.name = name;
+        this.snapshots = snapshots;
         this.version = version;
-        this.fileName = persist ? this.resolveFileName(name) : null;
-        this.persisting = null;
-        this.selector = eventStore.query(this.projection.query).condition.selector;
+        this.batchSize = batchSize;
         this.state = this.projection.initialState;
         this.position = 0;
-        this.batchSize = batchSize;
         this.caughtUp = false;
-        this.catchingUp = null;
-        this.restore();
-
-        this.storage = eventStore.storage;
-        this.isReadOnly = this.storage instanceof ReadOnlyStorage;
-        this.onWrite = this.isReadOnly
-            ? (document, entry) => this.follow(entry.number, document)
-            : (indexName, number, document) => indexName === '_all' && this.follow(number, document);
-        this.storage.on(this.isReadOnly ? 'wrote' : 'index-add', this.onWrite);
-        this.catchUp();
-    }
-
-    /**
-     * Read the next batch on the next tick until the end of the store is reached.
-     * @private
-     */
-    catchUp() {
-        this.catchingUp = setImmediate(() => {
-            this.catchingUp = null;
-            this.update(Math.min(this.position + this.batchSize, this.eventStore.length));
-            if (this.caughtUp) {
-                return;
+        this.saving = null;
+        this.pendingSave = false;
+        this.abort = new AbortController();
+        this.ready = new Promise((resolve, reject) => {
+            this.once('caught-up', () => resolve(this));
+            this.once('closed', () => reject(new Error('The read model was closed before it caught up.')));
+        });
+        this.ready.catch(() => {});
+        this.running = this.run().catch(error => {
+            if (!this.abort.signal.aborted) {
+                this.emit('error', error);
             }
-            this.emit('progress', this.position);
-            this.catchUp();
         });
     }
 
     /**
      * @private
      */
-    checkCaughtUp() {
-        if (this.caughtUp || this.position < this.eventStore.length) {
-            return;
+    async run() {
+        await this.restore();
+        let { events: catchUp, condition } = await this.source.query(this.projection.query, { from: this.position + 1 });
+        if (this.position > condition.noneMatchAfter) {
+            // The store was truncated or replaced since the snapshot was saved; rebuild.
+            this.state = this.projection.initialState;
+            this.position = 0;
+            ({ events: catchUp, condition } = await this.source.query(this.projection.query, { from: 1 }));
         }
-        if (this.catchingUp) {
-            clearImmediate(this.catchingUp);
-            this.catchingUp = null;
+        let count = 0;
+        for await (const envelope of catchUp) {
+            if (this.abort.signal.aborted) return;
+            this.apply(envelope);
+            if (++count % this.batchSize === 0) {
+                this.emit('progress', this.position);
+                await nextTask();
+            }
         }
+        if (this.abort.signal.aborted) return;
         this.caughtUp = true;
         this.emit('caught-up', this.state, this.position);
+
+        const live = this.source.follow(condition, { from: condition.noneMatchAfter + 1, signal: this.abort.signal });
+        for await (const envelope of live) {
+            this.apply(envelope);
+        }
     }
 
     /**
-     * @private
-     * @param {string} name
-     * @returns {string}
-     */
-    resolveFileName(name) {
-        const directory = path.join(this.eventStore.storage.indexDirectory, 'readmodels');
-        const fileName = path.join(directory, `${this.eventStore.storage.storageFile}.${name}.json`);
-        assert(isSameOrParentDirectory(directory, path.dirname(fileName)), `Read model name "${name}" leaves the readmodels directory.`);
-        return fileName;
-    }
-
-    /**
-     * Load the persisted state unless it was built by another version or from another query.
+     * Load the saved state unless it was built by another version or from another query.
      * @private
      */
-    restore() {
-        if (!this.fileName || !fs.existsSync(this.fileName)) {
+    async restore() {
+        if (!this.snapshots) {
             return;
         }
-        const snapshot = JSON.parse(fs.readFileSync(this.fileName, 'utf8'));
-        if (snapshot.version !== this.version || JSON.stringify(snapshot.query) !== JSON.stringify(this.projection.query)) {
+        const snapshot = await this.snapshots.load(this.name);
+        if (!snapshot || snapshot.version !== this.version || JSON.stringify(snapshot.query) !== JSON.stringify(this.projection.query)) {
             return;
-        }
-        if (snapshot.position > this.eventStore.length) {
-            return; // the store was truncated or replaced; rebuild
         }
         this.state = snapshot.state;
         this.position = snapshot.position;
     }
 
     /**
-     * Synchronously apply all matching events committed since the current position.
-     *
-     * @api
-     * @param {number} [until] The last global position to read (inclusive). Defaults to the store length.
-     * @returns {ReadModel} This read model.
-     */
-    update(until = this.eventStore.length) {
-        if (until <= this.position) {
-            this.checkCaughtUp();
-            return this;
-        }
-        const previous = this.state;
-        const stream = this.eventStore.fromStreams('_readmodel_' + (this.name || ''), this.selector, this.position + 1, until);
-        stream.forEach((event, metadata) => {
-            this.state = applyEvent(this.eventStore, this.projection, this.state, event, metadata);
-        });
-        this.position = until;
-        this.changed(previous);
-        this.checkCaughtUp();
-        return this;
-    }
-
-    /**
-     * Apply a document that was just written at the given global position.
      * @private
-     * @param {number} number
-     * @param {{ payload: object, metadata: object }} document
+     * @param {import('./Projection.js').Envelope} envelope
      */
-    follow(number, document) {
-        if (!this.caughtUp || number <= this.position) {
-            return; // the running catch-up reads it from the indexes
-        }
-        // Catch up on anything missed before, without the current document whose stream indexes may not be written yet.
-        this.update(number - 1);
+    apply(envelope) {
         const previous = this.state;
-        this.state = applyEvent(this.eventStore, this.projection, this.state, document.payload, document.metadata);
-        this.position = number;
-        this.changed(previous);
-    }
-
-    /**
-     * @private
-     * @param {any} previous The state before the change.
-     */
-    changed(previous) {
+        this.state = applyEnvelope(this.projection, this.state, envelope);
+        this.position = envelope.position;
         if (this.state === previous) {
             return;
         }
         this.emit('change', this.state, this.position);
-        this.schedulePersist();
+        this.scheduleSave();
     }
 
     /**
+     * Save at most once per tick, and never two snapshots at the same time.
      * @private
      */
-    schedulePersist() {
-        if (!this.fileName || this.persisting) {
+    scheduleSave() {
+        if (!this.snapshots) {
             return;
         }
-        this.persisting = setImmediate(() => {
-            this.persisting = null;
-            this.persist();
-        });
+        this.pendingSave = true;
+        if (this.saving) {
+            return;
+        }
+        this.saving = nextTask()
+            .then(() => this.save())
+            .finally(() => {
+                this.saving = null;
+                if (this.pendingSave) this.scheduleSave();
+            });
     }
 
     /**
-     * Write state and position atomically.
      * @private
      */
-    persist() {
-        ensureDirectory(path.dirname(this.fileName));
-        const snapshot = { version: this.version, query: this.projection.query, position: this.position, state: this.state };
-        writeFileAtomic(this.fileName, JSON.stringify(snapshot));
-        this.emit('persisted', this.position);
-    }
-
-    /**
-     * Create a decision model from the current state, e.g. to decide on a narrow read model that is kept up to date
-     * anyway instead of replaying its events per command.
-     *
-     * @api
-     * @returns {DecisionModel}
-     */
-    decisionModel() {
-        this.update();
-        const { condition } = this.eventStore.query(this.projection.query);
-        return new DecisionModel(this.eventStore, this.projection, this.state, condition);
-    }
-
-    /**
-     * Stop following the store and write a pending persist.
-     *
-     * @api
-     */
-    close() {
-        if (this.catchingUp) {
-            clearImmediate(this.catchingUp);
-            this.catchingUp = null;
+    async save() {
+        if (!this.pendingSave) {
+            return;
         }
-        this.storage.removeListener(this.isReadOnly ? 'wrote' : 'index-add', this.onWrite);
-        if (this.persisting) {
-            clearImmediate(this.persisting);
-            this.persisting = null;
-            this.persist();
+        this.pendingSave = false;
+        const snapshot = { version: this.version, query: this.projection.query, position: this.position, state: this.state };
+        try {
+            await this.snapshots.save(this.name, snapshot);
+            this.emit('persisted', snapshot.position);
+        } catch (error) {
+            this.emit('error', error);
+        }
+    }
+
+    /**
+     * Build a decision model from the current state, e.g. to decide on a narrow read model that is kept up to date
+     * anyway instead of replaying its events per command. Waits for the catch-up and only reads the events the
+     * read model has not applied yet.
+     *
+     * @api
+     * @returns {Promise<import('./Projection.js').DecisionModel>}
+     */
+    async decisionModel() {
+        await this.ready;
+        return readDecisionModel(this.source, this.projection, this.state, this.position + 1);
+    }
+
+    /**
+     * Stop following the source and save a pending snapshot.
+     *
+     * @api
+     * @returns {Promise<void>}
+     */
+    async close() {
+        this.abort.abort();
+        this.emit('closed');
+        await this.running;
+        while (this.saving) {
+            await this.saving;
+        }
+        if (this.pendingSave) {
+            await this.save();
         }
     }
 }
 
 /**
- * Create a read model for the projection(s) that follows the store.
+ * Create a read model for the projection(s) that follows the source.
  *
- * @param {import('./EventStore.js').default} eventStore
+ * @param {import('./Projection.js').EventSource} source
  * @param {import('./Projection.js').Projection|Object<string, import('./Projection.js').Projection>} projectionOrMap
- * @param {{ name?: string, persist?: boolean, version?: string|number }} [options]
+ * @param {{ name?: string, snapshots?: SnapshotStore, version?: string|number, batchSize?: number }} [options]
  * @returns {ReadModel}
  */
-function createReadModel(eventStore, projectionOrMap, options) {
-    return new ReadModel(eventStore, projectionOrMap, options);
+function createReadModel(source, projectionOrMap, options) {
+    return new ReadModel(source, projectionOrMap, options);
 }
 
 export { ReadModel, createReadModel };

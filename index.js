@@ -5,6 +5,8 @@ import Storage, { StorageLockedError } from './src/Storage.js';
 import Index from './src/Index.js';
 import Consumer from './src/Consumer.js';
 import { matches, buildRawBufferMatcher } from './src/utils/metadataUtil.js';
+import { localSource } from './src/LocalSource.js';
+import { fileSnapshotStore } from './src/FileSnapshotStore.js';
 
 const VERSION = packageJson.version;
 EventStore.VERSION = VERSION;
@@ -25,5 +27,7 @@ export {
 	Index,
 	Consumer,
 	matches,
-	buildRawBufferMatcher
+	buildRawBufferMatcher,
+	localSource,
+	fileSnapshotStore
 };
