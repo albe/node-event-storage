@@ -1,5 +1,6 @@
 import expect from 'expect.js';
 import {
+    excludeStreams,
     union,
     intersect,
     normalizeSelector
@@ -73,6 +74,39 @@ describe('indexUtil', function() {
             const many = Array.from({ length: 200 }, (_, i) => i + 1);
             const skipping = intersect(union(range([5, 150]), range([100])), range(many));
             expect(collect(skipping)).to.eql([5, 100, 150]);
+        });
+    });
+
+    describe('excludeStreams', function () {
+        const without = (selector, ...names) => excludeStreams(selector, new Set(names));
+
+        it('removes streams from an OR level', function () {
+            expect(without(['a', 'b', 'c'], 'b')).to.eql(['a', 'c']);
+        });
+
+        it('removes an AND level that contains an excluded stream', function () {
+            expect(without([['tags/x', 'a'], 'b'], 'a')).to.eql(['b']);
+            expect(without([['tags/x', 'a'], 'b'], 'tags/x')).to.eql(['b']);
+        });
+
+        it('removes streams from a nested OR inside an AND', function () {
+            expect(without([['tags/x', ['a', 'b']]], 'a')).to.eql([['tags/x', ['b']]]);
+            expect(without([['tags/x', ['a', 'b']]], 'a', 'b')).to.be(null);
+        });
+
+        it('returns null when nothing is left', function () {
+            expect(without(['a'], 'a')).to.be(null);
+            expect(without('a', 'a')).to.be(null);
+        });
+
+        it('never removes _all', function () {
+            expect(without(['_all'], '_all')).to.eql(['_all']);
+        });
+
+        it('leaves the input unchanged', function () {
+            const selector = [['tags/x', ['a', 'b']], 'c'];
+            without(selector, 'a', 'c');
+            expect(selector).to.eql([['tags/x', ['a', 'b']], 'c']);
         });
     });
 
