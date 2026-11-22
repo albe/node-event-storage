@@ -42,7 +42,11 @@ class EventStream extends stream.Readable {
             this.maxRevision = normalizeRevision(maxRevision, this.streamIndex.length);
             this.version = normalizeMaxRevision(this.streamIndex.length, maxRevision);
             this._iterator = null;
-            this.fetch = () => eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex, raw);
+            // An upper bound beyond the end reads to the end, like for a join; a range that starts outside the
+            // stream stays empty.
+            this.fetch = () => eventStore.storage.readRange(
+                this.minRevision, Math.min(this.maxRevision, this.streamIndex.length), this.streamIndex, raw
+            );
         } else {
             this.streamIndex = { length: 0 };
             this.version = -1;
