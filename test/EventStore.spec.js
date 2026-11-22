@@ -1773,10 +1773,24 @@ describe('EventStore', function() {
                 }
             });
 
-            // EventStream.next() catches iterator errors, so iteration stops with no events
             const stream = eventstore.getEventStream('foo');
-            const result = Array.from(stream);
-            expect(result).to.have.length(0);
+            expect(() => Array.from(stream)).to.throwError(/Not authorized to read/);
+            expect(() => eventstore.fromStreams('foos', ['foo']).events).to.throwError(/Not authorized to read/);
+        });
+
+        it('emits the error of an aborted read on the readable stream', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('foo', [{ type: 'FooCreated' }]);
+            eventstore.preRead(() => {
+                throw new Error('Not authorized to read');
+            });
+
+            const stream = eventstore.getEventStream('foo');
+            stream.on('data', () => done(new Error('should not emit events')));
+            stream.on('error', (error) => {
+                expect(error.message).to.be('Not authorized to read');
+                done();
+            });
         });
 
         it('works on a read-only store', function(done) {

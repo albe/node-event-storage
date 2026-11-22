@@ -86,7 +86,7 @@ const eventstore = new EventStore('my-event-store', {
 Each stream (partition) can carry an arbitrary metadata object that is written once into the partition file header at creation time. Two hooks let you intercept every read and write:
 
 - **`preCommit`** — called with `(event, partitionMetadata)` *before* a write. Throw to abort.
-- **`preRead`** — called with `(position, partitionMetadata)` *before* a read. Throw to abort.
+- **`preRead`** — called with `(position, partitionMetadata)` *before* a read. Throw to abort; the error reaches the reader of the stream.
 
 Both hooks run synchronously on every operation. Keep handler logic cheap — avoid I/O and async work.
 
