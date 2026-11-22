@@ -49,21 +49,29 @@ function writeFileAtomic(fileName, data, tmpFileName = fileName + '.tmp') {
 }
 
 /**
- * A new file is only guaranteed to survive a power loss once its directory entry is synced as well.
+ * Sync a file to disk through its own descriptor, independent of whether and where the file is open otherwise.
+ *
+ * @param {string} fileName
+ * @param {string} [flags] The flags to open the file with. Windows needs write access to sync a file.
+ */
+function syncFile(fileName, flags = 'r+') {
+    const fd = fs.openSync(fileName, flags);
+    try {
+        fs.fsyncSync(fd);
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+/**
  * Platforms that can not open a directory for syncing (Windows) are skipped silently.
  *
  * @param {string} dirName
  */
 function syncDirectory(dirName) {
-    let fd;
     try {
-        fd = fs.openSync(dirName, 'r');
-        fs.fsyncSync(fd);
+        syncFile(dirName, 'r');
     } catch (e) {
-    } finally {
-        if (fd !== undefined) {
-            fs.closeSync(fd);
-        }
     }
 }
 
@@ -206,5 +214,6 @@ export {
     isSameOrParentDirectory,
     safeUnlink,
     syncDirectory,
+    syncFile,
     writeFileAtomic
 };

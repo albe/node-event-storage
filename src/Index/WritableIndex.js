@@ -1,9 +1,9 @@
 import fs from 'fs';
-import path from 'path';
 import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC, CHUNK_CAPACITY, createChunk } from './ReadableIndex.js';
 import { assert, assertEqual } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
-import { ensureDirectory, syncDirectory } from '../utils/fsUtil.js';
+import { ensureDirectory } from '../utils/fsUtil.js';
+import SyncScheduler from '../SyncScheduler.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 /**
@@ -27,15 +27,13 @@ class WritableIndex extends ReadableIndex {
      * @param {number} [options.writeBufferSize] The amount of bytes of unwritten entries after which they are flushed. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
-     * @param {boolean} [options.syncOnFlush] If fsync should be called on every flush. Defaults to false.
-     * @param {SyncCycle} [options.syncCycle] The sync cycle that syncs the directory after the index file was created.
+     * @param {SyncScheduler} [options.syncScheduler] Decides when flushed entries are synced to disk. Defaults to never syncing.
      */
     constructor(name = '.index', options = {}) {
         ({ name, options } = normalizeNamedCtorArgs(name, options, '.index'));
         let defaults = {
             writeBufferSize: 4096,
-            flushDelay: 100,
-            syncOnFlush: false
+            flushDelay: 100
         };
         options = Object.assign(defaults, options);
         super(name, options);
@@ -55,9 +53,7 @@ class WritableIndex extends ReadableIndex {
         this.flushedLength = 0;
         this.flushCallbacks = [];
         this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
-        this.syncOnFlush = !!options.syncOnFlush;
-        this.syncCycle = options.syncCycle || null;
-        this.unsynced = false;
+        this.syncScheduler = options.syncScheduler || new SyncScheduler();
     }
 
     /**
@@ -117,17 +113,11 @@ class WritableIndex extends ReadableIndex {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeSync(this.getFileHandle(), metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = metadataBuffer.byteLength;
-        this.unsynced = true;
-        if (this.syncOnFlush) {
-            syncDirectory(path.dirname(this.fileName));
-        } else {
-            this.syncCycle?.addNewFile(this.fileName);
-        }
+        this.syncScheduler.created(this.fileName);
     }
 
     /**
-     * Flush pending buffered writes before the pool closes the descriptor. Evicting a descriptor is no durability
-     * point: the file stays unsynced until it is closed.
+     * Flush pending buffered writes before the pool closes the descriptor.
      */
     onBeforeClose() {
         if (this.flushCallbacks) {
@@ -136,17 +126,13 @@ class WritableIndex extends ReadableIndex {
     }
 
     /**
-     * Write the buffered entries, sync them if anything changed since the last sync, and close the index.
-     * The flush reopens the file handle if the pool evicted it since the last write, so no buffered entry is lost.
+     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it
+     * since the last write, so no buffered entry is lost.
      *
      * @api
      */
     close() {
         this.flush();
-        if (this.unsynced && this.isOpen()) {
-            fs.fdatasyncSync(this.getFileHandle());
-            this.unsynced = false;
-        }
         super.close();
     }
 
@@ -176,13 +162,8 @@ class WritableIndex extends ReadableIndex {
             return false;
         }
 
-        const fd = this.getFileHandle();
-        this.writeUnflushedEntries(fd);
-        if (this.syncOnFlush) {
-            fs.fsyncSync(fd);
-        } else {
-            this.unsynced = true;
-        }
+        this.writeUnflushedEntries(this.getFileHandle());
+        this.syncScheduler.flushed(this.fileName);
 
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
@@ -239,6 +220,7 @@ class WritableIndex extends ReadableIndex {
 
         if (this.flushedLength === dataLen) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
+            this.syncScheduler.changed(this);
         }
 
         this.appendEntry(entry);
@@ -291,7 +273,7 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
-        this.unsynced = true;
+        this.syncScheduler.flushed(this.fileName);
         this.setLength(after);
         this.flushedLength = Math.min(this.flushedLength, after);
     }

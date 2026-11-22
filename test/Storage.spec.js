@@ -97,7 +97,7 @@ describe('Storage', function() {
             storage.open();
 
             storage.write({ foo: 'bar' }, () => {
-                expect(storage.syncCycle.callbacks.length).to.be(0);
+                expect(storage.syncScheduler.callbacks.length).to.be(0);
                 let fileContent = fs.readFileSync('test/data/storage', 'utf8');
                 expect(fileContent).to.contain(JSON.stringify({ foo: 'bar' }));
                 done();
@@ -117,9 +117,9 @@ describe('Storage', function() {
                     storage.write({ stream: 'stream-' + i });
                 }
                 expect(fsyncCalls).to.be(0);
-                storage.syncCycle.run();
-                // 10 partitions plus one shared directory sync
-                expect(fsyncCalls).to.be(11);
+                storage.syncScheduler.run();
+                // 10 partitions, the primary index and one shared directory sync
+                expect(fsyncCalls).to.be(12);
                 expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
             } finally {
                 fsSync.fsyncSync = originalFsync;
@@ -139,8 +139,9 @@ describe('Storage', function() {
         it('ignores the sync interval when syncOnFlush is set', function() {
             storage = createStorage({ syncInterval: 1000, syncOnFlush: true });
             storage.open();
-            expect(storage.syncCycle).to.be(null);
-            expect(storage.getPartition('').syncCycle).to.be(null);
+            expect(storage.syncScheduler.immediate).to.be(true);
+            expect(storage.syncScheduler.interval).to.be(0);
+            expect(storage.getPartition('').syncScheduler).to.be(storage.syncScheduler);
         });
 
         it('throws on an invalid sync interval', function() {

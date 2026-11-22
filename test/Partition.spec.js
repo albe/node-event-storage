@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import fsSync from 'fs';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
 import FileHandlePool from '../src/FileHandlePool.js';
-import SyncCycle from '../src/SyncCycle.js';
+import SyncScheduler from '../src/SyncScheduler.js';
 import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
@@ -219,7 +219,7 @@ describe('Partition', function() {
 
     });
 
-    describe('syncCycle', function() {
+    describe('syncScheduler', function() {
 
         let fsyncCalls, originalFsync;
 
@@ -233,42 +233,35 @@ describe('Partition', function() {
             fsSync.fsyncSync = originalFsync;
         });
 
-        function openDurable(config = {}) {
+        function openWith(syncOptions, config = {}) {
             partition.close();
-            partition = new Partition('.part', { dataDirectory, syncCycle: new SyncCycle(1000), ...config });
+            partition = new Partition('.part', { dataDirectory, syncScheduler: new SyncScheduler(syncOptions), ...config });
             partition.open();
-            fsyncCalls = 0;
             return partition;
         }
 
-        it('syncs the directory of a new file with the next sync', function() {
+        it('never syncs by default', function() {
+            openWith({});
+            let written = false;
+            partition.write('one', () => (written = true));
+            partition.flush();
             partition.close();
-            partition = new Partition('.part', { dataDirectory, syncCycle: new SyncCycle(1000) });
-            partition.open();
+            expect(written).to.be(true);
             expect(fsyncCalls).to.be(0);
-            partition.sync();
+        });
+
+        it('syncs the directory of a new file and every flush with syncOnFlush', function() {
+            openWith({ syncOnFlush: true });
+            expect(fsyncCalls).to.be(1);
+            let written = false;
+            partition.write('one', () => (written = true));
+            partition.flush();
+            expect(written).to.be(true);
             expect(fsyncCalls).to.be(2);
         });
 
-        it('syncs the directory of a new file immediately with syncOnFlush', function() {
-            partition.close();
-            partition = new Partition('.part', { dataDirectory, syncOnFlush: true });
-            partition.open();
-            expect(fsyncCalls).to.be(1);
-        });
-
-        it('does not sync the directory without a durability option', function() {
-            partition.close();
-            partition = new Partition('.part', { dataDirectory });
-            partition.open();
-            partition.close();
-            expect(fsyncCalls).to.be(1);
-        });
-
-        it('invokes write callbacks only after one shared fsync', function(done) {
-            openDurable({ syncCycle: new SyncCycle(10) });
-            partition.sync();
-            fsyncCalls = 0;
+        it('invokes write callbacks only after one shared sync', function(done) {
+            openWith({ syncInterval: 10 });
             const written = [];
             partition.write('one', () => written.push(1));
             partition.flush();
@@ -278,16 +271,17 @@ describe('Partition', function() {
             expect(fsyncCalls).to.be(0);
             setTimeout(() => {
                 expect(written).to.eql([1, 2]);
-                expect(fsyncCalls).to.be(1);
+                // the file and its new directory
+                expect(fsyncCalls).to.be(2);
                 done();
             }, 30);
         });
 
         it('acknowledges unbuffered writes only after the sync', function(done) {
-            openDurable({ writeBufferSize: 64 });
+            openWith({ syncInterval: 1000 }, { writeBufferSize: 64 });
             let written = false;
             partition.write('x'.repeat(100), () => (written = true));
-            partition.sync();
+            partition.syncScheduler.run();
             expect(fsyncCalls).to.be(2);
             setImmediate(() => {
                 expect(written).to.be(true);
@@ -295,51 +289,42 @@ describe('Partition', function() {
             });
         });
 
-        it('syncs and invokes pending callbacks on sync()', function() {
-            openDurable();
+        it('flushes changed files before the run', function() {
+            openWith({ syncInterval: 1000 });
             let written = false;
             partition.write('one', () => (written = true));
-            partition.sync();
+            partition.syncScheduler.run();
             expect(written).to.be(true);
-            expect(partition.syncCycle.timeout).to.be(null);
+            expect(partition.syncScheduler.timeout).to.be(null);
         });
 
-        it('syncs and invokes pending callbacks on close', function() {
-            openDurable();
+        it('only flushes on close and leaves the sync to the run', function() {
+            openWith({ syncInterval: 1000 });
+            const syncScheduler = partition.syncScheduler;
             let written = false;
             partition.write('one', () => (written = true));
-            partition.flush();
+            partition.close();
             expect(written).to.be(false);
-            partition.close();
-            expect(written).to.be(true);
-            expect(partition.syncCycle.timeout).to.be(null);
-        });
-
-        it('does not sync again on close when nothing changed since the last sync', function() {
-            openDurable();
-            partition.write('one');
-            partition.sync();
-            fsyncCalls = 0;
-            partition.close();
             expect(fsyncCalls).to.be(0);
+            syncScheduler.run();
+            expect(written).to.be(true);
+            expect(fsyncCalls).to.be(2);
         });
 
-        it('does not sync a file when its handle is evicted, but with the next run of the cycle', function() {
+        it('syncs a file whose handle was evicted with the next run', function() {
             const fileHandlePool = new FileHandlePool(1);
-            openDurable({ fileHandlePool });
+            openWith({ syncInterval: 1000 }, { fileHandlePool });
             let written = false;
             partition.write('one', () => (written = true));
             partition.flush();
             const other = new Partition('.other', { dataDirectory, fileHandlePool });
             other.open();
             expect(fsyncCalls).to.be(0);
-            expect(written).to.be(false);
-            partition.sync();
+            partition.syncScheduler.run();
             expect(written).to.be(true);
             expect(fsyncCalls).to.be(2);
             other.close();
         });
-
     });
 
     describe('readAll', function() {

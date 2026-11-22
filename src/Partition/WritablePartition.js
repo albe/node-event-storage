@@ -1,10 +1,10 @@
 import fs from 'fs';
-import path from 'path';
 import ReadablePartition, { CorruptFileError, HEADER_MAGIC, DOCUMENT_ALIGNMENT, DOCUMENT_SEPARATOR, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE } from './ReadablePartition.js';
 import { assert, alignTo } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
-import { ensureDirectory, syncDirectory } from '../utils/fsUtil.js';
+import { ensureDirectory } from '../utils/fsUtil.js';
 import Clock from '../Clock.js';
+import SyncScheduler from '../SyncScheduler.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
@@ -22,8 +22,7 @@ class WritablePartition extends ReadablePartition {
      * @param {number} [config.readBufferSize] Size of the read buffer in bytes. Default 4096.
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
-     * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
-     * @param {SyncCycle} [config.syncCycle] Group commit: the cycle that syncs this file together with others, and only then invokes the write callbacks.
+     * @param {SyncScheduler} [config.syncScheduler] Decides when flushed writes are synced to disk and their callbacks invoked. Defaults to never syncing.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {object} [config.metadata] A metadata object that will be written to the file header.
      * @param {typeof Clock} [config.clock] The constructor to a clock interface
@@ -32,7 +31,6 @@ class WritablePartition extends ReadablePartition {
         let defaults = {
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
-            syncOnFlush: false,
             dirtyReads: true,
             metadata: {
                 epoch: Date.now()
@@ -46,9 +44,7 @@ class WritablePartition extends ReadablePartition {
         this.fileMode = 'a+';
         this.writeBufferSize = config.writeBufferSize >>> 0; // jshint ignore:line
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0; // jshint ignore:line
-        this.syncOnFlush = !!config.syncOnFlush;
-        this.syncCycle = config.syncCycle || null;
-        this.unsynced = false;
+        this.syncScheduler = config.syncScheduler || new SyncScheduler();
         this.dirtyReads = !!config.dirtyReads;
         this.metadata = config.metadata;
         assert(typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function', 'Clock needs to implement the method time()');
@@ -97,10 +93,6 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     close() {
-        if (this.writeBuffer) {
-            this.syncCycle?.run();
-            this.fsync();
-        }
         super.close();
         if (this.writeBuffer) {
             this.writeBuffer = null;
@@ -111,8 +103,7 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
-     * Flush pending buffered writes before the pool closes the descriptor. Evicting a descriptor is no durability
-     * point: the file stays unsynced until the next sync, which reopens it.
+     * Flush pending buffered writes before the pool closes the descriptor.
      */
     onBeforeClose() {
         if (this.writeBuffer) {
@@ -130,17 +121,12 @@ class WritablePartition extends ReadablePartition {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeFileSync(this.fileName, metadataBuffer);
         this.headerSize = metadataBuffer.byteLength;
-        this.markUnsynced();
-        if (this.syncOnFlush) {
-            syncDirectory(path.dirname(this.fileName));
-        } else {
-            this.syncCycle?.addNewFile(this.fileName);
-        }
+        this.syncScheduler.created(this.fileName);
     }
 
     /**
-     * Flush the write buffer to disk.
-     * This is a sync method and will invoke all previously registered flush callbacks.
+     * Write the write buffer to the file and hand the flush to the sync scheduler, which invokes the registered
+     * callbacks once the data is as durable as configured.
      *
      * @returns {boolean}
      */
@@ -157,61 +143,9 @@ class WritablePartition extends ReadablePartition {
         this.writeBufferDocuments = 0;
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
-        this.acknowledge(callbacks);
+        this.syncScheduler.flushed(this.fileName, callbacks);
 
         return true;
-    }
-
-    /**
-     * Invoke the callbacks of written documents as soon as they are as durable as configured.
-     *
-     * @private
-     * @param {Array<function>} callbacks
-     */
-    acknowledge(callbacks) {
-        if (this.syncOnFlush) {
-            this.fsync();
-        }
-        if (this.syncCycle) {
-            this.syncCycle.whenSynced(callbacks);
-        } else {
-            for (let i = 0; i < callbacks.length; i++) callbacks[i]();
-        }
-    }
-
-    /**
-     * Track that this file changed since its last fsync.
-     *
-     * @private
-     */
-    markUnsynced() {
-        if (!this.unsynced) {
-            this.unsynced = true;
-            this.syncCycle?.add(this);
-        }
-    }
-
-    /**
-     * Flush the write buffer and fsync the file, if it changed since the last fsync.
-     */
-    fsync() {
-        this.flush();
-        if (!this.unsynced || !this.isOpen()) {
-            return;
-        }
-        fs.fsyncSync(this.getFileHandle());
-        this.unsynced = false;
-    }
-
-    /**
-     * Make all writes durable and invoke the callbacks waiting for that. With a sync cycle, this completes its
-     * run early, which includes all other files sharing the cycle.
-     *
-     * @api
-     */
-    sync() {
-        this.fsync();
-        this.syncCycle?.run();
     }
 
     /**
@@ -296,7 +230,7 @@ class WritablePartition extends ReadablePartition {
         this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
         bytesWritten += fs.writeSync(fd, this.writeMetaBuffer, 0, 4);
         bytesWritten += fs.writeSync(fd, DOCUMENT_SEPARATOR);
-        this.acknowledge(typeof callback === 'function' ? [() => process.nextTick(callback)] : []);
+        this.syncScheduler.flushed(this.fileName, typeof callback === 'function' ? [() => process.nextTick(callback)] : []);
         return bytesWritten;
     }
 
@@ -339,7 +273,7 @@ class WritablePartition extends ReadablePartition {
      */
     write(data, sequenceNumber, callback) {
         this.getFileHandle();
-        this.markUnsynced();
+        this.syncScheduler.changed(this);
         ({ sequenceNumber, callback } = this.normalizeWriteArguments(sequenceNumber, callback));
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
@@ -472,7 +406,7 @@ class WritablePartition extends ReadablePartition {
         }
 
         fs.truncateSync(this.fileName, this.headerSize + after);
-        this.markUnsynced();
+        this.syncScheduler.flushed(this.fileName);
         this.truncateReadBuffer(after);
         this.size = after;
         this.emit('truncated', after);

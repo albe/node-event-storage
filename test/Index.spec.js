@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import fsSync from 'fs';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
 import FileHandlePool from '../src/FileHandlePool.js';
-import SyncCycle from '../src/SyncCycle.js';
+import SyncScheduler from '../src/SyncScheduler.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
 import { CHUNK_CAPACITY } from '../src/Index/ReadableIndex.js';
 import { fileURLToPath } from 'url';
@@ -57,40 +57,44 @@ describe('Index', function() {
         return reader;
     }
 
-    it('syncs the directory when creating a new file with syncOnFlush', function() {
-        let fsyncCalls = 0;
-        const originalFsync = fsSync.fsyncSync;
-        fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
-        try {
-            index = createIndex('durable.index', { syncOnFlush: true });
+    describe('syncScheduler', function() {
+
+        let fsyncCalls, originalFsync;
+
+        beforeEach(function() {
+            fsyncCalls = 0;
+            originalFsync = fsSync.fsyncSync;
+            fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
+        });
+
+        afterEach(function() {
+            fsSync.fsyncSync = originalFsync;
+        });
+
+        it('syncs the directory of a new file and every flush with syncOnFlush', function() {
+            index = createIndex('durable.index', { syncScheduler: new SyncScheduler({ syncOnFlush: true }) });
             index.open();
             expect(fsyncCalls).to.be(1);
-        } finally {
-            fsSync.fsyncSync = originalFsync;
-        }
-    });
+            index.add(new Index.Entry(1, 0));
+            index.flush();
+            expect(fsyncCalls).to.be(2);
+        });
 
-    it('leaves the directory sync of a new file to its sync cycle', function() {
-        const syncCycle = new SyncCycle(1000);
-        index = createIndex('durable.index', { syncCycle });
-        index.open();
-        expect([...syncCycle.directories]).to.eql([dataDirectory]);
-    });
-
-    it('does not sync on close when nothing changed since the last sync', function() {
-        index = setupIndexWithEntries();
-        index.close();
-        let fsyncCalls = 0;
-        const originalFdatasync = fsSync.fdatasyncSync;
-        fsSync.fdatasyncSync = (fd) => { fsyncCalls++; return originalFdatasync(fd); };
-        try {
+        it('syncs flushed entries and the directory of a new file with the next run', function() {
+            const syncScheduler = new SyncScheduler({ syncInterval: 1000 });
+            index = createIndex('durable.index', { syncScheduler });
             index.open();
-            index.get(1);
+            index.add(new Index.Entry(1, 0));
+            expect(fsyncCalls).to.be(0);
+            syncScheduler.run();
+            expect(fsyncCalls).to.be(2);
+        });
+
+        it('never syncs by default', function() {
+            index = setupIndexWithEntries();
             index.close();
             expect(fsyncCalls).to.be(0);
-        } finally {
-            fsSync.fdatasyncSync = originalFdatasync;
-        }
+        });
     });
 
     it('is opened on instantiation', function() {

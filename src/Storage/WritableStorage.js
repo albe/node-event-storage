@@ -8,7 +8,7 @@ import { assert } from '../utils/util.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
-import SyncCycle from '../SyncCycle.js';
+import SyncScheduler from '../SyncScheduler.js';
 
 const PARTITION_PROBE_SEPARATOR = '~';
 const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
@@ -62,12 +62,12 @@ class WritableStorage extends ReadableStorage {
         };
         config = Object.assign(defaults, config);
         assert(Number.isInteger(config.syncInterval) && config.syncInterval >= 0, 'syncInterval must be a non-negative integer.');
-        const syncCycle = config.syncInterval > 0 && !config.syncOnFlush ? new SyncCycle(config.syncInterval) : null;
-        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush, syncCycle }, config.indexOptions);
+        const syncScheduler = new SyncScheduler(config);
+        config.indexOptions = Object.assign({ syncScheduler }, config.indexOptions);
         ensureDirectory(config.dataDirectory);
         super(storageName, config);
 
-        this.syncCycle = syncCycle;
+        this.syncScheduler = syncScheduler;
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
@@ -261,13 +261,10 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Unlocks the storage, then delegates to the parent close().
+     * Completes a pending sync run, unlocks the storage, then delegates to the parent close().
      */
     close() {
-        if (this.syncCycle) {
-            this.flush();
-            this.syncCycle.run();
-        }
+        this.syncScheduler.run();
         if (this.locked) {
             this.unlock();
         }
@@ -617,7 +614,7 @@ class WritableStorage extends ReadableStorage {
      * @returns {WritablePartition}
      */
     createPartition(name, config = {}) {
-        return new WritablePartition(name, { ...config, fileHandlePool: this.partitionHandlePool, syncCycle: this.syncCycle });
+        return new WritablePartition(name, { ...config, fileHandlePool: this.partitionHandlePool, syncScheduler: this.syncScheduler });
     }
 
 }
