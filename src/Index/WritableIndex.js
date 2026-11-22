@@ -2,7 +2,7 @@ import fs from 'fs';
 import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC, CHUNK_CAPACITY, createChunk } from './ReadableIndex.js';
 import { assert, assertEqual } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
-import { ensureDirectory } from '../utils/fsUtil.js';
+import { ensureDirectory, syncFile } from '../utils/fsUtil.js';
 import SyncScheduler from '../SyncScheduler.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
@@ -27,7 +27,7 @@ class WritableIndex extends ReadableIndex {
      * @param {number} [options.writeBufferSize] The amount of bytes of unwritten entries after which they are flushed. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
-     * @param {SyncScheduler} [options.syncScheduler] Decides when flushed entries are synced to disk. Defaults to never syncing.
+     * @param {SyncScheduler} [options.syncScheduler] Decides when a new index file is synced to disk. Its entries are only synced by a storage checkpoint. Defaults to never syncing.
      */
     constructor(name = '.index', options = {}) {
         ({ name, options } = normalizeNamedCtorArgs(name, options, '.index'));
@@ -54,6 +54,8 @@ class WritableIndex extends ReadableIndex {
         this.flushCallbacks = [];
         this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
         this.syncScheduler = options.syncScheduler || new SyncScheduler();
+        // If the file changed since the storage last synced it.
+        this.modified = false;
     }
 
     /**
@@ -126,14 +128,26 @@ class WritableIndex extends ReadableIndex {
     }
 
     /**
-     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it
-     * since the last write, so no buffered entry is lost.
+     * Write the buffered entries, sync them if the file changed, and close the index. The flush reopens the file
+     * handle if the pool evicted it since the last write, so no buffered entry is lost.
      *
      * @api
      */
     close() {
         this.flush();
+        this.sync();
         super.close();
+    }
+
+    /**
+     * Sync the file if it changed since the last sync. While open, indexes are only synced by a storage checkpoint,
+     * because the repair after a crash rebuilds their entries from the partitions.
+     */
+    sync() {
+        if (this.modified) {
+            syncFile(this.fileName);
+            this.modified = false;
+        }
     }
 
     /**
@@ -141,6 +155,7 @@ class WritableIndex extends ReadableIndex {
      * @api
      */
     destroy() {
+        this.modified = false;
         this.close();
         fs.unlinkSync(this.fileName);
     }
@@ -163,7 +178,7 @@ class WritableIndex extends ReadableIndex {
         }
 
         this.writeUnflushedEntries(this.getFileHandle());
-        this.syncScheduler.flushed(this.fileName);
+        this.modified = true;
 
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
@@ -220,7 +235,6 @@ class WritableIndex extends ReadableIndex {
 
         if (this.flushedLength === dataLen) {
             this.flushTimeout = setTimeout(() => this.flush(), this.flushDelay);
-            this.syncScheduler.changed(this);
         }
 
         this.appendEntry(entry);
@@ -273,7 +287,7 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
-        this.syncScheduler.flushed(this.fileName);
+        this.modified = true;
         this.setLength(after);
         this.flushedLength = Math.min(this.flushedLength, after);
     }

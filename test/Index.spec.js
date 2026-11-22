@@ -71,29 +71,38 @@ describe('Index', function() {
             fsSync.fsyncSync = originalFsync;
         });
 
-        it('syncs a new file with its directory and every flush with syncOnFlush', function() {
+        it('syncs a new file with its directory, but not its flushes, with syncOnFlush', function() {
             index = createIndex('durable.index', { syncScheduler: new SyncScheduler({ syncOnFlush: true }) });
             index.open();
             expect(fsyncCalls).to.be(2);
             index.add(new Index.Entry(1, 0));
             index.flush();
-            expect(fsyncCalls).to.be(3);
+            expect(fsyncCalls).to.be(2);
         });
 
-        it('syncs flushed entries and the directory of a new file with the next run', function() {
+        it('syncs a new file with its directory with the next run', function() {
             const syncScheduler = new SyncScheduler({ syncInterval: 1000 });
             index = createIndex('durable.index', { syncScheduler });
             index.open();
             index.add(new Index.Entry(1, 0));
+            index.flush();
             expect(fsyncCalls).to.be(0);
             syncScheduler.run();
             expect(fsyncCalls).to.be(2);
         });
 
-        it('never syncs by default', function() {
+        it('syncs on close and sync() only if the file changed', function() {
             index = setupIndexWithEntries();
+            index.add(new Index.Entry(index.length + 1, 0));
+            index.flush();
+            fsyncCalls = 0;
             index.close();
-            expect(fsyncCalls).to.be(0);
+            expect(fsyncCalls).to.be(1);
+            index.open();
+            index.get(1);
+            index.sync();
+            index.close();
+            expect(fsyncCalls).to.be(1);
         });
     });
 

@@ -118,7 +118,7 @@ describe('Storage', function() {
                 }
                 expect(fsyncCalls).to.be(0);
                 storage.syncScheduler.run();
-                // 10 partitions, the primary index and one shared directory sync
+                // 10 partitions, the new primary index file and one shared directory sync; index entries are only synced by a checkpoint
                 expect(fsyncCalls).to.be(12);
                 expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
             } finally {
@@ -1345,6 +1345,36 @@ describe('Storage', function() {
             });
             repairedStorage.open();
             // Prevent afterEach from trying to remove the now-gone lock file
+            crashedStorage.storageLock.held = false;
+        });
+
+        it('rebuilds the index entries after the last checkpoint, also of secondary indexes nobody opened', function(done) {
+            const crashedStorage = new Storage({ dataDirectory });
+            crashedStorage.open();
+            const index = crashedStorage.ensureIndex('foo', { type: 'foo' });
+            for (let i = 1; i <= 3; i++) {
+                crashedStorage.write({ type: 'foo', i });
+            }
+            crashedStorage.checkpoint();
+            expect(crashedStorage.storageLock.readCheckpoint()).to.be(3);
+            for (let i = 4; i <= 5; i++) {
+                crashedStorage.write({ type: 'foo', i });
+            }
+            crashedStorage.flush();
+            // Simulate a power loss that kept the primary index, but lost the secondary entries after the checkpoint
+            index.truncate(3);
+            index.close();
+            crashedStorage.index.close();
+            crashedStorage.forEachPartition(partition => partition.close());
+
+            const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
+            refs.push(repairedStorage);
+            repairedStorage.once('opened', () => {
+                expect(repairedStorage.openIndex('foo').length).to.be(5);
+                expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
+                done();
+            });
+            repairedStorage.open();
             crashedStorage.storageLock.held = false;
         });
 

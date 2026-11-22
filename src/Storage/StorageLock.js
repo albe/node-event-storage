@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { assert } from '../utils/util.js';
+import { syncFile, syncDirectory } from '../utils/fsUtil.js';
 
 const LOCK_RECLAIM = 0x1;
 const LOCK_THROW = 0x2;
@@ -10,6 +11,7 @@ const LOCK_AUTO = 0x4;
 // Ends in `.lock` so that partition scans, also those of earlier versions, skip it like the lock directory itself.
 const OWNER_FILE = 'owner.lock';
 const RECLAIM_MARKER = 'reclaim.lock';
+const CHECKPOINT_FILE = 'checkpoint.lock';
 
 class StorageLockedError extends Error {}
 
@@ -134,6 +136,33 @@ class StorageLock {
         }
         this.held = false;
         return orphaned;
+    }
+
+    /**
+     * Record up to which global position all indexes are on disk. It belongs to the lock, because only the repair after
+     * a crash, which finds the lock left behind, needs it.
+     *
+     * @param {number} position
+     */
+    writeCheckpoint(position) {
+        const fileName = path.join(this.directory, CHECKPOINT_FILE);
+        const tmpFileName = fileName + '.tmp';
+        fs.writeFileSync(tmpFileName, String(position));
+        syncFile(tmpFileName);
+        fs.renameSync(tmpFileName, fileName);
+        syncDirectory(this.directory);
+    }
+
+    /**
+     * @returns {number} The position up to which all indexes are on disk, 0 if the lock holds no checkpoint.
+     */
+    readCheckpoint() {
+        try {
+            const position = Number(fs.readFileSync(path.join(this.directory, CHECKPOINT_FILE), 'utf8'));
+            return Number.isInteger(position) && position > 0 ? position : 0;
+        } catch (e) {
+            return 0;
+        }
     }
 
     /**

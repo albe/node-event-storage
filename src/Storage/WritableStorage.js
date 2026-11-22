@@ -86,16 +86,40 @@ class WritableStorage extends ReadableStorage {
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open(callback) {
+        const checkpoint = this.storageLock.readCheckpoint();
         const needsRepair = this.storageLock.reclaimOrphaned();
 
         if (!this.lock()) {
             return true;
         }
 
-        const onOpen = needsRepair
-            ? () => { this.checkTornWrites(); callback?.(); }
-            : callback;
-        return super.open(onOpen);
+        return super.open(() => {
+            if (needsRepair) {
+                this.checkTornWrites(checkpoint);
+            }
+            this.checkpoint();
+            callback?.();
+        });
+    }
+
+    /**
+     * Sync all indexes that changed and record the current length as checkpoint, so that the repair after a crash only
+     * needs to rebuild the index entries written after it.
+     *
+     * @api
+     */
+    checkpoint() {
+        this.syncIndexes();
+        this.storageLock.writeCheckpoint(this.index.length);
+    }
+
+    /**
+     * @private
+     */
+    syncIndexes() {
+        this.flush();
+        this.index.sync();
+        this.forEachSecondaryIndex(index => index.sync());
     }
 
     /**
@@ -153,40 +177,48 @@ class WritableStorage extends ReadableStorage {
      * (i.e. position + documentWriteSize(dataSize) > partition.size).  Detected inline in
      * findTornWriteBoundary(), without any checkTornWrite() call.
      *
-     * Repair flow:
-     * 1. findTornWriteBoundary() reads the last document of every partition and finds the global
-     *    torn-write boundary (minimum torn sequence number across all partitions).
-     * 2. If torn writes were found, truncateAfterSequence() removes all documents at or beyond
-     *    the boundary from each partition.
-     * 3. Truncate all indexes to the torn-write boundary, then reindex to fill any lagging entries.
-     * 4. If no torn writes were found but the index is lagging, reindex directly.
+     * Indexes are not synced while the storage is open, only by a checkpoint. So the repair rebuilds all index
+     * entries after the last checkpoint from the partitions, including those of secondary indexes that were not loaded.
+     *
+     * @param {number} [checkpoint] The global position up to which all indexes were on disk. Defaults to the length of the primary index.
      */
-    checkTornWrites() {
+    checkTornWrites(checkpoint = this.index.length) {
         const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
-
-        if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
-            // Phase 2: remove all documents at or beyond the torn-write boundary from each partition.
+        const torn = lastValidSequenceNumber < Number.MAX_SAFE_INTEGER;
+        if (torn) {
             this.forEachPartition(partition => {
                 partition.open();
                 partition.truncateAfterSequence(lastValidSequenceNumber - 1);
             });
+        }
+        const documents = torn ? lastValidSequenceNumber : maxPartitionSequenceNumber + 1;
 
-            // Truncate all indexes to the torn-write boundary.
-            this.index.open();
-            this.index.truncate(lastValidSequenceNumber);
-            /* c8 ignore next */
-            this.forEachWritableSecondaryIndex(index => {
-                index.truncate(index.find(lastValidSequenceNumber));
-            });
-
-            // Reindex to fill in any missing complete-document entries.
-            this.reindex(this.index.length);
-        } else if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
-            // No torn writes, but the index is lagging — repair it.
-            this.reindex(this.index.length);
+        this.index.open();
+        this.openSecondaryIndexFiles();
+        const indexedUntil = Math.min(checkpoint, this.index.length, documents);
+        if (torn || indexedUntil < documents || indexedUntil < this.index.length) {
+            this.reindex(indexedUntil);
         }
 
         this.forEachPartition(partition => partition.close());
+    }
+
+    /**
+     * Register all secondary index files, so that the repair reaches those that nobody has opened yet.
+     *
+     * @private
+     */
+    openSecondaryIndexFiles() {
+        if (!fs.existsSync(this.indexDirectory)) {
+            return;
+        }
+        const prefix = this.storageFile + '.';
+        for (const file of fs.readdirSync(this.indexDirectory)) {
+            const name = file.slice(prefix.length, -'.index'.length);
+            if (file.startsWith(prefix) && file.endsWith('.index') && name && !name.endsWith('.closed') && !(name in this.secondaryIndexes)) {
+                this.openIndex(name);
+            }
+        }
     }
 
     /**
@@ -261,8 +293,8 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Closes all files, completes the pending sync run and only then unlocks the storage, because a store without
-     * a lock is not repaired on the next open.
+     * Closes all files, which syncs the changed indexes, and completes the pending sync run. Only then it unlocks the
+     * storage, because a store without a lock is not repaired on the next open.
      */
     close() {
         super.close();

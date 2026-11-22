@@ -66,11 +66,11 @@ When the `commit()` callback fires depends on the durability setting:
 | `syncInterval: <ms>` | the next sync run `fsync`ed it, at most `<ms>` after the write | yes | yes, for acknowledged commits | close to the default |
 | `syncOnFlush: true` | the data was `fsync`ed on every flush | yes | yes, for acknowledged commits | lowest |
 
-Every flush of a partition or index file is handed to the storage's sync scheduler, which syncs it right away (`syncOnFlush`), with the next run (`syncInterval`) or not at all (default). The directory of a newly created file follows the same rule, so a new stream does not disappear after a power loss.
+Every flush of a partition is handed to the storage's sync scheduler, which syncs it right away (`syncOnFlush`), with the next run (`syncInterval`) or not at all (default). A newly created partition or index file is synced together with its directory by the same rule, so a new stream does not disappear after a power loss.
 
-`syncInterval` is a group commit: one run per interval flushes all files written since the last run, `fsync`s each of them and the directory of every new file once, and only then fires the callbacks. Commits to different streams therefore share the same run, and the index entries of an acknowledged commit are on disk as well. Closing the store completes a pending run. Closing a single file or evicting its handle because of `maxOpenPartitions` or `maxOpenIndexes` only flushes it.
+`syncInterval` is a group commit: one run per interval flushes all partitions written since the last run, `fsync`s each of them and every new file and directory once, and only then fires the callbacks. Commits to different streams therefore share the same run. Closing the store completes a pending run. Evicting a file handle because of `maxOpenPartitions` or `maxOpenIndexes` only flushes the file.
 
-Index files are flushed with a short delay (100 ms by default) or when their buffer is full. Without a durability option, a lagging index after a crash is not data loss: the repair rebuilds missing index entries from the data files.
+Index files are flushed with a short delay (100 ms by default) or when their buffer is full, but their entries are not synced on flush: an index can always be rebuilt from the partitions. Instead, a **checkpoint** syncs all changed indexes and records the global position up to which they are on disk. It is written when the store is opened and by `storage.checkpoint()`, and closing the store syncs all changed indexes. The repair after a crash rebuilds all index entries after the last checkpoint from the partitions, so it only needs to scan the events written since then.
 
 Consumer state files are replaced atomically (write a temporary file, then rename) but are not `fsync`ed. After an OS crash a consumer may resume from an earlier position, which means at-least-once redelivery, never a state that does not match its position.
 
@@ -88,7 +88,7 @@ An upper bound for the default case per stream is `writeBufferSize / average eve
 Opening a writer runs these steps:
 
 1. If a lock is left behind: reclaim it when its owner process is gone on this machine (`LOCK_AUTO`, the default) or unconditionally (`LOCK_RECLAIM`), otherwise throw `StorageLockedError`.
-2. If a lock was reclaimed: scan all partitions for torn writes, truncate every partition and index to the last complete document, and rebuild lagging index entries from the data (`checkTornWrites()`, `reindex()`).
+2. If a lock was reclaimed: scan all partitions for torn writes, truncate every partition to the last complete document, and rebuild all index entries after the last checkpoint from the data, including those of secondary indexes that were not loaded (`checkTornWrites()`, `reindex()`).
 3. Always: roll back an unfinished last commit (see [Atomicity](#atomicity)).
 4. Emit `'ready'`.
 
