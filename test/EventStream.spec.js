@@ -101,6 +101,14 @@ describe('EventStream', function() {
         expect(mockEventStore.storage.until).to.be(events.length);
     });
 
+    it('reads to the end when the upper bound lies beyond it', function(){
+        stream = new EventStream('foo', mockEventStore, 2, 100);
+        stream.events;
+
+        expect(mockEventStore.storage.from).to.be(2);
+        expect(mockEventStore.storage.until).to.be(events.length);
+    });
+
     it('allows specifying version range in natural language', function(){
         stream.fromStart().toEnd();
         // read all and convert to array

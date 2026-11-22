@@ -2,6 +2,11 @@
 
 Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation for a released version is available through the version selector on Read the Docs.
 
+## Unreleased
+
+- Fix `fromStreams()`, `query()` and category streams returning events backwards when reading from a position beyond the end of the store, e.g. the last event for `query(selector, null, length + 1)`. A join that starts outside the store is now empty, like a single stream; an upper bound beyond the end still reads to the end.
+- Fix single streams returning no events when the upper bound lies beyond the end of the stream, e.g. `getEventStream(name, 2, 100)`. They now read to the end, like a join.
+
 ## 1.5.0
 
 See the [upgrade guide](upgrading/1.5.md) for the breaking changes.

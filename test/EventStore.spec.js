@@ -595,6 +595,18 @@ describe('EventStore', function() {
             });
         });
 
+        it('reads to the end when the upper bound lies beyond it and is empty when it starts beyond the end', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 1 }, { foo: 2 }, { foo: 3 }]);
+
+            expect(eventstore.getEventStream('foo-bar', 2, 100).events).to.eql([{ foo: 2 }, { foo: 3 }]);
+            expect(eventstore.getEventStream('foo-bar', 3, 1).events).to.eql([{ foo: 3 }, { foo: 2 }, { foo: 1 }]);
+            expect(eventstore.getEventStream('foo-bar', 4).events).to.eql([]);
+            expect(eventstore.getEventStream('foo-bar', 10, 1).events).to.eql([]);
+        });
+
         it('can iterate events in reverse order', function() {
             eventstore = new EventStore({
                 storageDirectory

@@ -88,6 +88,18 @@ describe('JoinEventStream', function() {
         expect(stream.events).to.eql([]);
     });
 
+    it('is empty when it starts beyond the end of the store', function() {
+        expect(new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 4).events).to.eql([]);
+        expect(new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 10, 1).events).to.eql([]);
+        expect(new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 0).events).to.eql([]);
+        expect(new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore).from(4).toEnd().events).to.eql([]);
+    });
+
+    it('reads to the end when the upper bound lies beyond it', function() {
+        expect(new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 2, 100).events).to.eql([events[1], events[2]]);
+        expect(new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, 3, 1).events).to.eql([events[2], events[1], events[0]]);
+    });
+
     it('can fetch events from the end only', function(){
         stream = new JoinEventStream('foo-bar', ['foo', 'bar'], eventstore, -2, -1);
         const fetchedEvents = stream.events;
