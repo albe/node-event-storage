@@ -4,6 +4,8 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
+- Restore write throughput with `syncInterval` for bursts across many streams. All partitions of a storage now share one sync run per interval instead of one timer and `fsync` each, the directory of new partition and index files is synced once per run instead of right after each file was created, and a file is only synced when it changed since its last sync. Evicting a file handle no longer syncs at all; the file is synced by the next run or on `close()`. A burst of commits to 2000 new streams now needs one `fsync` per stream instead of four.
+- Fix commits with a document too large for the write buffer being acknowledged before they were synced with `syncInterval` or `syncOnFlush`.
 - Fix `fromStreams()`, `query()` and category streams returning events backwards when reading from a position beyond the end of the store, e.g. the last event for `query(selector, null, length + 1)`. A join that starts outside the store is now empty, like a single stream; an upper bound beyond the end still reads to the end.
 - Fix single streams returning no events when the upper bound lies beyond the end of the stream, e.g. `getEventStream(name, 2, 100)`. They now read to the end, like a join.
 

@@ -5,6 +5,7 @@ import { assert, alignTo } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
 import { ensureDirectory, syncDirectory } from '../utils/fsUtil.js';
 import Clock from '../Clock.js';
+import SyncCycle from '../SyncCycle.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
@@ -24,6 +25,7 @@ class WritablePartition extends ReadablePartition {
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
      * @param {number} [config.syncInterval] Call fsync at most every this many ms and only invoke write callbacks after it. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
+     * @param {SyncCycle} [config.syncCycle] A sync cycle shared with other files, which replaces the own cycle created from `syncInterval`.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {object} [config.metadata] A metadata object that will be written to the file header.
      * @param {typeof Clock} [config.clock] The constructor to a clock interface
@@ -48,9 +50,11 @@ class WritablePartition extends ReadablePartition {
         this.writeBufferSize = config.writeBufferSize >>> 0; // jshint ignore:line
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0; // jshint ignore:line
         this.syncOnFlush = !!config.syncOnFlush;
-        this.syncInterval = this.syncOnFlush ? 0 : config.syncInterval >>> 0; // jshint ignore:line
-        this.syncTimeout = null;
-        this.syncCallbacks = [];
+        this.syncCycle = null;
+        if (!this.syncOnFlush && (config.syncCycle || config.syncInterval > 0)) {
+            this.syncCycle = config.syncCycle || new SyncCycle(config.syncInterval);
+        }
+        this.unsynced = false;
         this.dirtyReads = !!config.dirtyReads;
         this.metadata = config.metadata;
         assert(typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function', 'Clock needs to implement the method time()');
@@ -99,8 +103,9 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     close() {
-        if (this.syncTimeout !== null) {
-            this.sync();
+        if (this.writeBuffer) {
+            this.syncCycle?.run();
+            this.fsync();
         }
         super.close();
         if (this.writeBuffer) {
@@ -112,17 +117,13 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
-     * Flush pending buffered writes before the pool closes the descriptor.
-     *
-     * @param {number} fd
+     * Flush pending buffered writes before the pool closes the descriptor. Evicting a descriptor is no durability
+     * point: the file stays unsynced until the next sync, which reopens it.
      */
-    onBeforeClose(fd) {
-        if (!this.writeBuffer) {
-            return;
+    onBeforeClose() {
+        if (this.writeBuffer) {
+            this.flush();
         }
-        this.flush();
-        fs.fsyncSync(fd);
-        this.invokeSyncCallbacks();
     }
 
     /**
@@ -135,8 +136,11 @@ class WritablePartition extends ReadablePartition {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeFileSync(this.fileName, metadataBuffer);
         this.headerSize = metadataBuffer.byteLength;
-        if (this.syncOnFlush || this.syncInterval > 0) {
+        this.markUnsynced();
+        if (this.syncOnFlush) {
             syncDirectory(path.dirname(this.fileName));
+        } else {
+            this.syncCycle?.addNewFile(this.fileName);
         }
     }
 
@@ -154,62 +158,66 @@ class WritablePartition extends ReadablePartition {
             return false;
         }
 
-        const fd = this.getFileHandle();
-        fs.writeSync(fd, this.writeBuffer, 0, this.writeBufferCursor);
-        if (this.syncOnFlush) {
-            fs.fsyncSync(fd);
-        }
-
+        fs.writeSync(this.getFileHandle(), this.writeBuffer, 0, this.writeBufferCursor);
         this.writeBufferCursor = 0;
         this.writeBufferDocuments = 0;
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
-        if (this.syncInterval > 0) {
-            this.scheduleSync(callbacks);
-        } else {
-            for (let i = 0; i < callbacks.length; i++) callbacks[i]();
-        }
+        this.acknowledge(callbacks);
 
         return true;
     }
 
     /**
-     * Group commit: many flushes share one fsync, and their callbacks only fire once the data is on disk.
+     * Invoke the callbacks of written documents as soon as they are as durable as configured.
      *
      * @private
      * @param {Array<function>} callbacks
      */
-    scheduleSync(callbacks) {
-        for (let i = 0; i < callbacks.length; i++) this.syncCallbacks.push(callbacks[i]);
-        if (this.syncTimeout === null) {
-            this.syncTimeout = setTimeout(() => this.sync(), this.syncInterval);
+    acknowledge(callbacks) {
+        if (this.syncOnFlush) {
+            this.fsync();
+        }
+        if (this.syncCycle) {
+            this.syncCycle.whenSynced(callbacks);
+        } else {
+            for (let i = 0; i < callbacks.length; i++) callbacks[i]();
         }
     }
 
     /**
-     * Flush the write buffer and fsync the file, then invoke all callbacks waiting for durability.
+     * Track that this file changed since its last fsync.
+     *
+     * @private
+     */
+    markUnsynced() {
+        if (!this.unsynced) {
+            this.unsynced = true;
+            this.syncCycle?.add(this);
+        }
+    }
+
+    /**
+     * Flush the write buffer and fsync the file, if it changed since the last fsync.
+     */
+    fsync() {
+        this.flush();
+        if (!this.unsynced || !this.isOpen()) {
+            return;
+        }
+        fs.fsyncSync(this.getFileHandle());
+        this.unsynced = false;
+    }
+
+    /**
+     * Make all writes durable and invoke the callbacks waiting for that. With a sync cycle, this completes its
+     * run early, which includes all other files sharing the cycle.
      *
      * @api
      */
     sync() {
-        if (this.isOpen()) {
-            this.flush();
-            fs.fsyncSync(this.getFileHandle());
-        }
-        if (this.syncTimeout !== null) {
-            clearTimeout(this.syncTimeout);
-            this.syncTimeout = null;
-        }
-        this.invokeSyncCallbacks();
-    }
-
-    /**
-     * @private
-     */
-    invokeSyncCallbacks() {
-        const callbacks = this.syncCallbacks;
-        this.syncCallbacks = [];
-        for (let i = 0; i < callbacks.length; i++) callbacks[i]();
+        this.fsync();
+        this.syncCycle?.run();
     }
 
     /**
@@ -294,9 +302,7 @@ class WritablePartition extends ReadablePartition {
         this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
         bytesWritten += fs.writeSync(fd, this.writeMetaBuffer, 0, 4);
         bytesWritten += fs.writeSync(fd, DOCUMENT_SEPARATOR);
-        if (typeof callback === 'function') {
-            process.nextTick(callback);
-        }
+        this.acknowledge(typeof callback === 'function' ? [() => process.nextTick(callback)] : []);
         return bytesWritten;
     }
 
@@ -339,6 +345,7 @@ class WritablePartition extends ReadablePartition {
      */
     write(data, sequenceNumber, callback) {
         this.getFileHandle();
+        this.markUnsynced();
         ({ sequenceNumber, callback } = this.normalizeWriteArguments(sequenceNumber, callback));
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');
@@ -471,6 +478,7 @@ class WritablePartition extends ReadablePartition {
         }
 
         fs.truncateSync(this.fileName, this.headerSize + after);
+        this.markUnsynced();
         this.truncateReadBuffer(after);
         this.size = after;
         this.emit('truncated', after);

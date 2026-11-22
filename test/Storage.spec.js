@@ -1,5 +1,6 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
+import fsSync from 'fs';
 import path from 'path';
 import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM, LOCK_THROW } from '../src/Storage.js';
 import os from 'os';
@@ -96,11 +97,43 @@ describe('Storage', function() {
             storage.open();
 
             storage.write({ foo: 'bar' }, () => {
-                expect(storage.getPartition('').syncCallbacks.length).to.be(0);
+                expect(storage.syncCycle.callbacks.length).to.be(0);
                 let fileContent = fs.readFileSync('test/data/storage', 'utf8');
                 expect(fileContent).to.contain(JSON.stringify({ foo: 'bar' }));
                 done();
             });
+        });
+
+        it('syncs all changed partitions and new directories in one shared run', function(done) {
+            storage = createStorage({ syncInterval: 1000, partitioner: (document) => document.stream });
+            storage.open();
+            let fsyncCalls = 0;
+            const originalFsync = fsSync.fsyncSync;
+            fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
+            const acknowledged = [];
+            try {
+                for (let i = 0; i < 10; i++) {
+                    storage.write({ stream: 'stream-' + i }, () => acknowledged.push(i));
+                    storage.write({ stream: 'stream-' + i });
+                }
+                expect(fsyncCalls).to.be(0);
+                storage.syncCycle.run();
+                // 10 partitions plus one shared directory sync
+                expect(fsyncCalls).to.be(11);
+                expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            } finally {
+                fsSync.fsyncSync = originalFsync;
+            }
+            done();
+        });
+
+        it('acknowledges pending writes on close', function() {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            let acknowledged = false;
+            storage.write({ foo: 'bar' }, () => (acknowledged = true));
+            storage.close();
+            expect(acknowledged).to.be(true);
         });
 
         it('throws on an invalid sync interval', function() {

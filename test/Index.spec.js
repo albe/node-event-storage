@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import fsSync from 'fs';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
 import FileHandlePool from '../src/FileHandlePool.js';
+import SyncCycle from '../src/SyncCycle.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
 import { CHUNK_CAPACITY } from '../src/Index/ReadableIndex.js';
 import { fileURLToPath } from 'url';
@@ -56,16 +57,39 @@ describe('Index', function() {
         return reader;
     }
 
-    it('syncs the directory when creating a new file with a durability option', function() {
+    it('syncs the directory when creating a new file with syncOnFlush', function() {
         let fsyncCalls = 0;
         const originalFsync = fsSync.fsyncSync;
         fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
         try {
-            index = createIndex('durable.index', { syncInterval: 10 });
+            index = createIndex('durable.index', { syncOnFlush: true });
             index.open();
             expect(fsyncCalls).to.be(1);
         } finally {
             fsSync.fsyncSync = originalFsync;
+        }
+    });
+
+    it('leaves the directory sync of a new file to its sync cycle', function() {
+        const syncCycle = new SyncCycle(1000);
+        index = createIndex('durable.index', { syncCycle });
+        index.open();
+        expect([...syncCycle.directories]).to.eql([dataDirectory]);
+    });
+
+    it('does not sync on close when nothing changed since the last sync', function() {
+        index = setupIndexWithEntries();
+        index.close();
+        let fsyncCalls = 0;
+        const originalFdatasync = fsSync.fdatasyncSync;
+        fsSync.fdatasyncSync = (fd) => { fsyncCalls++; return originalFdatasync(fd); };
+        try {
+            index.open();
+            index.get(1);
+            index.close();
+            expect(fsyncCalls).to.be(0);
+        } finally {
+            fsSync.fdatasyncSync = originalFdatasync;
         }
     });
 

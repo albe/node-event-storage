@@ -27,6 +27,8 @@ class WritableIndex extends ReadableIndex {
      * @param {number} [options.writeBufferSize] The amount of bytes of unwritten entries after which they are flushed. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
+     * @param {boolean} [options.syncOnFlush] If fsync should be called on every flush. Defaults to false.
+     * @param {SyncCycle} [options.syncCycle] The sync cycle that syncs the directory after the index file was created.
      */
     constructor(name = '.index', options = {}) {
         ({ name, options } = normalizeNamedCtorArgs(name, options, '.index'));
@@ -54,7 +56,8 @@ class WritableIndex extends ReadableIndex {
         this.flushCallbacks = [];
         this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
         this.syncOnFlush = !!options.syncOnFlush;
-        this.syncNewFile = this.syncOnFlush || options.syncInterval > 0;
+        this.syncCycle = this.syncOnFlush ? null : options.syncCycle || null;
+        this.unsynced = false;
     }
 
     /**
@@ -114,32 +117,36 @@ class WritableIndex extends ReadableIndex {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeSync(this.getFileHandle(), metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = metadataBuffer.byteLength;
-        if (this.syncNewFile) {
+        this.unsynced = true;
+        if (this.syncOnFlush) {
             syncDirectory(path.dirname(this.fileName));
+        } else {
+            this.syncCycle?.addNewFile(this.fileName);
         }
     }
 
     /**
-     * Flush pending buffered writes before the pool closes the descriptor.
-     *
-     * @param {number} fd
+     * Flush pending buffered writes before the pool closes the descriptor. Evicting a descriptor is no durability
+     * point: the file stays unsynced until it is closed.
      */
-    onBeforeClose(fd) {
-        if (!this.flushCallbacks) {
-            return;
+    onBeforeClose() {
+        if (this.flushCallbacks) {
+            this.flush();
         }
-        this.flush();
-        fs.fdatasyncSync(fd);
     }
 
     /**
-     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it
-     * since the last write, so no buffered entry is lost.
+     * Write the buffered entries, sync them if anything changed since the last sync, and close the index.
+     * The flush reopens the file handle if the pool evicted it since the last write, so no buffered entry is lost.
      *
      * @api
      */
     close() {
         this.flush();
+        if (this.unsynced && this.isOpen()) {
+            fs.fdatasyncSync(this.getFileHandle());
+            this.unsynced = false;
+        }
         super.close();
     }
 
@@ -173,6 +180,8 @@ class WritableIndex extends ReadableIndex {
         this.writeUnflushedEntries(fd);
         if (this.syncOnFlush) {
             fs.fsyncSync(fd);
+        } else {
+            this.unsynced = true;
         }
 
         const callbacks = this.flushCallbacks;
@@ -282,6 +291,7 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
+        this.unsynced = true;
         this.setLength(after);
         this.flushedLength = Math.min(this.flushedLength, after);
     }

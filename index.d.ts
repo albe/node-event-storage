@@ -67,7 +67,7 @@ export interface StorageConfig {
     maxWriteBufferDocuments?: number;
     /** Call fsync on every flush. Default false. */
     syncOnFlush?: boolean;
-    /** Group commit: fsync each partition at most every this many ms and only then invoke the commit callbacks. Default 0 (off). */
+    /** Group commit: sync all changed partitions together at most every this many ms and only then invoke the commit callbacks. Default 0 (off). */
     syncInterval?: number;
     /** Let the writer read events that are still in the write buffer. Default true. */
     dirtyReads?: boolean;

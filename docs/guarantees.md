@@ -63,10 +63,12 @@ When the `commit()` callback fires depends on the durability setting:
 | Setting | Commit callback fires when | Survives process crash | Survives OS crash / power loss | Write throughput |
 |---------|----------------------------|------------------------|--------------------------------|------------------|
 | default | the data was handed to the OS | yes | no | highest |
-| `syncInterval: <ms>` | the partition was `fsync`ed, at most `<ms>` after the write | yes | yes, for acknowledged commits | close to the default |
+| `syncInterval: <ms>` | the next sync run `fsync`ed it, at most `<ms>` after the write | yes | yes, for acknowledged commits | close to the default |
 | `syncOnFlush: true` | the data was `fsync`ed on every flush | yes | yes, for acknowledged commits | lowest |
 
-`syncInterval` is a group commit: all flushes of a partition within the interval share one `fsync`, and their callbacks fire after it. With either option, the directory is also synced after a new partition or index file is created, so a new stream does not disappear after a power loss.
+`syncInterval` is a group commit: one sync run per interval `fsync`s every partition written since the last run and the directory of every partition or index file created since then, once each, and only then fires the callbacks. Commits to different streams therefore share the same run. With `syncOnFlush`, the directory is synced right after a new file is created, so a new stream does not disappear after a power loss either way.
+
+A file is only synced when it changed since its last sync. Closing the store syncs all changed files; evicting a file handle because of `maxOpenPartitions` or `maxOpenIndexes` does not, the file is synced by the next run or on close instead.
 
 Index files are flushed with a short delay (100 ms by default) or when their buffer is full, and are only `fsync`ed with `syncOnFlush`. A lagging index after a crash is not data loss: the repair rebuilds missing index entries from the data files.
 
