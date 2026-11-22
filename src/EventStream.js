@@ -39,14 +39,10 @@ class EventStream extends stream.Readable {
         if (eventStore.streams[name]) {
             this.streamIndex = eventStore.streams[name].index;
             this.minRevision = normalizeRevision(minRevision, this.streamIndex.length);
-            this.maxRevision = normalizeRevision(maxRevision, this.streamIndex.length);
-            this.version = normalizeMaxRevision(this.streamIndex.length, maxRevision);
+            this.maxRevision = normalizeMaxRevision(this.streamIndex.length, maxRevision);
+            this.version = this.maxRevision;
             this._iterator = null;
-            // An upper bound beyond the end reads to the end, like for a join; a range that starts outside the
-            // stream stays empty.
-            this.fetch = () => eventStore.storage.readRange(
-                this.minRevision, Math.min(this.maxRevision, this.streamIndex.length), this.streamIndex, raw
-            );
+            this.fetch = () => eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex, raw);
         } else {
             this.streamIndex = { length: 0 };
             this.version = -1;
@@ -70,8 +66,8 @@ class EventStream extends stream.Readable {
      * @returns {EventStream}
      */
     until(revision) {
-        this.maxRevision = normalizeRevision(revision, this.streamIndex.length);
-        this.version = normalizeMaxRevision(this.streamIndex.length, this.maxRevision);
+        this.maxRevision = normalizeMaxRevision(this.streamIndex.length, revision);
+        this.version = this.maxRevision;
         return this;
     }
 

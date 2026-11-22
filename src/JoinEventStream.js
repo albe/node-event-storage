@@ -1,7 +1,7 @@
 import EventStream from './EventStream.js';
 import {assert} from './utils/util.js';
 import {intersect, normalizeSelector, union} from './utils/indexUtil.js';
-import {normalizeRevision} from './utils/apiHelpers.js';
+import {normalizeMaxRevision, normalizeRevision} from './utils/apiHelpers.js';
 
 /**
  * JoinEventStream is a virtual stream over one or multiple physical stream indexes.
@@ -37,7 +37,7 @@ class JoinEventStream extends EventStream {
         this.selector = normalizeSelector(selector);
         this.streamIndex = eventStore.storage.index;
         this.minRevision = normalizeRevision(minRevision, eventStore.length);
-        this.maxRevision = normalizeRevision(maxRevision, eventStore.length);
+        this.maxRevision = normalizeMaxRevision(eventStore.length, maxRevision);
         this.version = this.streamIndex.length;
 
         this.fetch = () => this.iterateDocuments();
@@ -84,12 +84,10 @@ class JoinEventStream extends EventStream {
      * @returns {Generator<object|{ buffer: Buffer, time64: number, sequenceNumber: number }>}
      */
     * iterateDocuments() {
-        // Revisions counted from the end are already resolved by normalizeRevision(), so anything below 1 here lies
-        // before the first event. An upper bound beyond the end reads to the end, but a range that starts outside the
-        // store is empty, like for a single stream. Clamping the start instead would turn a read from beyond the end
-        // into a backwards read.
+        // Revisions counted from the end are already resolved and the upper bound is clamped to the end, so anything
+        // below 1 here lies before the first event. A range that starts outside the store is empty, like for a single
+        // stream. Clamping the start too would turn a read from beyond the end into a backwards read.
         const length = this.eventStore.length;
-        this.maxRevision = Math.min(this.maxRevision, length);
         if (this.minRevision < 1 || this.minRevision > length || this.maxRevision < 1) {
             return;
         }
