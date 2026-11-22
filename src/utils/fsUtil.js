@@ -64,6 +64,21 @@ function syncFile(fileName, flags = 'r+') {
 }
 
 /**
+ * Like `syncFile()`, but in the background, so that the event loop goes on in the meantime.
+ *
+ * @param {string} fileName
+ * @returns {Promise<void>}
+ */
+async function syncFileInBackground(fileName) {
+    const handle = await fs.promises.open(fileName, 'r+');
+    try {
+        await handle.sync();
+    } finally {
+        await handle.close();
+    }
+}
+
+/**
  * Platforms that can not open a directory for syncing (Windows) are skipped silently.
  *
  * @param {string} dirName
@@ -215,5 +230,6 @@ export {
     safeUnlink,
     syncDirectory,
     syncFile,
+    syncFileInBackground,
     writeFileAtomic
 };

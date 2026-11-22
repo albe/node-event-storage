@@ -1355,10 +1355,7 @@ describe('Storage', function() {
             for (let i = 1; i <= 3; i++) {
                 crashedStorage.write({ type: 'foo', i });
             }
-            // The first checkpoint records the length on open, the second one the length at the first one
-            crashedStorage.checkpoint();
-            expect(crashedStorage.storageLock.readCheckpoint()).to.be(0);
-            crashedStorage.checkpoint();
+            crashedStorage.checkpoint().then(() => {
             expect(crashedStorage.storageLock.readCheckpoint()).to.be(3);
             for (let i = 4; i <= 5; i++) {
                 crashedStorage.write({ type: 'foo', i });
@@ -1379,6 +1376,37 @@ describe('Storage', function() {
             });
             repairedStorage.open();
             crashedStorage.storageLock.held = false;
+            }).catch(done);
+        });
+
+        it('records the checkpoint only after the changed indexes were synced', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.ensureIndex('foo', { type: 'foo' });
+            storage.write({ type: 'foo' });
+            storage.write({ type: 'bar' });
+            const synced = [];
+            const originalSync = fs.promises.open;
+            fs.promises.open = async (fileName, flags) => {
+                const handle = await originalSync(fileName, flags);
+                synced.push(path.basename(fileName));
+                return handle;
+            };
+            storage.checkpoint().then(() => {
+                expect(synced.sort()).to.eql(['storage.foo.index', 'storage.index']);
+                expect(storage.storageLock.readCheckpoint()).to.be(2);
+                expect(storage.index.modified).to.be(false);
+                synced.length = 0;
+                return storage.checkpoint();
+            }).then(() => {
+                fs.promises.open = originalSync;
+                // Nothing changed since, but the checkpoint file itself is written synchronously
+                expect(synced).to.eql([]);
+                done();
+            }).catch(error => {
+                fs.promises.open = originalSync;
+                done(error);
+            });
         });
 
     });

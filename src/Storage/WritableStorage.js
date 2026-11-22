@@ -5,18 +5,29 @@ import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableInd
 import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory } from '../utils/fsUtil.js';
+import { ensureDirectory, syncFileInBackground } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import SyncScheduler from '../SyncScheduler.js';
 
 const PARTITION_PROBE_SEPARATOR = '~';
+
+/**
+ * A stream index deleted or renamed in the meantime was synced when it was closed.
+ *
+ * @param {Error} error
+ */
+function ignoreDeletedFile(error) {
+    if (error.code !== 'ENOENT') {
+        throw error;
+    }
+}
 const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
-// The operating system writes changed pages back to disk within about 30 seconds on its own.
-const CHECKPOINT_INTERVAL = 60 * 1000;
+// Bounds the events that the repair after a crash needs to scan.
+const CHECKPOINT_INTERVAL = 5 * 60 * 1000;
 
 // Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
 const MAX_UINT32 = 0xFFFFFFFF;
@@ -113,21 +124,45 @@ class WritableStorage extends ReadableStorage {
      */
     startCheckpoints() {
         this.storageLock.writeCheckpoint(this.index.length);
-        this.checkpointLength = this.index.length;
-        this.checkpointTimer = setInterval(() => this.checkpoint(), CHECKPOINT_INTERVAL);
+        this.checkpointTimer = setInterval(() => this.checkpoint().catch(error => this.emit('error', error)), CHECKPOINT_INTERVAL);
         this.checkpointTimer.unref();
     }
 
     /**
-     * Indexes are not synced while the storage is open. But one interval after an index entry was written, the
-     * operating system has written it back to disk on its own. So each checkpoint records the length the primary index
-     * had at the previous checkpoint, which bounds the repair after a crash to the events of the last two intervals.
+     * Indexes are not synced on flush, because the repair after a crash can rebuild them from the partitions.
+     * A checkpoint syncs all indexes changed since the previous one in the background, and only then records the
+     * length the primary index had before, so the repair only needs to rebuild what was written since.
      *
      * @internal
+     * @returns {Promise<void>}
      */
-    checkpoint() {
-        this.storageLock.writeCheckpoint(this.checkpointLength);
-        this.checkpointLength = this.index.length;
+    async checkpoint() {
+        this.flush();
+        const length = this.index.length;
+        const fileNames = this.takeModifiedIndexFiles();
+        await Promise.all(fileNames.map(fileName => syncFileInBackground(fileName).catch(ignoreDeletedFile)));
+        if (this.locked) {
+            this.storageLock.writeCheckpoint(length);
+        }
+    }
+
+    /**
+     * An index that changes again while it is synced stays modified for the next checkpoint.
+     *
+     * @private
+     * @returns {string[]}
+     */
+    takeModifiedIndexFiles() {
+        const fileNames = [];
+        const take = index => {
+            if (index.modified) {
+                index.modified = false;
+                fileNames.push(index.fileName);
+            }
+        };
+        take(this.index);
+        this.forEachSecondaryIndex(take);
+        return fileNames;
     }
 
     /**
