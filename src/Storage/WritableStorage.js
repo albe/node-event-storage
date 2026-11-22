@@ -15,6 +15,9 @@ const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
+// The operating system writes changed pages back to disk within about 30 seconds on its own.
+const CHECKPOINT_INTERVAL = 60 * 1000;
+
 // Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
 const MAX_UINT32 = 0xFFFFFFFF;
 
@@ -96,21 +99,35 @@ class WritableStorage extends ReadableStorage {
         return super.open(() => {
             if (needsRepair) {
                 this.checkTornWrites(checkpoint);
+                this.syncIndexes();
             }
-            this.checkpoint();
+            this.startCheckpoints();
             callback?.();
         });
     }
 
     /**
-     * Sync all indexes that changed and record the current length as checkpoint, so that the repair after a crash only
-     * needs to rebuild the index entries written after it.
+     * On open, all indexes are on disk: a clean close synced them, and so does a repair.
      *
-     * @api
+     * @private
+     */
+    startCheckpoints() {
+        this.storageLock.writeCheckpoint(this.index.length);
+        this.checkpointLength = this.index.length;
+        this.checkpointTimer = setInterval(() => this.checkpoint(), CHECKPOINT_INTERVAL);
+        this.checkpointTimer.unref();
+    }
+
+    /**
+     * Indexes are not synced while the storage is open. But one interval after an index entry was written, the
+     * operating system has written it back to disk on its own. So each checkpoint records the length the primary index
+     * had at the previous checkpoint, which bounds the repair after a crash to the events of the last two intervals.
+     *
+     * @internal
      */
     checkpoint() {
-        this.syncIndexes();
-        this.storageLock.writeCheckpoint(this.index.length);
+        this.storageLock.writeCheckpoint(this.checkpointLength);
+        this.checkpointLength = this.index.length;
     }
 
     /**
@@ -297,6 +314,7 @@ class WritableStorage extends ReadableStorage {
      * storage, because a store without a lock is not repaired on the next open.
      */
     close() {
+        clearInterval(this.checkpointTimer);
         super.close();
         this.syncScheduler.run();
         if (this.locked) {

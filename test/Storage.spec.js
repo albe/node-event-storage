@@ -1355,6 +1355,9 @@ describe('Storage', function() {
             for (let i = 1; i <= 3; i++) {
                 crashedStorage.write({ type: 'foo', i });
             }
+            // The first checkpoint records the length on open, the second one the length at the first one
+            crashedStorage.checkpoint();
+            expect(crashedStorage.storageLock.readCheckpoint()).to.be(0);
             crashedStorage.checkpoint();
             expect(crashedStorage.storageLock.readCheckpoint()).to.be(3);
             for (let i = 4; i <= 5; i++) {
