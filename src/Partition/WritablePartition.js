@@ -5,7 +5,6 @@ import { assert, alignTo } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
 import { ensureDirectory, syncDirectory } from '../utils/fsUtil.js';
 import Clock from '../Clock.js';
-import SyncCycle from '../SyncCycle.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
@@ -24,8 +23,7 @@ class WritablePartition extends ReadablePartition {
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
-     * @param {number} [config.syncInterval] Call fsync at most every this many ms and only invoke write callbacks after it. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
-     * @param {SyncCycle} [config.syncCycle] A sync cycle shared with other files, which replaces the own cycle created from `syncInterval`.
+     * @param {SyncCycle} [config.syncCycle] Group commit: the cycle that syncs this file together with others, and only then invokes the write callbacks.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {object} [config.metadata] A metadata object that will be written to the file header.
      * @param {typeof Clock} [config.clock] The constructor to a clock interface
@@ -35,7 +33,6 @@ class WritablePartition extends ReadablePartition {
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
             syncOnFlush: false,
-            syncInterval: 0,
             dirtyReads: true,
             metadata: {
                 epoch: Date.now()
@@ -50,10 +47,7 @@ class WritablePartition extends ReadablePartition {
         this.writeBufferSize = config.writeBufferSize >>> 0; // jshint ignore:line
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0; // jshint ignore:line
         this.syncOnFlush = !!config.syncOnFlush;
-        this.syncCycle = null;
-        if (!this.syncOnFlush && (config.syncCycle || config.syncInterval > 0)) {
-            this.syncCycle = config.syncCycle || new SyncCycle(config.syncInterval);
-        }
+        this.syncCycle = config.syncCycle || null;
         this.unsynced = false;
         this.dirtyReads = !!config.dirtyReads;
         this.metadata = config.metadata;

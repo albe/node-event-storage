@@ -56,7 +56,7 @@ class WritableIndex extends ReadableIndex {
         this.flushCallbacks = [];
         this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
         this.syncOnFlush = !!options.syncOnFlush;
-        this.syncCycle = this.syncOnFlush ? null : options.syncCycle || null;
+        this.syncCycle = options.syncCycle || null;
         this.unsynced = false;
     }
 

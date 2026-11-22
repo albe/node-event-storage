@@ -136,6 +136,13 @@ describe('Storage', function() {
             expect(acknowledged).to.be(true);
         });
 
+        it('ignores the sync interval when syncOnFlush is set', function() {
+            storage = createStorage({ syncInterval: 1000, syncOnFlush: true });
+            storage.open();
+            expect(storage.syncCycle).to.be(null);
+            expect(storage.getPartition('').syncCycle).to.be(null);
+        });
+
         it('throws on an invalid sync interval', function() {
             expect(() => createStorage({ syncInterval: -1 })).to.throwError(/syncInterval/);
             expect(() => createStorage({ syncInterval: 1.5 })).to.throwError(/syncInterval/);

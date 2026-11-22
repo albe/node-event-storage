@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import fsSync from 'fs';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
 import FileHandlePool from '../src/FileHandlePool.js';
+import SyncCycle from '../src/SyncCycle.js';
 import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
@@ -218,7 +219,7 @@ describe('Partition', function() {
 
     });
 
-    describe('syncInterval', function() {
+    describe('syncCycle', function() {
 
         let fsyncCalls, originalFsync;
 
@@ -234,7 +235,7 @@ describe('Partition', function() {
 
         function openDurable(config = {}) {
             partition.close();
-            partition = new Partition('.part', { dataDirectory, syncInterval: 1000, ...config });
+            partition = new Partition('.part', { dataDirectory, syncCycle: new SyncCycle(1000), ...config });
             partition.open();
             fsyncCalls = 0;
             return partition;
@@ -242,7 +243,7 @@ describe('Partition', function() {
 
         it('syncs the directory of a new file with the next sync', function() {
             partition.close();
-            partition = new Partition('.part', { dataDirectory, syncInterval: 1000 });
+            partition = new Partition('.part', { dataDirectory, syncCycle: new SyncCycle(1000) });
             partition.open();
             expect(fsyncCalls).to.be(0);
             partition.sync();
@@ -265,7 +266,7 @@ describe('Partition', function() {
         });
 
         it('invokes write callbacks only after one shared fsync', function(done) {
-            openDurable({ syncInterval: 10 });
+            openDurable({ syncCycle: new SyncCycle(10) });
             partition.sync();
             fsyncCalls = 0;
             const written = [];
@@ -339,14 +340,6 @@ describe('Partition', function() {
             other.close();
         });
 
-        it('is ignored when syncOnFlush is set', function() {
-            openDurable({ syncOnFlush: true });
-            let written = false;
-            partition.write('one', () => (written = true));
-            partition.flush();
-            expect(written).to.be(true);
-            expect(partition.syncCycle).to.be(null);
-        });
     });
 
     describe('readAll', function() {

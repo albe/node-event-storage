@@ -62,12 +62,12 @@ class WritableStorage extends ReadableStorage {
         };
         config = Object.assign(defaults, config);
         assert(Number.isInteger(config.syncInterval) && config.syncInterval >= 0, 'syncInterval must be a non-negative integer.');
-        config.syncCycle = config.syncInterval > 0 && !config.syncOnFlush ? new SyncCycle(config.syncInterval) : null;
-        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush, syncCycle: config.syncCycle }, config.indexOptions);
+        const syncCycle = config.syncInterval > 0 && !config.syncOnFlush ? new SyncCycle(config.syncInterval) : null;
+        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush, syncCycle }, config.indexOptions);
         ensureDirectory(config.dataDirectory);
         super(storageName, config);
 
-        this.syncCycle = config.syncCycle;
+        this.syncCycle = syncCycle;
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
@@ -617,7 +617,7 @@ class WritableStorage extends ReadableStorage {
      * @returns {WritablePartition}
      */
     createPartition(name, config = {}) {
-        return new WritablePartition(name, { ...config, fileHandlePool: this.partitionHandlePool });
+        return new WritablePartition(name, { ...config, fileHandlePool: this.partitionHandlePool, syncCycle: this.syncCycle });
     }
 
 }
