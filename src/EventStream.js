@@ -310,19 +310,29 @@ class EventStream extends stream.Readable {
      */
     next() {
         if (!this._iterator) {
-            this._iterator = this.fetch();
+            this._iterator = this.isOutOfRange() ? [][Symbol.iterator]() : this.fetch();
         }
-        try {
-            while (true) {
-                const result = this._iterator.next();
-                if (result.done) return false;
-                if (this.matchesPredicate(result.value)) {
-                    return result.value;
-                }
+        while (true) {
+            const result = this._iterator.next();
+            if (result.done) return false;
+            if (this.matchesPredicate(result.value)) {
+                return result.value;
             }
-        } catch(e) {
-            return false;
         }
+    }
+
+    /**
+     * Whether the revision range lies outside the stream, so there is nothing to read. Revisions counted from the end
+     * are already resolved and the upper bound is clamped to the end, so a range is outside when it starts before the
+     * first or after the last revision, or ends before the first. Clamping the start too would turn a read from beyond
+     * the end into a backwards read.
+     *
+     * @private
+     * @returns {boolean}
+     */
+    isOutOfRange() {
+        const length = this.streamIndex.length;
+        return this.minRevision < 1 || this.minRevision > length || this.maxRevision < 1;
     }
 
     // noinspection JSUnusedGlobalSymbols
@@ -331,7 +341,13 @@ class EventStream extends stream.Readable {
      * @private
      */
     _read() {
-        const next = this.next();
+        let next;
+        try {
+            next = this.next();
+        } catch (error) {
+            this.destroy(error);
+            return;
+        }
         this.push(next ? (this.raw ? this.toRawBuffer(next) : next.payload) : null);
     }
 

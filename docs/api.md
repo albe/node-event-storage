@@ -207,7 +207,7 @@ Throws if the store is read-only.
 eventstore.preRead(hook)
 ```
 
-Register a hook called synchronously before each event is read.  The hook receives `(position, partitionMetadata)` and may throw to abort the read.  Equivalent to `eventstore.on('preRead', hook)`.
+Register a hook called synchronously before each event is read.  The hook receives `(position, partitionMetadata)` and may throw to abort the read; the error is thrown to the reader of the stream, or emitted as `'error'` on a piped stream.  Equivalent to `eventstore.on('preRead', hook)`.
 
 ---
 

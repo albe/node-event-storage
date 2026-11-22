@@ -109,6 +109,19 @@ describe('EventStream', function() {
         expect(mockEventStore.storage.until).to.be(events.length);
     });
 
+    it('passes errors of the predicate on to the reader', function(){
+        stream = new EventStream('foo', mockEventStore, 1, -1, () => { throw new Error('broken matcher'); });
+        expect(() => stream.events).to.throwError(/broken matcher/);
+    });
+
+    it('is empty without reading when the range lies outside the stream', function(){
+        for (const [from, until] of [[4, -1], [10, 1], [0, -1], [-10, -1], [1, 0]]) {
+            mockEventStore.storage.from = undefined;
+            expect(new EventStream('foo', mockEventStore, from, until).events).to.eql([]);
+            expect(mockEventStore.storage.from).to.be(undefined);
+        }
+    });
+
     it('allows specifying version range in natural language', function(){
         stream.fromStart().toEnd();
         // read all and convert to array
