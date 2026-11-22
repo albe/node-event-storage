@@ -84,8 +84,10 @@ class JoinEventStream extends EventStream {
      * @returns {Generator<object|{ buffer: Buffer, time64: number, sequenceNumber: number }>}
      */
     * iterateDocuments() {
-        // An upper bound beyond the end reads to the end, but a range that starts outside the store is empty, like
-        // for a single stream. Clamping the start instead would turn a read from beyond the end into a backwards read.
+        // Revisions counted from the end are already resolved by normalizeRevision(), so anything below 1 here lies
+        // before the first event. An upper bound beyond the end reads to the end, but a range that starts outside the
+        // store is empty, like for a single stream. Clamping the start instead would turn a read from beyond the end
+        // into a backwards read.
         const length = this.eventStore.length;
         this.maxRevision = Math.min(this.maxRevision, length);
         if (this.minRevision < 1 || this.minRevision > length || this.maxRevision < 1) {
