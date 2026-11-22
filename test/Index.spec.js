@@ -71,13 +71,13 @@ describe('Index', function() {
             fsSync.fsyncSync = originalFsync;
         });
 
-        it('syncs the directory of a new file and every flush with syncOnFlush', function() {
+        it('syncs a new file with its directory and every flush with syncOnFlush', function() {
             index = createIndex('durable.index', { syncScheduler: new SyncScheduler({ syncOnFlush: true }) });
             index.open();
-            expect(fsyncCalls).to.be(1);
+            expect(fsyncCalls).to.be(2);
             index.add(new Index.Entry(1, 0));
             index.flush();
-            expect(fsyncCalls).to.be(2);
+            expect(fsyncCalls).to.be(3);
         });
 
         it('syncs flushed entries and the directory of a new file with the next run', function() {

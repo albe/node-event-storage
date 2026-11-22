@@ -261,14 +261,15 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Completes a pending sync run, unlocks the storage, then delegates to the parent close().
+     * Closes all files, completes the pending sync run and only then unlocks the storage, because a store without
+     * a lock is not repaired on the next open.
      */
     close() {
+        super.close();
         this.syncScheduler.run();
         if (this.locked) {
             this.unlock();
         }
-        super.close();
     }
 
     /**

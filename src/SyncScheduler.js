@@ -53,14 +53,17 @@ class SyncScheduler {
     }
 
     /**
-     * Nothing is acknowledged before a write to the new file, so its directory sync waits for the next run.
+     * Sync a new file with its header and its directory entry. Nothing is acknowledged before a write to the new
+     * file, so with an interval this waits for the next run.
      *
      * @param {string} fileName The file that was created.
      */
     created(fileName) {
         if (this.immediate) {
+            syncFile(fileName);
             syncDirectory(path.dirname(fileName));
         } else if (this.interval > 0) {
+            this.files.add(fileName);
             this.directories.add(path.dirname(fileName));
         }
     }

@@ -250,14 +250,14 @@ describe('Partition', function() {
             expect(fsyncCalls).to.be(0);
         });
 
-        it('syncs the directory of a new file and every flush with syncOnFlush', function() {
+        it('syncs a new file with its directory and every flush with syncOnFlush', function() {
             openWith({ syncOnFlush: true });
-            expect(fsyncCalls).to.be(1);
+            expect(fsyncCalls).to.be(2);
             let written = false;
             partition.write('one', () => (written = true));
             partition.flush();
             expect(written).to.be(true);
-            expect(fsyncCalls).to.be(2);
+            expect(fsyncCalls).to.be(3);
         });
 
         it('invokes write callbacks only after one shared sync', function(done) {
