@@ -331,8 +331,8 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Close all files, then sync the changed indexes and wait for the sync scheduler to sync everything written.
-     * Only then unlock the storage, because a store without a lock is not repaired on the next open, and emit
+     * Hand the changed indexes to the sync scheduler and wait for it to sync everything written, through the still
+     * open file descriptors. Then close all files and unlock the storage, because a store without a lock is not repaired on the next open, and emit
      * `'closed'`. The storage can only be opened again after that, until then it is still locked.
      *
      * @api
@@ -345,10 +345,9 @@ class WritableStorage extends ReadableStorage {
         }
         clearInterval(this.checkpointTimer);
         this.flush();
-        const indexes = this.takeModifiedIndexes();
-        this.closeFiles();
-        for (const index of indexes) this.syncScheduler.flushed(index);
+        for (const index of this.takeModifiedIndexes()) this.syncScheduler.flushed(index);
         this.closing = Promise.all([this.checkpointing, this.syncScheduler.drain()])
+            .finally(() => this.closeFiles())
             .then(() => {
                 if (this.locked) {
                     this.unlock();

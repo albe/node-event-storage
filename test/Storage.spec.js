@@ -228,10 +228,10 @@ describe('Storage', function() {
             }
         });
 
-        it('can open secondary indexes lazily', function() {
+        it('can open secondary indexes lazily', async function() {
             storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
-            storage.close();
+            await closed(storage);
 
             expect(index.isOpen()).to.be(false);
             for (let i = 1; i <= 10; i++) {
@@ -443,13 +443,13 @@ describe('Storage', function() {
             expect(storage.read(3, odd)).to.eql({ foo: 5 });
         });
 
-        it('can open secondary indexes lazily', function() {
+        it('can open secondary indexes lazily', async function() {
             storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
             for (let i = 1; i <= 10; i++) {
                 storage.write({ type: (i % 3) ? 'bar' : 'foo' });
             }
-            storage.close();
+            await closed(storage);
 
             expect(index.isOpen()).to.be(false);
             storage.read(1, index);
@@ -624,13 +624,13 @@ describe('Storage', function() {
             expect(() => storage.readRange(1, 14).next()).to.throwError();
         });
 
-        it('can open secondary indexes lazily', function() {
+        it('can open secondary indexes lazily', async function() {
             storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
             for (let i = 1; i <= 10; i++) {
                 storage.write({ type: (i % 3) ? 'bar' : 'foo' });
             }
-            storage.close();
+            await closed(storage);
 
             expect(index.isOpen()).to.be(false);
             Array.from(storage.readRange(1, 2, index));
@@ -1029,7 +1029,7 @@ describe('Storage', function() {
             });
         }));
 
-        it('keeps truncated secondary indexes closed', function() {
+        it('keeps truncated secondary indexes closed', async function() {
             storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
@@ -1038,7 +1038,7 @@ describe('Storage', function() {
                 storage.write({foo: i});
             }
 
-            storage.close();
+            await closed(storage);
 
             storage.truncate(6);
 
