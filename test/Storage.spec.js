@@ -1353,6 +1353,22 @@ describe('Storage', function() {
             crashedStorage.storageLock.held = false;
         });
 
+        it('adds new documents to the secondary indexes found on open before anybody opens them', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.ensureIndex('foo', { type: 'foo' });
+            storage.write({ type: 'foo' });
+            storage.close();
+            storage = createStorage();
+            storage.once('opened', () => {
+                storage.write({ type: 'foo' });
+                storage.write({ type: 'bar' });
+                expect(storage.openIndex('foo').length).to.be(2);
+                done();
+            });
+            storage.open();
+        });
+
         it('rebuilds the index entries after the last checkpoint, also of secondary indexes nobody opened', function(done) {
             const crashedStorage = new Storage({ dataDirectory });
             crashedStorage.open();
