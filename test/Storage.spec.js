@@ -1456,6 +1456,32 @@ describe('Storage', function() {
             });
         });
 
+        it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', async function() {
+            storage = createStorage();
+            storage.open();
+            storage.ensureIndex('foo', { type: 'foo' });
+            storage.ensureIndex('bar', { type: 'bar' });
+            storage.write({ type: 'foo' });
+            storage.write({ type: 'bar' });
+            storage.flush();
+            await storage.checkpointing;
+            storage.openIndex('bar').modified = false;
+            const fooIndex = storage.openIndex('foo');
+            fooIndex.close();
+            fsSync.unlinkSync(fooIndex.fileName);
+            const synced = spyOnSyncs();
+            try {
+                await new Promise((resolve, reject) => storage.close(error => error ? reject(error) : resolve()));
+            } finally {
+                synced.restore();
+            }
+            const indexSyncs = synced.map(fileName => path.basename(fileName));
+            expect(indexSyncs).to.contain('storage.index');
+            expect(indexSyncs).to.contain('storage.foo.index');
+            expect(indexSyncs).not.to.contain('storage.bar.index');
+            expect(storage.locked).to.be(false);
+        });
+
     });
 
     describe('matches', function() {
