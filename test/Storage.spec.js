@@ -1457,7 +1457,7 @@ describe('Storage', function() {
         });
 
         it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', async function() {
-            storage = createStorage();
+            storage = createStorage({ syncInterval: 1000 });
             storage.open();
             storage.ensureIndex('foo', { type: 'foo' });
             storage.ensureIndex('bar', { type: 'bar' });
@@ -1465,6 +1465,8 @@ describe('Storage', function() {
             storage.write({ type: 'bar' });
             storage.flush();
             await storage.checkpointing;
+            // Sync the new files, so that only the changed indexes are left for close
+            await storage.syncScheduler.drain();
             storage.openIndex('bar').modified = false;
             const fooIndex = storage.openIndex('foo');
             fooIndex.close();
@@ -1480,6 +1482,20 @@ describe('Storage', function() {
             expect(indexSyncs).to.contain('storage.foo.index');
             expect(indexSyncs).not.to.contain('storage.bar.index');
             expect(storage.locked).to.be(false);
+        });
+
+        it('does not sync the indexes on close without a sync configuration', async function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ type: 'foo' });
+            await storage.checkpointing;
+            const synced = spyOnSyncs();
+            try {
+                await new Promise((resolve, reject) => storage.close(error => error ? reject(error) : resolve()));
+            } finally {
+                synced.restore();
+            }
+            expect(synced.map(fileName => path.basename(fileName))).not.to.contain('storage.index');
         });
 
     });

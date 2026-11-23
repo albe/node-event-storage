@@ -347,7 +347,8 @@ class WritableStorage extends ReadableStorage {
         this.flush();
         const indexFiles = this.takeModifiedIndexFiles();
         this.closeFiles();
-        this.closing = Promise.all([this.checkpointing, this.syncIndexFiles(indexFiles), this.syncScheduler.drain()])
+        for (const fileName of indexFiles) this.syncScheduler.flushed(fileName);
+        this.closing = Promise.all([this.checkpointing, this.syncScheduler.drain()])
             .then(() => {
                 if (this.locked) {
                     this.unlock();
