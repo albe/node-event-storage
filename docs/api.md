@@ -36,7 +36,7 @@ All options are listed in [Configuration](configuration.md#eventstore-options).
 eventstore.close((error) => { /* closed */ })
 ```
 
-Close the event store and free all resources. Closing completes in the background: it syncs everything written as configured and the changed indexes, and only then releases the lock and invokes the callback, or emits `'error'` on the storage if a sync failed and no callback was given. Opening the same storage again in this process waits until the close finished. Wait for the callback before the process exits, otherwise the next open repairs the store as after a crash.
+Close the event store and free all resources. Closing completes in the background: it syncs everything written as configured and the changed indexes, and only then releases the lock and invokes the callback, or emits `'error'` on the storage if a sync failed and no callback was given. Until then the storage is still locked: open it again, in this or another process, only after the callback. Also wait for the callback before the process exits, otherwise the next open repairs the store as after a crash.
 
 ---
 

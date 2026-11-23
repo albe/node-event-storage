@@ -51,7 +51,7 @@ EventStore  →  Storage  →  Partition (append-only data files)
 - **`'opened'` event** — emitted by Storage once the first async scan + primary index open completes. EventStore listens to `'opened'` to emit its own `'ready'`.
 - **`'index-created'` event** — emitted by Storage during `scanFiles()` for each existing secondary index file found. EventStore uses this to register streams without its own directory scan.
 - **Secondary indexes open on demand** — only the primary index is opened eagerly; secondary indexes are opened lazily on first access.
-- **`initialized` three-state**: `null` = not started, `false` = scan in progress, `true` = scan done. Re-opens after `close()` are synchronous.
+- **`initialized` three-state**: `null` = not started, `false` = scan in progress, `true` = scan done. Re-opens after `close()` are synchronous; a writer must wait for the `close()` callback first, because it holds the lock until then.
 - **`open(callback)` hook** — fires after `openIndexes()` and before `'opened'`. Used by `WritableStorage` for torn-write repair.
 - **LOCK_RECLAIM in `open()`** — orphaned lock removal lives in `WritableStorage.open()`, directly before `lock()`; torn-write repair runs via the `open(callback)` hook.
 - **Torn-write repair loads all secondary index files first** (`openSecondaryIndexFiles()`), because `reindex()` only reaches loaded indexes. Anything that registers indexes without loading them (lazy open, a startup manifest, an index that catches up from a persisted position) must truncate or rebuild them inside the repair run itself, not defer it to a later `openIndex()`: its stale-tail check (`lastEntry.number > index.length`) no longer fires once the primary index has grown past the stale entries again.

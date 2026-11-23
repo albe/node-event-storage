@@ -19,11 +19,6 @@ const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 // Bounds the events that the repair after a crash needs to scan.
 const CHECKPOINT_INTERVAL = 5 * 60 * 1000;
 
-/**
- * The close of each storage directory that a writer of this process has not finished yet, by lock directory.
- * @type {Map<string, Promise<void>>}
- */
-const closingWriters = new Map();
 
 // Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
 const MAX_UINT32 = 0xFFFFFFFF;
@@ -97,29 +92,7 @@ class WritableStorage extends ReadableStorage {
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open(callback) {
-        if (this.closing) {
-            // Reopened before the close finished: keep the lock, and record the next checkpoint only once the close
-            // synced everything.
-            const closed = this.closing;
-            this.closing = null;
-            return super.open(() => {
-                this.startCheckpoints(this.index.length, closed);
-                callback?.();
-            });
-        }
-        // Wait until another writer of this process that is still closing this storage has released the lock.
-        const closing = closingWriters.get(this.storageLock.directory);
-        if (closing) {
-            const deferred = this.deferredOpen = () => {
-                // A close() before the other writer finished cancels this open.
-                if (this.deferredOpen === deferred) {
-                    this.deferredOpen = null;
-                    this.open(callback);
-                }
-            };
-            closing.then(deferred, deferred);
-            return true;
-        }
+        assert(!this.closing, `Storage ${this.storageFile} is still closing. Wait for the close() callback before opening it again.`);
         const checkpoint = this.storageLock.readCheckpoint();
         const needsRepair = this.storageLock.reclaimOrphaned();
 
@@ -138,13 +111,9 @@ class WritableStorage extends ReadableStorage {
     /**
      * @private
      * @param {number} position The global position up to which all indexes are on disk.
-     * @param {Promise<void>} [synced] Resolves once the indexes up to that position are on disk.
      */
-    startCheckpoints(position, synced = Promise.resolve()) {
-        this.queueCheckpoint(async () => {
-            await synced;
-            await this.storageLock.writeCheckpoint(position);
-        }).catch(error => this.emit('error', error));
+    startCheckpoints(position) {
+        this.queueCheckpoint(() => this.storageLock.writeCheckpoint(position)).catch(error => this.emit('error', error));
         this.checkpointTimer = setInterval(() => this.checkpoint().catch(error => this.emit('error', error)), CHECKPOINT_INTERVAL);
         this.checkpointTimer.unref();
     }
@@ -364,7 +333,7 @@ class WritableStorage extends ReadableStorage {
     /**
      * Close all files, then sync the changed indexes and wait for the sync scheduler to sync everything written.
      * Only then unlock the storage, because a store without a lock is not repaired on the next open, and emit
-     * `'closed'`. Opening the storage again before that waits for the close to finish.
+     * `'closed'`. The storage can only be opened again after that, until then it is still locked.
      *
      * @api
      * @param {function(Error=): void} [callback] Called once the storage is closed and unlocked, or with the error of a failed sync.
@@ -374,24 +343,20 @@ class WritableStorage extends ReadableStorage {
             this.closing.then(() => callback?.(), callback);
             return;
         }
-        this.deferredOpen = null;
         clearInterval(this.checkpointTimer);
         this.flush();
         const indexFiles = this.takeModifiedIndexFiles();
         this.closeFiles();
-        const closing = Promise.all([this.checkpointing, this.syncIndexFiles(indexFiles), this.syncScheduler.drain()])
+        this.closing = Promise.all([this.checkpointing, this.syncIndexFiles(indexFiles), this.syncScheduler.drain()])
             .then(() => {
-                if (this.closing === closing && this.locked) {
+                if (this.locked) {
                     this.unlock();
                 }
             })
             .finally(() => {
-                if (this.closing === closing) this.closing = null;
-                if (closingWriters.get(this.storageLock.directory) === closing) closingWriters.delete(this.storageLock.directory);
+                this.closing = null;
             });
-        this.closing = closing;
-        closingWriters.set(this.storageLock.directory, closing);
-        closing.then(() => {
+        this.closing.then(() => {
             this.emit('closed');
             callback?.();
         }, error => {

@@ -33,6 +33,21 @@ function createReader(config = {}) {
     }, config));
 }
 
+
+/**
+ * Run a test that both awaits and calls back: errors thrown in the async body fail the test as well.
+ * @param {function(function(Error=): void): Promise<void>} test
+ */
+const withDone = (test) => function() {
+    return new Promise((resolve, reject) => {
+        const done = (error) => error ? reject(error) : resolve();
+        test.call(this, done).catch(reject);
+    });
+};
+
+/** Close a store and wait until it released its lock. */
+const closed = (store) => new Promise((resolve, reject) => store.close(error => error ? reject(error) : resolve()));
+
 describe('EventStore', function() {
 
     let eventstore;
@@ -100,18 +115,18 @@ describe('EventStore', function() {
         fsSync.readdir = originalReaddir;
     });
 
-    it('repairs unfinished commits', function(done) {
+    it('repairs unfinished commits', withDone(async function(done) {
         eventstore = new EventStore({
             storageDirectory
         });
 
         let events = [{foo: 'bar'}, {foo: 'baz'}, {foo: 'quux'}];
         eventstore.on('ready', () => {
-            eventstore.commit('foo-bar', events, () => {
+            eventstore.commit('foo-bar', events, async () => {
                 // Simulate an unfinished write after the second event (but indexes are still written)
                 const entry = eventstore.storage.index.get(3);
                 eventstore.storage.getPartition(entry.partition).truncate(entry.position);
-                eventstore.close();
+                await closed(eventstore);
 
                 eventstore = new EventStore({
                     storageDirectory
@@ -123,7 +138,7 @@ describe('EventStore', function() {
                 });
             });
         });
-    });
+    }));
 
     it('repairs torn writes', function(done) {
         eventstore = new EventStore({
@@ -152,7 +167,7 @@ describe('EventStore', function() {
         });
     });
 
-    it('repairs stale index entries when last readable event has a complete commit', function(done) {
+    it('repairs stale index entries when last readable event has a complete commit', withDone(async function(done) {
         eventstore = new EventStore({
             storageDirectory
         });
@@ -160,14 +175,14 @@ describe('EventStore', function() {
         eventstore.on('ready', () => {
             // Commit two separate single-event commits to different streams
             eventstore.commit('stream-a', [{ key: 1 }], () => {
-                eventstore.commit('stream-b', [{ key: 2 }], () => {
+                eventstore.commit('stream-b', [{ key: 2 }], async () => {
                     // Truncate the partition at the second event's file position, making
                     // the second index entry point beyond the end of the file, while the
                     // first event (a complete single-event commit) remains fully intact.
                     const entry = eventstore.storage.index.get(2);
                     eventstore.storage.getPartition(entry.partition).truncate(entry.position);
                     // Close flushes all indexes to disk so the index still has 2 entries
-                    eventstore.close();
+                    await closed(eventstore);
 
                     // Reopen: checkUnfinishedCommits detects the stale entry and truncates
                     // the index to the last valid event (the else-if (truncateIndex) path)
@@ -188,9 +203,9 @@ describe('EventStore', function() {
                 });
             });
         });
-    });
+    }));
 
-    it('does not lose previously committed data after repairing an unfinished commit', function(done) {
+    it('does not lose previously committed data after repairing an unfinished commit', withDone(async function(done) {
         eventstore = new EventStore({
             storageDirectory
         });
@@ -201,13 +216,13 @@ describe('EventStore', function() {
             // Commit first set of events (these should be preserved after repair)
             eventstore.commit('stream-a', committedEvents, () => {
                 // Commit second set of events, then simulate an unfinished write
-                eventstore.commit('stream-b', partialEvents, () => {
+                eventstore.commit('stream-b', partialEvents, async () => {
                     // Simulate an unfinished write: truncate partition after the second event,
                     // leaving commitVersion=1 written but commitSize=3, so commit is unfinished
                     const entry = eventstore.storage.index.get(eventstore.length - 1);
                     eventstore.storage.getPartition(entry.partition).truncate(entry.position);
                     // Close flushes all indexes to disk so the repair has accurate data
-                    eventstore.close();
+                    await closed(eventstore);
 
                     eventstore = new EventStore({
                         storageDirectory
@@ -228,7 +243,7 @@ describe('EventStore', function() {
                 });
             });
         });
-    });
+    }));
 
     it('does not lose previously committed data after repairing a torn write', function(done) {
         eventstore = new EventStore({
@@ -598,13 +613,13 @@ describe('EventStore', function() {
 
     describe('getEventStream', function() {
 
-        it('can open existing streams', function(done) {
+        it('can open existing streams', withDone(async function(done) {
             eventstore = new EventStore({
                 storageDirectory
             });
 
             eventstore.commit('foo-bar', [{ foo: 'bar' }]);
-            eventstore.close();
+            await closed(eventstore);
 
             eventstore = new EventStore({
                 storageDirectory
@@ -614,7 +629,7 @@ describe('EventStore', function() {
                 expect(stream.events.length).to.be(1);
                 done();
             });
-        });
+        }));
 
         it('reads to the end when the upper bound lies beyond it and is empty when it starts beyond the end', function() {
             eventstore = new EventStore({
@@ -1167,15 +1182,15 @@ describe('EventStore', function() {
             });
         });
 
-        it('persists slash-separated streams across store re-open', function (done) {
+        it('persists slash-separated streams across store re-open', withDone(async function(done) {
             eventstore = new EventStore({
                 storageDirectory
             });
 
             let events = [{foo: 'bar'}, {foo: 'baz'}];
             eventstore.on('ready', () => {
-                eventstore.commit('cat/456', events, () => {
-                    eventstore.close();
+                eventstore.commit('cat/456', events, async () => {
+                    await closed(eventstore);
                     eventstore = new EventStore({ storageDirectory });
                     eventstore.on('ready', () => {
                         const stream = eventstore.getEventStream('cat/456');
@@ -1188,7 +1203,7 @@ describe('EventStore', function() {
                     });
                 });
             });
-        });
+        }));
 
         it('supports deeply nested slash-separated stream names', function () {
             eventstore = new EventStore({
@@ -1209,15 +1224,15 @@ describe('EventStore', function() {
             expect(vals).to.eql([1, 2]);
         });
 
-        it('persists deeply nested slash-separated streams across store re-open', function (done) {
+        it('persists deeply nested slash-separated streams across store re-open', withDone(async function(done) {
             eventstore = new EventStore({
                 storageDirectory
             });
 
             eventstore.on('ready', () => {
                 eventstore.commit('a/b/c', [{val: 1}]);
-                eventstore.commit('a/b/d', [{val: 2}], () => {
-                    eventstore.close();
+                eventstore.commit('a/b/d', [{val: 2}], async () => {
+                    await closed(eventstore);
                     eventstore = new EventStore({ storageDirectory });
                     eventstore.on('ready', () => {
                         const streamC = eventstore.getEventStream('a/b/c');
@@ -1235,7 +1250,7 @@ describe('EventStore', function() {
                     });
                 });
             });
-        });
+        }));
 
     });
 
@@ -1430,13 +1445,13 @@ describe('EventStore', function() {
             });
         });
 
-        it('is recognized as closed after reopening the store', function(done) {
+        it('is recognized as closed after reopening the store', withDone(async function(done) {
             eventstore = new EventStore({
                 storageDirectory
             });
-            eventstore.commit('foo-bar', [{ foo: 'bar' }], () => {
+            eventstore.commit('foo-bar', [{ foo: 'bar' }], async () => {
                 eventstore.closeEventStream('foo-bar');
-                eventstore.close();
+                await closed(eventstore);
                 eventstore = null;
 
                 const eventstore2 = new EventStore({
@@ -1450,7 +1465,7 @@ describe('EventStore', function() {
                     done();
                 });
             });
-        });
+        }));
 
         it('is reflected in a concurrent reader instance', function(done) {
             eventstore = new EventStore({
