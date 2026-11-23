@@ -5,29 +5,25 @@ import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableInd
 import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory, syncFileInBackground } from '../utils/fsUtil.js';
+import { ensureDirectory, syncFile, ignoreDeletedFile } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import SyncScheduler from '../SyncScheduler.js';
 
 const PARTITION_PROBE_SEPARATOR = '~';
 
-/**
- * A stream index deleted or renamed in the meantime was synced when it was closed.
- *
- * @param {Error} error
- */
-function ignoreDeletedFile(error) {
-    if (error.code !== 'ENOENT') {
-        throw error;
-    }
-}
 const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
 // Bounds the events that the repair after a crash needs to scan.
 const CHECKPOINT_INTERVAL = 5 * 60 * 1000;
+
+/**
+ * The close of each storage directory that a writer of this process has not finished yet, by lock directory.
+ * @type {Map<string, Promise<void>>}
+ */
+const closingWriters = new Map();
 
 // Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
 const MAX_UINT32 = 0xFFFFFFFF;
@@ -82,6 +78,7 @@ class WritableStorage extends ReadableStorage {
         super(storageName, config);
 
         this.syncScheduler = syncScheduler;
+        this.checkpointing = Promise.resolve();
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
@@ -100,6 +97,29 @@ class WritableStorage extends ReadableStorage {
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open(callback) {
+        if (this.closing) {
+            // Reopened before the close finished: keep the lock, and record the next checkpoint only once the close
+            // synced everything.
+            const closed = this.closing;
+            this.closing = null;
+            return super.open(() => {
+                this.startCheckpoints(this.index.length, closed);
+                callback?.();
+            });
+        }
+        // Wait until another writer of this process that is still closing this storage has released the lock.
+        const closing = closingWriters.get(this.storageLock.directory);
+        if (closing) {
+            const deferred = this.deferredOpen = () => {
+                // A close() before the other writer finished cancels this open.
+                if (this.deferredOpen === deferred) {
+                    this.deferredOpen = null;
+                    this.open(callback);
+                }
+            };
+            closing.then(deferred, deferred);
+            return true;
+        }
         const checkpoint = this.storageLock.readCheckpoint();
         const needsRepair = this.storageLock.reclaimOrphaned();
 
@@ -108,22 +128,23 @@ class WritableStorage extends ReadableStorage {
         }
 
         return super.open(() => {
-            if (needsRepair) {
-                this.checkTornWrites(checkpoint);
-                this.syncIndexes();
-            }
-            this.startCheckpoints();
+            // A clean close synced all indexes. After a repair, only the entries up to the previous checkpoint are known
+            // to be on disk, until the next checkpoint syncs the rebuilt ones.
+            this.startCheckpoints(needsRepair ? this.checkTornWrites(checkpoint) : this.index.length);
             callback?.();
         });
     }
 
     /**
-     * On open, all indexes are on disk: a clean close synced them, and so does a repair.
-     *
      * @private
+     * @param {number} position The global position up to which all indexes are on disk.
+     * @param {Promise<void>} [synced] Resolves once the indexes up to that position are on disk.
      */
-    startCheckpoints() {
-        this.storageLock.writeCheckpoint(this.index.length);
+    startCheckpoints(position, synced = Promise.resolve()) {
+        this.queueCheckpoint(async () => {
+            await synced;
+            await this.storageLock.writeCheckpoint(position);
+        }).catch(error => this.emit('error', error));
         this.checkpointTimer = setInterval(() => this.checkpoint().catch(error => this.emit('error', error)), CHECKPOINT_INTERVAL);
         this.checkpointTimer.unref();
     }
@@ -136,14 +157,37 @@ class WritableStorage extends ReadableStorage {
      * @internal
      * @returns {Promise<void>}
      */
-    async checkpoint() {
-        this.flush();
-        const length = this.index.length;
-        const fileNames = this.takeModifiedIndexFiles();
-        await Promise.all(fileNames.map(fileName => syncFileInBackground(fileName).catch(ignoreDeletedFile)));
-        if (this.locked) {
-            this.storageLock.writeCheckpoint(length);
-        }
+    checkpoint() {
+        return this.queueCheckpoint(async () => {
+            this.flush();
+            const length = this.index.length;
+            await this.syncIndexFiles(this.takeModifiedIndexFiles());
+            if (this.locked) {
+                await this.storageLock.writeCheckpoint(length);
+            }
+        });
+    }
+
+    /**
+     * Checkpoints follow each other, so that an older one never overwrites a newer one.
+     *
+     * @private
+     * @param {function(): Promise<void>} task
+     * @returns {Promise<void>}
+     */
+    queueCheckpoint(task) {
+        const done = this.checkpointing.then(task);
+        this.checkpointing = done.catch(() => {});
+        return done;
+    }
+
+    /**
+     * @private
+     * @param {string[]} fileNames
+     * @returns {Promise<void>}
+     */
+    syncIndexFiles(fileNames) {
+        return Promise.all(fileNames.map(fileName => syncFile(fileName).catch(ignoreDeletedFile)));
     }
 
     /**
@@ -163,15 +207,6 @@ class WritableStorage extends ReadableStorage {
         take(this.index);
         this.forEachSecondaryIndex(take);
         return fileNames;
-    }
-
-    /**
-     * @private
-     */
-    syncIndexes() {
-        this.flush();
-        this.index.sync();
-        this.forEachSecondaryIndex(index => index.sync());
     }
 
     /**
@@ -233,6 +268,7 @@ class WritableStorage extends ReadableStorage {
      * entries after the last checkpoint from the partitions.
      *
      * @param {number} [checkpoint] The global position up to which all indexes were on disk. Defaults to the length of the primary index.
+     * @returns {number} The global position up to which the indexes were on disk before the repair rebuilt them.
      */
     checkTornWrites(checkpoint = this.index.length) {
         const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
@@ -252,6 +288,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.forEachPartition(partition => partition.close());
+        return indexedUntil;
     }
 
     /**
@@ -325,17 +362,42 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * @inheritDoc
-     * Closes all files, which syncs the changed indexes, and completes the pending sync run. Only then it unlocks the
-     * storage, because a store without a lock is not repaired on the next open.
+     * Close all files, then sync the changed indexes and wait for the sync scheduler to sync everything written.
+     * Only then unlock the storage, because a store without a lock is not repaired on the next open, and emit
+     * `'closed'`. Opening the storage again before that waits for the close to finish.
+     *
+     * @api
+     * @param {function(Error=): void} [callback] Called once the storage is closed and unlocked, or with the error of a failed sync.
      */
-    close() {
-        clearInterval(this.checkpointTimer);
-        super.close();
-        this.syncScheduler.run();
-        if (this.locked) {
-            this.unlock();
+    close(callback) {
+        if (this.closing) {
+            this.closing.then(() => callback?.(), callback);
+            return;
         }
+        this.deferredOpen = null;
+        clearInterval(this.checkpointTimer);
+        this.flush();
+        const indexFiles = this.takeModifiedIndexFiles();
+        this.closeFiles();
+        const closing = Promise.all([this.checkpointing, this.syncIndexFiles(indexFiles), this.syncScheduler.drain()])
+            .then(() => {
+                if (this.closing === closing && this.locked) {
+                    this.unlock();
+                }
+            })
+            .finally(() => {
+                if (this.closing === closing) this.closing = null;
+                if (closingWriters.get(this.storageLock.directory) === closing) closingWriters.delete(this.storageLock.directory);
+            });
+        this.closing = closing;
+        closingWriters.set(this.storageLock.directory, closing);
+        closing.then(() => {
+            this.emit('closed');
+            callback?.();
+        }, error => {
+            if (callback) callback(error);
+            else this.emit('error', error);
+        });
     }
 
     /**

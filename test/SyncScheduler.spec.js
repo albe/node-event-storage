@@ -9,7 +9,7 @@ const dataDirectory = path.join(__dirname, 'data', 'sync-scheduler');
 
 describe('SyncScheduler', function() {
 
-    let files, syncSync, opened, originalOpen, originalFsync, releases;
+    let files, opened, originalOpen, releases, failWith;
 
     beforeEach(function() {
         fs.rmSync(dataDirectory, { recursive: true, force: true });
@@ -19,22 +19,22 @@ describe('SyncScheduler', function() {
             fs.writeFileSync(fileName, name);
             return fileName;
         });
-        syncSync = [];
         opened = [];
         releases = [];
-        originalFsync = fs.fsyncSync;
-        fs.fsyncSync = (fd) => { syncSync.push(fd); return originalFsync(fd); };
-        // Hold every background sync until the test releases it, to observe a run while it is in flight.
+        failWith = null;
+        // Hold every sync until the test releases it, to observe a run while it is in flight.
         originalOpen = fs.promises.open;
         fs.promises.open = async (fileName, flags) => {
             opened.push(fileName);
             await new Promise(resolve => releases.push(resolve));
+            if (failWith) {
+                throw Object.assign(new Error(failWith), { code: failWith });
+            }
             return originalOpen(fileName, flags);
         };
     });
 
     afterEach(function() {
-        fs.fsyncSync = originalFsync;
         fs.promises.open = originalOpen;
         fs.rmSync(dataDirectory, { recursive: true, force: true });
     });
@@ -47,6 +47,15 @@ describe('SyncScheduler', function() {
         return new Promise(resolve => setTimeout(resolve, 20));
     }
 
+    it('invokes the callbacks right away without a sync setting', function() {
+        const scheduler = new SyncScheduler();
+        let acknowledged = false;
+        scheduler.flushed(files[0], [() => (acknowledged = true)]);
+        scheduler.created(files[1]);
+        expect(acknowledged).to.be(true);
+        expect(scheduler.loop).to.be(null);
+    });
+
     it('syncs all files of a run in parallel in the background', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
@@ -56,70 +65,91 @@ describe('SyncScheduler', function() {
         expect(opened).to.eql(files);
         expect(acknowledged).to.eql([]);
         release();
-        await settle();
+        await scheduler.drain();
         expect(acknowledged).to.eql([0, 1, 2]);
-        expect(syncSync).to.eql([]);
     });
 
-    it('starts the next run only after the running one finished', async function() {
+    it('syncs a new file together with its directory', async function() {
+        const scheduler = new SyncScheduler({ syncInterval: 1 });
+        scheduler.created(files[0]);
+        await settle();
+        expect(opened).to.eql([files[0], dataDirectory]);
+        release();
+        await scheduler.drain();
+    });
+
+    it('leaves writes during a run to the next run', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
         await settle();
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         await settle();
-        // The interval of the second flush has elapsed, but the first run is still syncing
+        // The first run is still syncing, so the second one has not started yet
         expect(opened).to.eql([files[0]]);
         release();
         await settle();
         expect(acknowledged).to.eql([0]);
         expect(opened).to.eql([files[0], files[1]]);
         release();
-        await settle();
+        await scheduler.drain();
         expect(acknowledged).to.eql([0, 1]);
     });
 
-    it('completes a running background run synchronously on run()', async function() {
-        const scheduler = new SyncScheduler({ syncInterval: 1 });
+    it('syncs the flushes of one tick together with syncOnFlush', async function() {
+        const scheduler = new SyncScheduler({ syncOnFlush: true });
         const acknowledged = [];
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
-        await settle();
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
-        scheduler.created(files[2]);
-        scheduler.run();
-        // The running file, the waiting file, the new file and its directory
-        expect(syncSync.length).to.be(4);
-        expect(acknowledged).to.eql([0, 1]);
-        release();
         await settle();
-        // The background run that run() took over neither acknowledges twice nor starts another run
+        expect(opened).to.eql([files[0], files[1]]);
+        release();
+        await scheduler.drain();
         expect(acknowledged).to.eql([0, 1]);
+    });
+
+    it('syncs everything waiting without waiting for the interval on drain()', async function() {
+        const scheduler = new SyncScheduler({ syncInterval: 60000 });
+        const acknowledged = [];
+        scheduler.flushed(files[0], [() => acknowledged.push(0)]);
+        const drained = scheduler.drain();
+        await settle();
         expect(opened).to.eql([files[0]]);
-    });
-
-    it('ignores a failed background sync that run() already took over', async function() {
-        const scheduler = new SyncScheduler({ syncInterval: 1 });
-        scheduler.flushed(files[0]);
-        await settle();
-        scheduler.run();
-        fs.rmSync(files[0]);
+        scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         release();
         await settle();
+        // Writes during the run are drained as well
+        expect(opened).to.eql([files[0], files[1]]);
+        release();
+        await drained;
+        expect(acknowledged).to.eql([0, 1]);
     });
 
-    it('throws a failed background sync as an uncaught exception', async function() {
+    it('acknowledges a file that was deleted before it was synced', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         let acknowledged = false;
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
+        failWith = 'ENOENT';
         await settle();
-        fs.rmSync(files[0]);
-        const listeners = process.listeners('uncaughtException');
-        process.removeAllListeners('uncaughtException');
-        const uncaught = new Promise(resolve => process.once('uncaughtException', resolve));
         release();
-        const error = await uncaught;
-        listeners.forEach(listener => process.on('uncaughtException', listener));
-        expect(error.code).to.be('ENOENT');
+        await scheduler.drain();
+        expect(acknowledged).to.be(true);
+    });
+
+    it('rejects drain() and never acknowledges when a sync fails', async function() {
+        const scheduler = new SyncScheduler({ syncInterval: 1 });
+        let acknowledged = false;
+        scheduler.flushed(files[0], [() => (acknowledged = true)]);
+        const drained = scheduler.drain();
+        failWith = 'EIO';
+        await settle();
+        release();
+        try {
+            await drained;
+            expect().fail('drain() should reject');
+        } catch (error) {
+            expect(error.code).to.be('EIO');
+        }
         expect(acknowledged).to.be(false);
     });
 });

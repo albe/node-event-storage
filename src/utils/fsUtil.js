@@ -50,28 +50,13 @@ function writeFileAtomic(fileName, data, tmpFileName = fileName + '.tmp') {
 
 /**
  * Sync a file to disk through its own descriptor, independent of whether and where the file is open otherwise.
- *
- * @param {string} fileName
- * @param {string} [flags] The flags to open the file with. Windows needs write access to sync a file.
- */
-function syncFile(fileName, flags = 'r+') {
-    const fd = fs.openSync(fileName, flags);
-    try {
-        fs.fsyncSync(fd);
-    } finally {
-        fs.closeSync(fd);
-    }
-}
-
-/**
- * Like `syncFile()`, but in the background on the libuv thread pool, so that the event loop goes on in the meantime
- * and several files can be synced in parallel.
+ * Runs on the libuv thread pool, so the event loop goes on meanwhile and several files can be synced in parallel.
  *
  * @param {string} fileName
  * @param {string} [flags] The flags to open the file with. Windows needs write access to sync a file.
  * @returns {Promise<void>}
  */
-async function syncFileInBackground(fileName, flags = 'r+') {
+async function syncFile(fileName, flags = 'r+') {
     const handle = await fs.promises.open(fileName, flags);
     try {
         await handle.sync();
@@ -81,26 +66,25 @@ async function syncFileInBackground(fileName, flags = 'r+') {
 }
 
 /**
- * Platforms that can not open a directory for syncing (Windows) are skipped silently.
+ * A file deleted since it was written needs no sync anymore: its data is gone on purpose.
  *
- * @param {string} dirName
+ * @param {Error} error
  */
-function syncDirectory(dirName) {
-    try {
-        syncFile(dirName, 'r');
-    } catch (e) {
+function ignoreDeletedFile(error) {
+    if (error.code !== 'ENOENT') {
+        throw error;
     }
 }
 
 /**
- * Like `syncDirectory()`, but in the background.
+ * Platforms that can not open a directory for syncing (Windows) are skipped silently.
  *
  * @param {string} dirName
  * @returns {Promise<void>}
  */
-async function syncDirectoryInBackground(dirName) {
+async function syncDirectory(dirName) {
     try {
-        await syncFileInBackground(dirName, 'r');
+        await syncFile(dirName, 'r');
     } catch (e) {
     }
 }
@@ -245,7 +229,6 @@ export {
     safeUnlink,
     syncDirectory,
     syncFile,
-    syncFileInBackground,
-    syncDirectoryInBackground,
+    ignoreDeletedFile,
     writeFileAtomic
 };

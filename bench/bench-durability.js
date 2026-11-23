@@ -38,7 +38,7 @@ async function burst(name, events, streamOf) {
         }
     });
     report(name, events, performance.now() - start);
-    store.close();
+    await new Promise(resolve => store.close(resolve));
     fs.rmSync(storageDirectory, { recursive: true, force: true });
 }
 
@@ -50,7 +50,7 @@ async function sequential(name, events, streamOf) {
         await new Promise(resolve => store.commit(streamOf(i), event, resolve));
     }
     report(name, events, performance.now() - start);
-    store.close();
+    await new Promise(resolve => store.close(resolve));
     fs.rmSync(storageDirectory, { recursive: true, force: true });
 }
 

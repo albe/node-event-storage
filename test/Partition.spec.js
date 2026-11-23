@@ -4,6 +4,7 @@ import fsSync from 'fs';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import SyncScheduler from '../src/SyncScheduler.js';
+import spyOnSyncs from './syncSpy.js';
 import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
@@ -221,16 +222,14 @@ describe('Partition', function() {
 
     describe('syncScheduler', function() {
 
-        let fsyncCalls, originalFsync;
+        let synced;
 
         beforeEach(function() {
-            fsyncCalls = 0;
-            originalFsync = fsSync.fsyncSync;
-            fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
+            synced = spyOnSyncs();
         });
 
         afterEach(function() {
-            fsSync.fsyncSync = originalFsync;
+            synced.restore();
         });
 
         function openWith(syncOptions, config = {}) {
@@ -240,84 +239,79 @@ describe('Partition', function() {
             return partition;
         }
 
-        it('never syncs by default', function() {
+        it('never syncs by default', async function() {
             openWith({});
             let written = false;
             partition.write('one', () => (written = true));
             partition.flush();
             partition.close();
             expect(written).to.be(true);
-            expect(fsyncCalls).to.be(0);
+            await partition.syncScheduler.drain();
+            expect(synced).to.eql([]);
         });
 
-        it('syncs a new file with its directory and every flush with syncOnFlush', function() {
+        it('syncs a new file with its directory and every flush with syncOnFlush', async function() {
             openWith({ syncOnFlush: true });
-            expect(fsyncCalls).to.be(2);
+            await partition.syncScheduler.drain();
+            expect(synced).to.eql([partition.fileName, dataDirectory]);
             let written = false;
             partition.write('one', () => (written = true));
             partition.flush();
+            expect(written).to.be(false);
+            await partition.syncScheduler.drain();
             expect(written).to.be(true);
-            expect(fsyncCalls).to.be(3);
+            expect(synced.length).to.be(3);
         });
 
-        it('invokes write callbacks only after one shared sync', function(done) {
+        it('invokes write callbacks only after one shared sync', async function() {
             openWith({ syncInterval: 10 });
-            const synced = [];
-            const originalOpen = fsSync.promises.open;
-            fsSync.promises.open = (fileName, flags) => { synced.push(fileName); return originalOpen(fileName, flags); };
             const written = [];
             partition.write('one', () => written.push(1));
             partition.flush();
             partition.write('two', () => written.push(2));
             partition.flush();
             expect(written).to.eql([]);
-            setTimeout(() => {
-                fsSync.promises.open = originalOpen;
-                expect(written).to.eql([1, 2]);
-                // the file and its new directory, in the background
-                expect(synced).to.eql([partition.fileName, dataDirectory]);
-                expect(fsyncCalls).to.be(0);
-                done();
-            }, 30);
+            await partition.syncScheduler.drain();
+            expect(written).to.eql([1, 2]);
+            // the file and its new directory
+            expect(synced).to.eql([partition.fileName, dataDirectory]);
         });
 
-        it('acknowledges unbuffered writes only after the sync', function(done) {
-            openWith({ syncInterval: 1000 }, { writeBufferSize: 64 });
+        it('acknowledges unbuffered writes only after the sync', async function() {
+            openWith({ syncInterval: 10 }, { writeBufferSize: 64 });
             let written = false;
             partition.write('x'.repeat(100), () => (written = true));
-            partition.syncScheduler.run();
-            expect(fsyncCalls).to.be(2);
-            setImmediate(() => {
-                expect(written).to.be(true);
-                done();
-            });
+            await partition.syncScheduler.drain();
+            expect(synced.length).to.be(2);
+            await new Promise(resolve => setImmediate(resolve));
+            expect(written).to.be(true);
         });
 
-        it('only flushes on close and leaves the sync to the run', function() {
-            openWith({ syncInterval: 1000 });
+        it('only flushes on close and leaves the sync to the run', async function() {
+            openWith({ syncInterval: 10 });
             const syncScheduler = partition.syncScheduler;
             let written = false;
             partition.write('one', () => (written = true));
             partition.close();
             expect(written).to.be(false);
-            expect(fsyncCalls).to.be(0);
-            syncScheduler.run();
+            expect(synced).to.eql([]);
+            await syncScheduler.drain();
             expect(written).to.be(true);
-            expect(fsyncCalls).to.be(2);
+            expect(synced.length).to.be(2);
         });
 
-        it('syncs a file whose handle was evicted with the next run', function() {
+        it('syncs a file whose handle was evicted with the next run', async function() {
             const fileHandlePool = new FileHandlePool(1);
-            openWith({ syncInterval: 1000 }, { fileHandlePool });
+            openWith({ syncInterval: 10 }, { fileHandlePool });
             let written = false;
             partition.write('one', () => (written = true));
             partition.flush();
             const other = new Partition('.other', { dataDirectory, fileHandlePool });
             other.open();
-            expect(fsyncCalls).to.be(0);
-            partition.syncScheduler.run();
+            expect(synced).to.eql([]);
+            await partition.syncScheduler.drain();
             expect(written).to.be(true);
-            expect(fsyncCalls).to.be(2);
+            expect(synced).to.eql([partition.fileName, dataDirectory]);
             other.close();
         });
     });

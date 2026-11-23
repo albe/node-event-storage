@@ -42,18 +42,20 @@ describe('EventStore', function() {
         eventstores.length = 0;
     });
 
-    afterEach(function () {
+    afterEach(async function () {
         const closedStores = new Set();
+        const closing = [];
         for (let i = eventstores.length - 1; i >= 0; i--) {
             const store = eventstores[i];
             if (!store || closedStores.has(store)) {
                 continue;
             }
             closedStores.add(store);
-            store.close();
+            closing.push(new Promise(resolve => store.close(() => resolve())));
         }
         eventstores.length = 0;
         eventstore = null;
+        await Promise.all(closing);
     });
 
     it('basically works', function(done) {

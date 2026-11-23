@@ -4,6 +4,7 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
+- **Breaking:** `close()` of a writing `EventStore` or `Storage` completes asynchronously and takes a callback: it syncs everything written and the changed indexes in the background, and only then releases the lock and emits `'closed'`. Opening the storage again in the same process waits for the close. Nothing syncs on the main thread anymore; `syncOnFlush` now starts a sync run right after the current tick, so commits within one tick share an `fsync`.
 - Restore write throughput with `syncInterval` for commits across many streams: all files of a storage now share one sync run per interval, new files no longer sync their directory immediately, and evicting or closing an unchanged file no longer syncs it. A run syncs its files in parallel in the background, so it no longer blocks the process. Removed `Partition.sync()`.
 - The crash repair now rebuilds all index entries after a checkpoint that the writer records every 5 minutes, including those of secondary indexes that were not loaded. Before, a stream index could miss events after a power loss.
 - Fix a writing `Storage` not adding new documents to the secondary indexes of a previous run until they were opened again. It now loads all secondary indexes on open, as `EventStore` already did for streams.

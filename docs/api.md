@@ -33,10 +33,10 @@ All options are listed in [Configuration](configuration.md#eventstore-options).
 #### `close()` ✅ Stable
 
 ```javascript
-eventstore.close()
+eventstore.close((error) => { /* closed */ })
 ```
 
-Close the event store and free all resources.
+Close the event store and free all resources. Closing completes in the background: it syncs everything written as configured and the changed indexes, and only then releases the lock and invokes the callback, or emits `'error'` on the storage if a sync failed and no callback was given. Opening the same storage again in this process waits until the close finished. Wait for the callback before the process exits, otherwise the next open repairs the store as after a crash.
 
 ---
 
@@ -621,10 +621,10 @@ Open the storage and all loaded indexes.  Emits `'opened'`.  The writable varian
 #### `close()` ✅ Stable
 
 ```javascript
-storage.close()
+storage.close((error) => { /* closed */ })
 ```
 
-Close the storage and release all resources (file handles, indexes, write buffers, file watcher).  Emits `'closed'`.
+Close the storage and release all resources (file handles, indexes, write buffers, file watcher). A writer completes the close in the background: it syncs everything written as configured and the changed indexes, then releases the lock, emits `'closed'` and invokes the callback, or passes the error of a failed sync to the callback.
 
 ---
 
@@ -817,7 +817,7 @@ Return `true` when `filename` belongs to this storage instance (used internally 
 | Event | Payload | Description |
 |-------|---------|-------------|
 | `'opened'` | — | Emitted after `open()` completes. |
-| `'closed'` | — | Emitted after `close()` completes. |
+| `'closed'` | — | Emitted after `close()` completes, for a writer once it synced everything and released the lock. |
 | `'wrote'` | `document, entry, indexPosition` | Emitted after each document is indexed. |
 | `'index-created'` | `name` | Emitted when a new secondary index is created. |
 | `'index-add'` | `name, length, document` | Emitted when a document is added to a secondary index. |

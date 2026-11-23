@@ -71,14 +71,14 @@ The chart shows one writer that awaits each commit before the next, like an impo
 
 | `syncInterval` | Median commit latency | Events/s | `fsync`s/s | Time blocked in `fsync` | CPU time |
 |---|---|---|---|---|---|
-| 1 ms | 4.6 ms | 213 | 213 | 0.2 % | 16 % |
-| 5 ms | 8.8 ms | 113 | 114 | 0.2 % | 10 % |
-| 20 ms | 24.1 ms | 41 | 42 | 0.2 % | 4.2 % |
-| 100 ms | 104 ms | 9 | 10 | 0.2 % | 1.0 % |
-| `syncOnFlush` | 2.8 ms | 349 | 350 | 97 % | 8.5 % |
+| 1 ms | 4.7 ms | 212 | 212 | 0 % | 18 % |
+| 5 ms | 9.1 ms | 107 | 107 | 0 % | 11 % |
+| 20 ms | 24.3 ms | 40 | 40 | 0 % | 4.9 % |
+| 100 ms | 105 ms | 9 | 9 | 0 % | 1.3 % |
+| `syncOnFlush` | 3.5 ms | 279 | 279 | 0 % | 18 % |
 | default (no sync) | < 0.01 ms | about 200,000 | 0 | 1 % | 100 % (CPU-bound) |
 
-`syncOnFlush` syncs every flush right away and blocks the event loop meanwhile, so the process spends almost all its time waiting for the disk.
+`syncOnFlush` behaves like an interval of 0: a run starts right after the current tick, and commits during a run share the next one.
 
 What follows from this:
 

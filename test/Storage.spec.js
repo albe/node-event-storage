@@ -8,6 +8,7 @@ import { spawnSync } from 'child_process';
 import { matches } from '../src/utils/metadataUtil.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
+import spyOnSyncs from './syncSpy.js';
 //import lz4 from 'lz4';
 import { fileURLToPath } from 'url';
 
@@ -41,11 +42,11 @@ describe('Storage', function() {
         }
     });
 
-    afterEach(function () {
-        refs.forEach(ref => ref.close());
+    afterEach(async function () {
+        const closing = new Set([...refs, storage].filter(Boolean));
         refs = [];
-        if (storage) storage.close();
         storage = null;
+        await Promise.all([...closing].map(ref => new Promise(resolve => ref.close(() => resolve()))));
     });
 
     it('creates the storage directory if it does not exist', function() {
@@ -104,47 +105,51 @@ describe('Storage', function() {
             });
         });
 
-        it('syncs all changed partitions and new directories in one shared run', function(done) {
-            storage = createStorage({ syncInterval: 1000, partitioner: (document) => document.stream });
+        it('syncs all changed partitions and new directories in one shared run', async function() {
+            storage = createStorage({ syncInterval: 10, partitioner: (document) => document.stream });
+            const opened = new Promise(resolve => storage.once('opened', resolve));
             storage.open();
-            let fsyncCalls = 0;
-            const originalFsync = fsSync.fsyncSync;
-            fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
-            const acknowledged = [];
-            for (let i = 0; i < 10; i++) {
-                storage.write({ stream: 'stream-' + i }, () => acknowledged.push(i));
-                storage.write({ stream: 'stream-' + i });
-            }
-            // The partitions flush their write buffers on the next tick
-            setImmediate(() => {
-                try {
-                    expect(fsyncCalls).to.be(0);
-                    storage.syncScheduler.run();
-                    // 10 partitions, the new primary index file and one shared directory sync; index entries are only synced by a checkpoint
-                    expect(fsyncCalls).to.be(12);
-                    expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-                    done();
-                } catch (e) {
-                    done(e);
-                } finally {
-                    fsSync.fsyncSync = originalFsync;
+            await opened;
+            await storage.checkpointing;
+            const synced = spyOnSyncs();
+            try {
+                const acknowledged = [];
+                for (let i = 0; i < 10; i++) {
+                    storage.write({ stream: 'stream-' + i }, () => acknowledged.push(i));
+                    storage.write({ stream: 'stream-' + i });
                 }
-            });
+                expect(synced).to.eql([]);
+                await new Promise(resolve => setImmediate(resolve));
+                await storage.syncScheduler.drain();
+                // 10 partitions, the new primary index file and one shared directory sync; index entries are only synced by a checkpoint
+                expect(synced.length).to.be(12);
+                expect(new Set(synced).size).to.be(12);
+                expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            } finally {
+                synced.restore();
+            }
         });
 
-        it('acknowledges pending writes on close', function() {
+        it('acknowledges pending writes and syncs the changed indexes before close calls back', function(done) {
             storage = createStorage({ syncInterval: 1000 });
             storage.open();
             let acknowledged = false;
             storage.write({ foo: 'bar' }, () => (acknowledged = true));
-            storage.close();
-            expect(acknowledged).to.be(true);
+            const synced = spyOnSyncs();
+            storage.close(() => {
+                synced.restore();
+                expect(acknowledged).to.be(true);
+                expect(synced).to.contain(storage.index.fileName);
+                expect(storage.locked).to.be(false);
+                done();
+            });
+            expect(storage.locked).to.be(true);
         });
 
-        it('ignores the sync interval when syncOnFlush is set', function() {
+        it('treats syncOnFlush as an interval of 0', function() {
             storage = createStorage({ syncInterval: 1000, syncOnFlush: true });
             storage.open();
-            expect(storage.syncScheduler.immediate).to.be(true);
+            expect(storage.syncScheduler.enabled).to.be(true);
             expect(storage.syncScheduler.interval).to.be(0);
             expect(storage.getPartition('').syncScheduler).to.be(storage.syncScheduler);
         });
@@ -1392,8 +1397,14 @@ describe('Storage', function() {
             refs.push(repairedStorage);
             repairedStorage.once('opened', () => {
                 expect(repairedStorage.openIndex('foo').length).to.be(5);
-                expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
-                done();
+                // The rebuilt entries are only on disk with the next checkpoint
+                repairedStorage.checkpointing.then(() => {
+                    expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
+                    return repairedStorage.checkpoint();
+                }).then(() => {
+                    expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
+                    done();
+                }).catch(done);
             });
             repairedStorage.open();
             crashedStorage.storageLock.held = false;
@@ -1406,26 +1417,25 @@ describe('Storage', function() {
             storage.ensureIndex('foo', { type: 'foo' });
             storage.write({ type: 'foo' });
             storage.write({ type: 'bar' });
-            const synced = [];
-            const originalSync = fs.promises.open;
-            fs.promises.open = async (fileName, flags) => {
-                const handle = await originalSync(fileName, flags);
-                synced.push(path.basename(fileName));
-                return handle;
-            };
-            storage.checkpoint().then(() => {
-                expect(synced.sort()).to.eql(['storage.foo.index', 'storage.index']);
+            let synced;
+            const indexSyncs = () => synced.filter(fileName => fileName.endsWith('.index')).map(fileName => path.basename(fileName));
+            storage.checkpointing.then(() => {
+                synced = spyOnSyncs();
+                return storage.checkpoint();
+            }).then(() => {
+                expect(indexSyncs().sort()).to.eql(['storage.foo.index', 'storage.index']);
+                // The checkpoint file is synced only after the indexes
+                expect(path.basename(synced[synced.length - 2])).to.be('checkpoint.tmp.lock');
                 expect(storage.storageLock.readCheckpoint()).to.be(2);
                 expect(storage.index.modified).to.be(false);
                 synced.length = 0;
                 return storage.checkpoint();
             }).then(() => {
-                fs.promises.open = originalSync;
-                // Nothing changed since, but the checkpoint file itself is written synchronously
-                expect(synced).to.eql([]);
+                synced.restore();
+                expect(indexSyncs()).to.eql([]);
                 done();
             }).catch(error => {
-                fs.promises.open = originalSync;
+                synced?.restore();
                 done(error);
             });
         });
@@ -1535,16 +1545,17 @@ describe('Storage', function() {
             crashedStorage.flush();
             crashedStorage.index.truncate(3);
             crashedStorage.index.flush();
-            crashedStorage.close();
-            leaveLock(crashedStorage, { pid: deadPid() });
+            crashedStorage.close(() => {
+                leaveLock(crashedStorage, { pid: deadPid() });
 
-            storage = createStorage();
-            storage.once('opened', () => {
-                expect(storage.index.length).to.be(5);
-                expect(storage.readLockOwner().pid).to.be(process.pid);
-                done();
+                storage = createStorage();
+                storage.once('opened', () => {
+                    expect(storage.index.length).to.be(5);
+                    expect(storage.readLockOwner().pid).to.be(process.pid);
+                    done();
+                });
+                storage.open();
             });
-            storage.open();
         });
 
         it('does not treat lock files as partitions', function(done) {

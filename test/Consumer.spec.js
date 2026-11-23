@@ -19,11 +19,12 @@ describe('Consumer', function() {
         storage.ensureIndex('bazinga', (doc) => doc.type === 'Bazinga');
     });
 
-    afterEach(function () {
-        if (storage) {
-            storage.close();
-        }
+    afterEach(async function () {
+        const closing = storage;
         storage = null;
+        if (closing) {
+            await new Promise(resolve => closing.close(() => resolve()));
+        }
         consumer = null;
     });
 

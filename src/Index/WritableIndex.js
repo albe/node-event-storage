@@ -2,7 +2,7 @@ import fs from 'fs';
 import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC, CHUNK_CAPACITY, createChunk } from './ReadableIndex.js';
 import { assert, assertEqual } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
-import { ensureDirectory, syncFile } from '../utils/fsUtil.js';
+import { ensureDirectory } from '../utils/fsUtil.js';
 import SyncScheduler from '../SyncScheduler.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
@@ -128,26 +128,15 @@ class WritableIndex extends ReadableIndex {
     }
 
     /**
-     * Write the buffered entries, sync them if the file changed, and close the index. The flush reopens the file
-     * handle if the pool evicted it since the last write, so no buffered entry is lost.
+     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it since
+     * the last write, so no buffered entry is lost. The index is not synced: the storage syncs all modified indexes
+     * with a checkpoint and on close, because the repair after a crash rebuilds their entries from the partitions.
      *
      * @api
      */
     close() {
         this.flush();
-        this.sync();
         super.close();
-    }
-
-    /**
-     * Sync the file if it changed since the last sync. While open, indexes are only synced by a storage checkpoint,
-     * because the repair after a crash rebuilds their entries from the partitions.
-     */
-    sync() {
-        if (this.modified) {
-            syncFile(this.fileName);
-            this.modified = false;
-        }
     }
 
     /**
