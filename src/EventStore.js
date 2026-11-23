@@ -516,6 +516,7 @@ class EventStore extends events.EventEmitter {
      *   stream version number, or a {@link CommitCondition} obtained from {@link EventStore#query}.
      * @param {object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
      * @param {function} [callback] A function that will be executed when all events have been committed.
+     * @returns {object} The commit, which already holds its position in the log. The events are not durable before the callback fires.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version, or if a
      *   {@link CommitCondition} was provided and conflicting events have been committed since it was obtained.
      */
@@ -580,6 +581,7 @@ class EventStore extends events.EventEmitter {
             commit.events.push(event);
             this.storage.write(storedEvent, commitVersion !== events.length ? undefined : commitCallback);
         }
+        return commit;
     }
 
     /**

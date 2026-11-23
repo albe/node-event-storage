@@ -316,6 +316,25 @@ describe('EventStore', function() {
             expect(() => eventstore.commit({ foo: 'bar' })).to.throwError();
         });
 
+        it('returns the commit before the callback fires', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', { foo: 'bar' });
+            let callbackFired = false;
+            const commit = eventstore.commit('foo-bar', [{ foo: 'baz' }, { foo: 'qux' }], 1, persisted => {
+                callbackFired = true;
+                expect(persisted).to.be(commit);
+                done();
+            });
+            expect(callbackFired).to.be(false);
+            expect(commit.commitId).to.be(1);
+            expect(commit.streamName).to.be('foo-bar');
+            expect(commit.streamVersion).to.be(1);
+            expect(commit.events).to.eql([{ foo: 'baz' }, { foo: 'qux' }]);
+        });
+
         it('throws when no events specified', function() {
             eventstore = new EventStore({
                 storageDirectory
