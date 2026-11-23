@@ -64,6 +64,17 @@ function syncFile(fileName, flags = 'r+') {
 }
 
 /**
+ * A file deleted or renamed after it was written needs no sync anymore. Rethrows every other error.
+ *
+ * @param {Error} error
+ */
+function ignoreDeletedFile(error) {
+    if (error.code !== 'ENOENT') {
+        throw error;
+    }
+}
+
+/**
  * Like `syncFile()`, but in the background on the libuv thread pool, so that the event loop goes on in the meantime
  * and several files can be synced in parallel.
  *
@@ -243,6 +254,7 @@ export {
     scanForFiles,
     isSameOrParentDirectory,
     safeUnlink,
+    ignoreDeletedFile,
     syncDirectory,
     syncFile,
     syncFileInBackground,

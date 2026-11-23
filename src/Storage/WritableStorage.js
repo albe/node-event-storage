@@ -5,23 +5,13 @@ import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableInd
 import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory, syncFileInBackground } from '../utils/fsUtil.js';
+import { ensureDirectory, syncFile, syncFileInBackground, ignoreDeletedFile } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import SyncScheduler from '../SyncScheduler.js';
 
 const PARTITION_PROBE_SEPARATOR = '~';
 
-/**
- * A stream index deleted or renamed in the meantime was synced when it was closed.
- *
- * @param {Error} error
- */
-function ignoreDeletedFile(error) {
-    if (error.code !== 'ENOENT') {
-        throw error;
-    }
-}
 const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
@@ -108,22 +98,20 @@ class WritableStorage extends ReadableStorage {
         }
 
         return super.open(() => {
-            if (needsRepair) {
-                this.checkTornWrites(checkpoint);
-                this.syncIndexes();
-            }
-            this.startCheckpoints();
+            this.startCheckpoints(needsRepair ? this.checkTornWrites(checkpoint) : this.index.length);
             callback?.();
         });
     }
 
     /**
-     * On open, all indexes are on disk: a clean close synced them, and so does a repair.
+     * After a clean close all indexes are on disk. A repair does not sync the entries it rebuilt, so it keeps the
+     * previous checkpoint, and a crash before the next checkpoint rebuilds them again.
      *
      * @private
+     * @param {number} position The global position up to which all indexes are on disk.
      */
-    startCheckpoints() {
-        this.storageLock.writeCheckpoint(this.index.length);
+    startCheckpoints(position) {
+        this.storageLock.writeCheckpoint(position);
         this.checkpointTimer = setInterval(() => this.checkpoint().catch(error => this.emit('error', error)), CHECKPOINT_INTERVAL);
         this.checkpointTimer.unref();
     }
@@ -163,15 +151,6 @@ class WritableStorage extends ReadableStorage {
         take(this.index);
         this.forEachSecondaryIndex(take);
         return fileNames;
-    }
-
-    /**
-     * @private
-     */
-    syncIndexes() {
-        this.flush();
-        this.index.sync();
-        this.forEachSecondaryIndex(index => index.sync());
     }
 
     /**
@@ -233,6 +212,7 @@ class WritableStorage extends ReadableStorage {
      * entries after the last checkpoint from the partitions.
      *
      * @param {number} [checkpoint] The global position up to which all indexes were on disk. Defaults to the length of the primary index.
+     * @returns {number} The global position up to which all indexes are still on disk.
      */
     checkTornWrites(checkpoint = this.index.length) {
         const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
@@ -252,6 +232,7 @@ class WritableStorage extends ReadableStorage {
         }
 
         this.forEachPartition(partition => partition.close());
+        return indexedUntil;
     }
 
     /**
@@ -326,12 +307,21 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Closes all files, which syncs the changed indexes, and completes the pending sync run. Only then it unlocks the
-     * storage, because a store without a lock is not repaired on the next open.
+     * Syncs the indexes changed since the last checkpoint, closes all files and completes the pending sync run. Only
+     * then it unlocks the storage, because a store without a lock is not repaired on the next open.
      */
     close() {
         clearInterval(this.checkpointTimer);
+        this.flush();
+        const indexFiles = this.takeModifiedIndexFiles();
         super.close();
+        for (const fileName of indexFiles) {
+            try {
+                syncFile(fileName);
+            } catch (error) {
+                ignoreDeletedFile(error);
+            }
+        }
         this.syncScheduler.run();
         if (this.locked) {
             this.unlock();

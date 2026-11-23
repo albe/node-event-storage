@@ -9,7 +9,7 @@ const dataDirectory = path.join(__dirname, 'data', 'sync-scheduler');
 
 describe('SyncScheduler', function() {
 
-    let files, syncSync, opened, originalOpen, originalFsync, releases;
+    let files, syncSync, opened, originalOpen, originalFsync, releases, failWith;
 
     beforeEach(function() {
         fs.rmSync(dataDirectory, { recursive: true, force: true });
@@ -22,6 +22,7 @@ describe('SyncScheduler', function() {
         syncSync = [];
         opened = [];
         releases = [];
+        failWith = null;
         originalFsync = fs.fsyncSync;
         fs.fsyncSync = (fd) => { syncSync.push(fd); return originalFsync(fd); };
         // Hold every background sync until the test releases it, to observe a run while it is in flight.
@@ -29,6 +30,9 @@ describe('SyncScheduler', function() {
         fs.promises.open = async (fileName, flags) => {
             opened.push(fileName);
             await new Promise(resolve => releases.push(resolve));
+            if (failWith) {
+                throw Object.assign(new Error(failWith), { code: failWith });
+            }
             return originalOpen(fileName, flags);
         };
     });
@@ -107,19 +111,30 @@ describe('SyncScheduler', function() {
         await settle();
     });
 
-    it('throws a failed background sync as an uncaught exception', async function() {
+    it('acknowledges a file that was deleted before it was synced', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         let acknowledged = false;
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
         await settle();
         fs.rmSync(files[0]);
+        release();
+        await settle();
+        expect(acknowledged).to.be(true);
+    });
+
+    it('throws a failed background sync as an uncaught exception', async function() {
+        const scheduler = new SyncScheduler({ syncInterval: 1 });
+        let acknowledged = false;
+        scheduler.flushed(files[0], [() => (acknowledged = true)]);
+        await settle();
+        failWith = 'EIO';
         const listeners = process.listeners('uncaughtException');
         process.removeAllListeners('uncaughtException');
         const uncaught = new Promise(resolve => process.once('uncaughtException', resolve));
         release();
         const error = await uncaught;
         listeners.forEach(listener => process.on('uncaughtException', listener));
-        expect(error.code).to.be('ENOENT');
+        expect(error.code).to.be('EIO');
         expect(acknowledged).to.be(false);
     });
 });

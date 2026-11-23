@@ -1392,8 +1392,12 @@ describe('Storage', function() {
             refs.push(repairedStorage);
             repairedStorage.once('opened', () => {
                 expect(repairedStorage.openIndex('foo').length).to.be(5);
-                expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
-                done();
+                // The rebuilt entries are only on disk with the next checkpoint
+                expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
+                repairedStorage.checkpoint().then(() => {
+                    expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
+                    done();
+                }).catch(done);
             });
             repairedStorage.open();
             crashedStorage.storageLock.held = false;
@@ -1428,6 +1432,35 @@ describe('Storage', function() {
                 fs.promises.open = originalSync;
                 done(error);
             });
+        });
+
+        it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', function() {
+            storage = createStorage();
+            storage.open();
+            storage.ensureIndex('foo', { type: 'foo' });
+            storage.ensureIndex('bar', { type: 'bar' });
+            storage.write({ type: 'foo' });
+            storage.write({ type: 'bar' });
+            storage.flush();
+            storage.openIndex('bar').modified = false;
+            const fooIndex = storage.openIndex('foo');
+            fooIndex.close();
+            fsSync.unlinkSync(fooIndex.fileName);
+            const synced = [];
+            const originalOpen = fsSync.openSync;
+            fsSync.openSync = (fileName, flags) => {
+                synced.push(path.basename(fileName));
+                return originalOpen(fileName, flags);
+            };
+            try {
+                storage.close();
+            } finally {
+                fsSync.openSync = originalOpen;
+            }
+            expect(synced).to.contain('storage.index');
+            expect(synced).not.to.contain('storage.bar.index');
+            expect(synced).to.contain('storage.foo.index');
+            expect(storage.locked).to.be(false);
         });
 
     });

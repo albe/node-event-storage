@@ -91,18 +91,14 @@ describe('Index', function() {
             expect(fsyncCalls).to.be(2);
         });
 
-        it('syncs on close and sync() only if the file changed', function() {
+        it('only marks itself modified on close and leaves the sync to the storage', function() {
             index = setupIndexWithEntries();
+            index.modified = false;
             index.add(new Index.Entry(index.length + 1, 0));
-            index.flush();
             fsyncCalls = 0;
             index.close();
-            expect(fsyncCalls).to.be(1);
-            index.open();
-            index.get(1);
-            index.sync();
-            index.close();
-            expect(fsyncCalls).to.be(1);
+            expect(index.modified).to.be(true);
+            expect(fsyncCalls).to.be(0);
         });
     });
 

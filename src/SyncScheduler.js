@@ -1,5 +1,5 @@
 import path from 'path';
-import { syncFile, syncDirectory, syncFileInBackground, syncDirectoryInBackground } from './utils/fsUtil.js';
+import { syncFile, syncDirectory, syncFileInBackground, syncDirectoryInBackground, ignoreDeletedFile } from './utils/fsUtil.js';
 
 /**
  * Decides when flushed data reaches the disk, for all files of a storage:
@@ -110,7 +110,7 @@ class SyncScheduler {
     runInBackground() {
         const batch = this.take();
         const syncs = [];
-        for (const fileName of batch.files) syncs.push(syncFileInBackground(fileName));
+        for (const fileName of batch.files) syncs.push(syncFileInBackground(fileName).catch(ignoreDeletedFile));
         for (const directory of batch.directories) syncs.push(syncDirectoryInBackground(directory));
         this.running = batch;
         Promise.all(syncs).then(() => {
@@ -137,13 +137,25 @@ class SyncScheduler {
         const batch = this.take();
         this.running = null;
         if (running) {
-            for (const fileName of running.files) syncFile(fileName);
+            for (const fileName of running.files) syncExisting(fileName);
             for (const directory of running.directories) syncDirectory(directory);
         }
-        for (const fileName of batch.files) syncFile(fileName);
+        for (const fileName of batch.files) syncExisting(fileName);
         for (const directory of batch.directories) syncDirectory(directory);
         if (running) invoke(running.callbacks);
         invoke(batch.callbacks);
+    }
+}
+
+/**
+ * Sync a file unless it was deleted in the meantime.
+ * @param {string} fileName
+ */
+function syncExisting(fileName) {
+    try {
+        syncFile(fileName);
+    } catch (error) {
+        ignoreDeletedFile(error);
     }
 }
 
