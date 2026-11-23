@@ -69,14 +69,14 @@ With `syncInterval`, a commit callback fires only after the next sync run has `f
 
 The chart shows one writer that awaits each commit before the next, like an import that awaits every `commit()`. On a disk with about 2 ms per `fsync`, typical for a cloud persistent disk:
 
-| `syncInterval` | Median commit latency | Events/s | `fsync`s/s | Time blocked in `fsync` | CPU time |
-|---|---|---|---|---|---|
-| 1 ms | 4.7 ms | 212 | 212 | 0 % | 18 % |
-| 5 ms | 9.1 ms | 107 | 107 | 0 % | 11 % |
-| 20 ms | 24.3 ms | 40 | 40 | 0 % | 4.9 % |
-| 100 ms | 105 ms | 9 | 9 | 0 % | 1.3 % |
-| `syncOnFlush` | 3.5 ms | 279 | 279 | 0 % | 18 % |
-| default (no sync) | < 0.01 ms | about 200,000 | 0 | 1 % | 100 % (CPU-bound) |
+| `syncInterval` | Median commit latency | Events/s | `fsync`s/s | CPU time |
+|---|---|---|---|---|
+| 1 ms | 4.7 ms | 212 | 212 | 18 % |
+| 5 ms | 9.1 ms | 107 | 107 | 11 % |
+| 20 ms | 24.3 ms | 40 | 40 | 4.9 % |
+| 100 ms | 105 ms | 9 | 9 | 1.3 % |
+| `syncOnFlush` | 3.5 ms | 279 | 279 | 18 % |
+| default (no sync) | < 0.01 ms | about 200,000 | 0 | 100 % (CPU-bound) |
 
 `syncOnFlush` behaves like an interval of 0: a run starts right after the current tick, and commits during a run share the next one.
 
