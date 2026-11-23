@@ -262,17 +262,21 @@ describe('Partition', function() {
 
         it('invokes write callbacks only after one shared sync', function(done) {
             openWith({ syncInterval: 10 });
+            const synced = [];
+            const originalOpen = fsSync.promises.open;
+            fsSync.promises.open = (fileName, flags) => { synced.push(fileName); return originalOpen(fileName, flags); };
             const written = [];
             partition.write('one', () => written.push(1));
             partition.flush();
             partition.write('two', () => written.push(2));
             partition.flush();
             expect(written).to.eql([]);
-            expect(fsyncCalls).to.be(0);
             setTimeout(() => {
+                fsSync.promises.open = originalOpen;
                 expect(written).to.eql([1, 2]);
-                // the file and its new directory
-                expect(fsyncCalls).to.be(2);
+                // the file and its new directory, in the background
+                expect(synced).to.eql([partition.fileName, dataDirectory]);
+                expect(fsyncCalls).to.be(0);
                 done();
             }, 30);
         });

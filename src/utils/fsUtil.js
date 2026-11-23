@@ -64,13 +64,15 @@ function syncFile(fileName, flags = 'r+') {
 }
 
 /**
- * Like `syncFile()`, but in the background, so that the event loop goes on in the meantime.
+ * Like `syncFile()`, but in the background on the libuv thread pool, so that the event loop goes on in the meantime
+ * and several files can be synced in parallel.
  *
  * @param {string} fileName
+ * @param {string} [flags] The flags to open the file with. Windows needs write access to sync a file.
  * @returns {Promise<void>}
  */
-async function syncFileInBackground(fileName) {
-    const handle = await fs.promises.open(fileName, 'r+');
+async function syncFileInBackground(fileName, flags = 'r+') {
+    const handle = await fs.promises.open(fileName, flags);
     try {
         await handle.sync();
     } finally {
@@ -86,6 +88,19 @@ async function syncFileInBackground(fileName) {
 function syncDirectory(dirName) {
     try {
         syncFile(dirName, 'r');
+    } catch (e) {
+    }
+}
+
+/**
+ * Like `syncDirectory()`, but in the background.
+ *
+ * @param {string} dirName
+ * @returns {Promise<void>}
+ */
+async function syncDirectoryInBackground(dirName) {
+    try {
+        await syncFileInBackground(dirName, 'r');
     } catch (e) {
     }
 }
@@ -231,5 +246,6 @@ export {
     syncDirectory,
     syncFile,
     syncFileInBackground,
+    syncDirectoryInBackground,
     writeFileAtomic
 };

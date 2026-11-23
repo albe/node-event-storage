@@ -63,27 +63,29 @@ For large deployments consider lazy-loading secondary indexes on first access ra
 
 ### `syncInterval` and commit latency
 
-With `syncInterval`, a commit callback fires only after the next sync run has `fsync`ed the commit. A commit therefore takes about the interval plus the `fsync`s of that run, no matter how fast the write itself is. A smaller interval lowers that latency, but every run costs at least one `fsync`, so the store runs up to `1000 / syncInterval` of them per second. Each `fsync` blocks the process until the disk confirms the write: the event loop does nothing else meanwhile, and the CPU waits idle for the disk. The runs themselves (timers, flushes, callbacks) cost CPU time as well.
+With `syncInterval`, a commit callback fires only after the next sync run has `fsync`ed the commit. A commit therefore takes about the interval plus the `fsync`s of that run, no matter how fast the write itself is. A smaller interval lowers that latency, but every run costs at least one `fsync`, so the store runs up to `1000 / syncInterval` of them per second. A run syncs its files in the background on the libuv thread pool, so the event loop goes on writing while the disk confirms the writes. Each run still costs CPU time for the timer, the flushes, opening and closing the files and the callbacks, and every `fsync` loads the disk.
 
-![syncInterval against commit latency, throughput of one writer that awaits every commit, time blocked in fsync and CPU time, on a local SSD and with 2 ms added to every fsync](perf-sync-interval.svg)
+![syncInterval against commit latency, throughput of one writer that awaits every commit, fsyncs per second and CPU time, on a local SSD and with 2 ms added to every fsync](perf-sync-interval.svg)
 
 The chart shows one writer that awaits each commit before the next, like an import that awaits every `commit()`. On a disk with about 2 ms per `fsync`, typical for a cloud persistent disk:
 
 | `syncInterval` | Median commit latency | Events/s | `fsync`s/s | Time blocked in `fsync` | CPU time |
 |---|---|---|---|---|---|
-| 1 ms | 3.6 ms | 272 | 273 | 67 % | 9.4 % |
-| 5 ms | 7.5 ms | 131 | 132 | 32 % | 3.5 % |
-| 20 ms | 22.7 ms | 43 | 44 | 11 % | 1.7 % |
-| 100 ms | 103 ms | 9 | 10 | 3 % | 1.6 % |
-| `syncOnFlush` | 2.4 ms | 404 | 405 | 97 % | 8.0 % |
-| default (no sync) | < 0.01 ms | about 250,000 | 0 | 1 % | 100 % (CPU-bound) |
+| 1 ms | 4.6 ms | 213 | 213 | 0.2 % | 16 % |
+| 5 ms | 8.8 ms | 113 | 114 | 0.2 % | 10 % |
+| 20 ms | 24.1 ms | 41 | 42 | 0.2 % | 4.2 % |
+| 100 ms | 104 ms | 9 | 10 | 0.2 % | 1.0 % |
+| `syncOnFlush` | 2.8 ms | 349 | 350 | 97 % | 8.5 % |
+| default (no sync) | < 0.01 ms | about 200,000 | 0 | 1 % | 100 % (CPU-bound) |
+
+`syncOnFlush` syncs every flush right away and blocks the event loop meanwhile, so the process spends almost all its time waiting for the disk.
 
 What follows from this:
 
 - **An awaited commit can never be faster than the interval.** A writer that awaits every commit reaches at most `1000 / syncInterval` commits per second. More generally, throughput is the number of commits in flight divided by the commit latency, until the CPU is saturated.
-- **Pipeline commits instead of lowering the interval.** Don't wait for each callback when you import: issue the commits and wait for the last one, or keep a window of commits in flight. All commits within one interval share one run. With 8192 commits in flight and 2 ms per `fsync`, the store writes about 170,000 events/s at a 20 ms interval, close to the 250,000 events/s without any sync. A smaller interval doesn't raise that, because the store is then bound by the CPU.
-- **Each changed file costs one `fsync` per run.** A run syncs every partition written since the previous run, plus every new partition or index file and its directory, one after another. Commits to 64 different streams within one interval therefore cost 64 `fsync`s per run; with 2 ms per `fsync`, every run blocks the process for about 130 ms, and the commit latency is about 150 ms even with a 1 ms interval. Then the number of streams written per interval matters more than the interval.
-- **Choose the longest interval the callers can wait for.** 20 to 100 ms keep the `fsync` load small even on slow disks. Below about 5 ms, the store spends a large share of its time waiting for the disk, and `syncOnFlush` behaves like a 0 ms interval.
+- **Pipeline commits instead of lowering the interval.** Don't wait for each callback when you import: issue the commits and wait for the last one, or keep a window of commits in flight. All commits within one interval share one run. With 8192 commits in flight and 2 ms per `fsync`, the store writes about 160,000 events/s at a 1 to 20 ms interval, close to the 200,000 events/s without any sync. A smaller interval doesn't raise that, because the store is then bound by the CPU.
+- **Each changed file costs one `fsync` per run.** A run syncs every partition written since the previous run, plus every new partition or index file and its directory. It syncs them in parallel, at most as many at once as the libuv thread pool has threads (`UV_THREADPOOL_SIZE`, 4 by default). Commits to 64 different streams within one interval therefore cost 64 `fsync`s per run, and with 2 ms per `fsync` a run takes about 50 ms. Then the number of streams written per interval matters more than the interval. A larger `UV_THREADPOOL_SIZE` shortens such runs if the disk handles parallel writes well, as cloud disks usually do. Runs never overlap: when the interval elapses while a run is still syncing, the next run starts right after it.
+- **Choose the longest interval the callers can wait for.** 20 to 100 ms keep the `fsync` load small even on slow disks. Below about 5 ms, the runs cost a noticeable share of CPU time and load the disk with hundreds of `fsync`s per second.
 
 The numbers come from `node bench/bench-sync-interval.js <added fsync latency ms> <writers> <commits in flight per writer>` on a 4-core machine with a local SSD (about 0.17 ms per `fsync`). The added `fsync` latency is simulated, so measure on your own disk before you choose an interval.
 
