@@ -63,7 +63,7 @@ When the `commit()` callback fires depends on the durability setting:
 | Setting | Commit callback fires when | Survives process crash | Survives OS crash / power loss | Write throughput |
 |---------|----------------------------|------------------------|--------------------------------|------------------|
 | default | the data was handed to the OS | yes | no | highest |
-| `syncInterval: <ms>` | the next sync run `fsync`ed it, at most `<ms>` after the write | yes | yes, for acknowledged commits | close to the default |
+| `syncInterval: <ms>` | the next sync run `fsync`ed it, at most `<ms>` after the write | yes | yes, for acknowledged commits | close to the default for pipelined commits; an awaited commit takes about the interval ([details](performance.md#syncinterval-and-commit-latency)) |
 | `syncOnFlush: true` | the data was `fsync`ed on every flush | yes | yes, for acknowledged commits | lowest |
 
 Every flush of a partition is handed to the storage's sync scheduler, which syncs it right away (`syncOnFlush`), with the next run (`syncInterval`) or not at all (default). A newly created partition or index file is synced together with its directory by the same rule, so a new stream does not disappear after a power loss.
