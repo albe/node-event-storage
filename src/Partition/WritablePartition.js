@@ -273,7 +273,6 @@ class WritablePartition extends ReadablePartition {
      */
     write(data, sequenceNumber, callback) {
         this.getFileHandle();
-        this.syncScheduler.changed(this);
         ({ sequenceNumber, callback } = this.normalizeWriteArguments(sequenceNumber, callback));
         const dataSize = Buffer.byteLength(data, 'utf8');
         assert(dataSize <= 64 * 1024 * 1024, 'Document is too large! Maximum is 64 MB');

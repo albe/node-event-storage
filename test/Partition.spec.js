@@ -289,15 +289,6 @@ describe('Partition', function() {
             });
         });
 
-        it('flushes changed files before the run', function() {
-            openWith({ syncInterval: 1000 });
-            let written = false;
-            partition.write('one', () => (written = true));
-            partition.syncScheduler.run();
-            expect(written).to.be(true);
-            expect(partition.syncScheduler.timeout).to.be(null);
-        });
-
         it('only flushes on close and leaves the sync to the run', function() {
             openWith({ syncInterval: 1000 });
             const syncScheduler = partition.syncScheduler;

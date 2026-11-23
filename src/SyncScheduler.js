@@ -20,20 +20,9 @@ class SyncScheduler {
         this.immediate = !!syncOnFlush;
         this.interval = this.immediate ? 0 : syncInterval;
         this.timeout = null;
-        this.changedFiles = new Set();
         this.files = new Set();
         this.directories = new Set();
         this.callbacks = [];
-    }
-
-    /**
-     * @param {{ flush: function(): boolean }} file A file with written data that a run needs to flush first.
-     */
-    changed(file) {
-        if (this.interval > 0) {
-            this.changedFiles.add(file);
-            this.schedule();
-        }
     }
 
     /**
@@ -78,13 +67,11 @@ class SyncScheduler {
     }
 
     /**
-     * Flush all changed files, sync every flushed file and the directory of every new file once, then invoke the
-     * waiting callbacks. Writes from within the callbacks belong to the next run.
+     * Sync every flushed file and the directory of every new file once, then invoke the waiting callbacks.
+     * Writes from within the callbacks belong to the next run.
      */
     run() {
-        for (const file of this.changedFiles) file.flush();
         const { files, directories, callbacks } = this;
-        this.changedFiles = new Set();
         this.files = new Set();
         this.directories = new Set();
         this.callbacks = [];

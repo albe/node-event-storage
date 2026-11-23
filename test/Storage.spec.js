@@ -111,20 +111,25 @@ describe('Storage', function() {
             const originalFsync = fsSync.fsyncSync;
             fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
             const acknowledged = [];
-            try {
-                for (let i = 0; i < 10; i++) {
-                    storage.write({ stream: 'stream-' + i }, () => acknowledged.push(i));
-                    storage.write({ stream: 'stream-' + i });
-                }
-                expect(fsyncCalls).to.be(0);
-                storage.syncScheduler.run();
-                // 10 partitions, the new primary index file and one shared directory sync; index entries are only synced by a checkpoint
-                expect(fsyncCalls).to.be(12);
-                expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-            } finally {
-                fsSync.fsyncSync = originalFsync;
+            for (let i = 0; i < 10; i++) {
+                storage.write({ stream: 'stream-' + i }, () => acknowledged.push(i));
+                storage.write({ stream: 'stream-' + i });
             }
-            done();
+            // The partitions flush their write buffers on the next tick
+            setImmediate(() => {
+                try {
+                    expect(fsyncCalls).to.be(0);
+                    storage.syncScheduler.run();
+                    // 10 partitions, the new primary index file and one shared directory sync; index entries are only synced by a checkpoint
+                    expect(fsyncCalls).to.be(12);
+                    expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+                    done();
+                } catch (e) {
+                    done(e);
+                } finally {
+                    fsSync.fsyncSync = originalFsync;
+                }
+            });
         });
 
         it('acknowledges pending writes on close', function() {
