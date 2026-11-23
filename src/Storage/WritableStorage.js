@@ -256,18 +256,13 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Register all secondary index files, so that the repair reaches those that nobody has opened yet.
+     * Load all secondary indexes that the scan on open found, so that the repair reaches those nobody has opened yet.
      *
      * @private
      */
     openSecondaryIndexFiles() {
-        if (!fs.existsSync(this.indexDirectory)) {
-            return;
-        }
-        const prefix = this.storageFile + '.';
-        for (const file of fs.readdirSync(this.indexDirectory)) {
-            const name = file.slice(prefix.length, -'.index'.length);
-            if (file.startsWith(prefix) && file.endsWith('.index') && name && !name.endsWith('.closed') && !(name in this.secondaryIndexes)) {
+        for (const name of this.indexFiles) {
+            if (!name.endsWith('.closed') && !(name in this.secondaryIndexes)) {
                 this.openIndex(name);
             }
         }
