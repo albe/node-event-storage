@@ -192,7 +192,11 @@ class ReadableStorage extends events.EventEmitter {
                 return done();
             }
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
-            scanForFiles(this.indexDirectory, indexPattern, (name) => this.foundIndexFile(name), (indexErr) => {
+            scanForFiles(this.indexDirectory, indexPattern, (name) => {
+                // Scan was cancelled by close() meanwhile.
+                if (this.initialized === null) return;
+                this.foundIndexFile(name);
+            }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
                 /* c8 ignore next */
                 if (indexErr && indexErr.code !== 'ENOENT') throw indexErr;
