@@ -35,7 +35,7 @@ class SyncScheduler {
      */
     flushed(fileName, callbacks = []) {
         if (this.immediate) {
-            syncFile(fileName);
+            syncExisting(fileName);
         } else if (this.interval > 0) {
             this.files.add(fileName);
             for (let i = 0; i < callbacks.length; i++) this.callbacks.push(callbacks[i]);

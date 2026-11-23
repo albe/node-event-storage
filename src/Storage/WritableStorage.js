@@ -5,7 +5,7 @@ import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableInd
 import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory, syncFile, syncFileInBackground, ignoreDeletedFile } from '../utils/fsUtil.js';
+import { ensureDirectory, syncFileInBackground, ignoreDeletedFile } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import SyncScheduler from '../SyncScheduler.js';
@@ -307,21 +307,15 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Syncs the indexes changed since the last checkpoint, closes all files and completes the pending sync run. Only
-     * then it unlocks the storage, because a store without a lock is not repaired on the next open.
+     * Closes all files and completes the pending sync run, together with the indexes changed since the last checkpoint.
+     * Only then it unlocks the storage, because a store without a lock is not repaired on the next open.
      */
     close() {
         clearInterval(this.checkpointTimer);
         this.flush();
         const indexFiles = this.takeModifiedIndexFiles();
         super.close();
-        for (const fileName of indexFiles) {
-            try {
-                syncFile(fileName);
-            } catch (error) {
-                ignoreDeletedFile(error);
-            }
-        }
+        for (const fileName of indexFiles) this.syncScheduler.flushed(fileName);
         this.syncScheduler.run();
         if (this.locked) {
             this.unlock();

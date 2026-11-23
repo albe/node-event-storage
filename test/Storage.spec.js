@@ -1435,13 +1435,15 @@ describe('Storage', function() {
         });
 
         it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', function() {
-            storage = createStorage();
+            storage = createStorage({ syncInterval: 1000 });
             storage.open();
             storage.ensureIndex('foo', { type: 'foo' });
             storage.ensureIndex('bar', { type: 'bar' });
             storage.write({ type: 'foo' });
             storage.write({ type: 'bar' });
             storage.flush();
+            // Sync the new files, so that only the changed indexes are left for close
+            storage.syncScheduler.run();
             storage.openIndex('bar').modified = false;
             const fooIndex = storage.openIndex('foo');
             fooIndex.close();
@@ -1461,6 +1463,24 @@ describe('Storage', function() {
             expect(synced).not.to.contain('storage.bar.index');
             expect(synced).to.contain('storage.foo.index');
             expect(storage.locked).to.be(false);
+        });
+
+        it('does not sync the indexes on close without a sync configuration', function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ type: 'foo' });
+            const synced = [];
+            const originalOpen = fsSync.openSync;
+            fsSync.openSync = (fileName, flags) => {
+                synced.push(path.basename(fileName));
+                return originalOpen(fileName, flags);
+            };
+            try {
+                storage.close();
+            } finally {
+                fsSync.openSync = originalOpen;
+            }
+            expect(synced).not.to.contain('storage.index');
         });
 
     });
