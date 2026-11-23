@@ -138,6 +138,8 @@ class ReadableStorage extends events.EventEmitter {
         const { index } = this.createIndex(config.indexFile, Object.assign({}, this.indexOptions, { syncOnMissingWatchFilename: true }));
         this.index = index;
         this.secondaryIndexes = {};
+        /** The names of all secondary index files found by the scan on open, loaded or not. */
+        this.indexFiles = new Set();
         this.readonlyIndexes = {};
 
         /** Fast secondary-index lookup — classifies matchers for O(1) candidate resolution on write. */
@@ -193,6 +195,7 @@ class ReadableStorage extends events.EventEmitter {
             }
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
+                this.indexFiles.add(name);
                 if (!(name in this.secondaryIndexes)) {
                     this.emit('index-created', name);
                 }
