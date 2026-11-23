@@ -5,7 +5,7 @@ import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableInd
 import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory, syncFile, ignoreDeletedFile } from '../utils/fsUtil.js';
+import { ensureDirectory } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import SyncScheduler from '../SyncScheduler.js';
@@ -130,7 +130,7 @@ class WritableStorage extends ReadableStorage {
         return this.queueCheckpoint(async () => {
             this.flush();
             const length = this.index.length;
-            await this.syncIndexFiles(this.takeModifiedIndexFiles());
+            await this.syncIndexes(this.takeModifiedIndexes());
             if (this.locked) {
                 await this.storageLock.writeCheckpoint(length);
             }
@@ -152,30 +152,30 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @private
-     * @param {string[]} fileNames
+     * @param {WritableIndex[]} indexes
      * @returns {Promise<void>}
      */
-    syncIndexFiles(fileNames) {
-        return Promise.all(fileNames.map(fileName => syncFile(fileName).catch(ignoreDeletedFile)));
+    syncIndexes(indexes) {
+        return Promise.all(indexes.map(index => index.fileHandlePool.sync(index)));
     }
 
     /**
      * An index that changes again while it is synced stays modified for the next checkpoint.
      *
      * @private
-     * @returns {string[]}
+     * @returns {WritableIndex[]}
      */
-    takeModifiedIndexFiles() {
-        const fileNames = [];
+    takeModifiedIndexes() {
+        const indexes = [];
         const take = index => {
             if (index.modified) {
                 index.modified = false;
-                fileNames.push(index.fileName);
+                indexes.push(index);
             }
         };
         take(this.index);
         this.forEachSecondaryIndex(take);
-        return fileNames;
+        return indexes;
     }
 
     /**
@@ -345,9 +345,9 @@ class WritableStorage extends ReadableStorage {
         }
         clearInterval(this.checkpointTimer);
         this.flush();
-        const indexFiles = this.takeModifiedIndexFiles();
+        const indexes = this.takeModifiedIndexes();
         this.closeFiles();
-        for (const fileName of indexFiles) this.syncScheduler.flushed(fileName);
+        for (const index of indexes) this.syncScheduler.flushed(index);
         this.closing = Promise.all([this.checkpointing, this.syncScheduler.drain()])
             .then(() => {
                 if (this.locked) {

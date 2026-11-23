@@ -66,6 +66,16 @@ async function syncFile(fileName, flags = 'r+') {
 }
 
 /**
+ * Sync an open descriptor to disk on the libuv thread pool. The caller must keep the descriptor open until this resolves.
+ *
+ * @param {number} fd
+ * @returns {Promise<void>}
+ */
+function syncDescriptor(fd) {
+    return new Promise((resolve, reject) => fs.fsync(fd, error => error ? reject(error) : resolve()));
+}
+
+/**
  * A file deleted since it was written needs no sync anymore: its data is gone on purpose.
  *
  * @param {Error} error
@@ -229,6 +239,7 @@ export {
     safeUnlink,
     syncDirectory,
     syncFile,
+    syncDescriptor,
     ignoreDeletedFile,
     writeFileAtomic
 };

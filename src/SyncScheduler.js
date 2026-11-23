@@ -1,5 +1,6 @@
 import path from 'path';
-import { syncFile, syncDirectory, ignoreDeletedFile } from './utils/fsUtil.js';
+/** @typedef {import('./FileHandlePool.js').default} FileHandlePool */
+import { syncDirectory } from './utils/fsUtil.js';
 
 /**
  * Decides when flushed data reaches the disk, for all files of a storage:
@@ -31,15 +32,16 @@ class SyncScheduler {
     }
 
     /**
-     * @param {string} fileName The file that was flushed.
+     * @param {{fileName: string, fileHandlePool: FileHandlePool}} file The partition or index that was flushed. It is
+     *   synced through its pool, which uses the pooled descriptor if the file is still open.
      * @param {Array<function>} [callbacks] The write callbacks to invoke once the flushed data is as durable as configured.
      */
-    flushed(fileName, callbacks = []) {
+    flushed(file, callbacks = []) {
         if (!this.enabled) {
             invoke(callbacks);
             return;
         }
-        this.files.add(fileName);
+        this.files.add(file);
         for (let i = 0; i < callbacks.length; i++) this.callbacks.push(callbacks[i]);
         this.start();
     }
@@ -47,14 +49,14 @@ class SyncScheduler {
     /**
      * Sync a new file with its header and its directory entry.
      *
-     * @param {string} fileName The file that was created.
+     * @param {{fileName: string, fileHandlePool: FileHandlePool}} file The partition or index that was created.
      */
-    created(fileName) {
+    created(file) {
         if (!this.enabled) {
             return;
         }
-        this.files.add(fileName);
-        this.directories.add(path.dirname(fileName));
+        this.files.add(file);
+        this.directories.add(path.dirname(file.fileName));
         this.start();
     }
 
@@ -120,7 +122,7 @@ class SyncScheduler {
                 this.directories = new Set();
                 this.callbacks = [];
                 const syncs = [];
-                for (const fileName of files) syncs.push(syncFile(fileName).catch(ignoreDeletedFile));
+                for (const file of files) syncs.push(file.fileHandlePool.sync(file));
                 for (const directory of directories) syncs.push(syncDirectory(directory));
                 await Promise.all(syncs);
                 invoke(callbacks);

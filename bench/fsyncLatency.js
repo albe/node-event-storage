@@ -1,6 +1,7 @@
 /*
  * Counts fsyncs and adds a simulated latency to each of them, for the blocking calls (`fs.fsyncSync`,
- * `fs.fdatasyncSync`) as well as for those in the background (`FileHandle#sync`, `FileHandle#datasync`).
+ * `fs.fdatasyncSync`) as well as for those in the background (`fs.fsync`, `fs.fdatasync`, `FileHandle#sync`,
+ * `FileHandle#datasync`).
  * Background syncs run on the libuv thread pool, so at most `UV_THREADPOOL_SIZE` (default 4) of them wait at once.
  */
 import fs from 'fs';
@@ -35,6 +36,18 @@ export async function simulateFsyncLatency(latency) {
     const queue = [];
     const acquire = () => busy < threads ? (busy++, Promise.resolve()) : new Promise(resolve => queue.push(resolve));
     const releaseThread = () => queue.length ? queue.shift()() : busy--;
+
+    for (const name of ['fsync', 'fdatasync']) {
+        const original = fs[name];
+        fs[name] = (fd, callback) => {
+            stats.fsyncs++;
+            const sync = () => original(fd, error => {
+                releaseThread();
+                callback(error);
+            });
+            acquire().then(() => latency > 0 ? setTimeout(sync, latency) : sync());
+        };
+    }
 
     const probe = path.join(os.tmpdir(), `fsync-latency-probe-${process.pid}`);
     const handle = await fs.promises.open(probe, 'w');

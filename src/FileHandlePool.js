@@ -1,10 +1,14 @@
 import fs from 'fs';
+import { syncFile, syncDescriptor, ignoreDeletedFile } from './utils/fsUtil.js';
 
 /**
  * LRU pool for file descriptors shared across multiple file-backed objects.
  *
  * Targets are expected to expose `fileName` and `fileMode` and may implement
  * `onBeforeClose(fd, evicted)` to flush state before their descriptor closes.
+ *
+ * A descriptor that is being synced is pinned: evicting it removes it from the pool right away, but only closes it once
+ * the sync is done. Otherwise the OS could reuse the number for another file meanwhile, which the sync would then hit.
  */
 class FileHandlePool {
 
@@ -29,7 +33,7 @@ class FileHandlePool {
 
         this.evictLeastRecentlyUsedIfNeeded(target);
         const fd = fs.openSync(target.fileName, target.fileMode);
-        this.handles.set(target, { fd });
+        this.handles.set(target, { fd, pins: 0, removed: false });
         return fd;
     }
 
@@ -55,9 +59,36 @@ class FileHandlePool {
             target.onBeforeClose?.(handle.fd, evicted);
         } finally {
             this.handles.delete(target);
-            fs.closeSync(handle.fd);
+            handle.removed = true;
+            if (handle.pins === 0) {
+                fs.closeSync(handle.fd);
+            }
         }
         return true;
+    }
+
+    /**
+     * Sync the target's file to disk in the background. An fsync covers all data written to the file through any
+     * descriptor, so the pooled one is used if the file is open, which saves opening and closing one just for the sync.
+     * A file that is not open in the pool is synced through its own descriptor, without displacing another one.
+     *
+     * @param {object} target
+     * @returns {Promise<void>}
+     */
+    async sync(target) {
+        const handle = this.handles.get(target);
+        if (!handle) {
+            return syncFile(target.fileName).catch(ignoreDeletedFile);
+        }
+        handle.pins++;
+        try {
+            await syncDescriptor(handle.fd);
+        } finally {
+            handle.pins--;
+            if (handle.removed && handle.pins === 0) {
+                fs.closeSync(handle.fd);
+            }
+        }
     }
 
     /**

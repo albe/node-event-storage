@@ -63,7 +63,7 @@ For large deployments consider lazy-loading secondary indexes on first access ra
 
 ### `syncInterval` and commit latency
 
-With `syncInterval`, a commit callback fires only after the next sync run has `fsync`ed the commit. A commit therefore takes about the interval plus the `fsync`s of that run, no matter how fast the write itself is. A smaller interval lowers that latency, but every run costs at least one `fsync`, so the store runs up to `1000 / syncInterval` of them per second. A run syncs its files in the background on the libuv thread pool, so the event loop goes on writing while the disk confirms the writes. Each run still costs CPU time for the timer, the flushes, opening and closing the files and the callbacks, and every `fsync` loads the disk.
+With `syncInterval`, a commit callback fires only after the next sync run has `fsync`ed the commit. A commit therefore takes about the interval plus the `fsync`s of that run, no matter how fast the write itself is. A smaller interval lowers that latency, but every run costs at least one `fsync`, so the store runs up to `1000 / syncInterval` of them per second. A run syncs its files in the background on the libuv thread pool, so the event loop goes on writing while the disk confirms the writes. Each run still costs CPU time for the timer, the flushes and the callbacks, and every `fsync` loads the disk. A file whose descriptor is still open is synced through it; only a file closed meanwhile is opened again just for the sync.
 
 ![syncInterval against commit latency, throughput of one writer that awaits every commit, fsyncs per second and CPU time, on a local SSD and with 2 ms added to every fsync](perf-sync-interval.svg)
 

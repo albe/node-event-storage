@@ -2,6 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs';
 import path from 'path';
 import SyncScheduler from '../src/SyncScheduler.js';
+import FileHandlePool from '../src/FileHandlePool.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -14,10 +15,12 @@ describe('SyncScheduler', function() {
     beforeEach(function() {
         fs.rmSync(dataDirectory, { recursive: true, force: true });
         fs.mkdirSync(dataDirectory, { recursive: true });
+        // Not open in the pool, so every sync opens the file itself and can be held below.
+        const fileHandlePool = new FileHandlePool();
         files = ['a', 'b', 'c'].map(name => {
             const fileName = path.join(dataDirectory, name);
             fs.writeFileSync(fileName, name);
-            return fileName;
+            return { fileName, fileHandlePool };
         });
         opened = [];
         releases = [];
@@ -65,10 +68,10 @@ describe('SyncScheduler', function() {
     it('syncs all files of a run in parallel in the background', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
-        files.forEach((fileName, i) => scheduler.flushed(fileName, [() => acknowledged.push(i)]));
+        files.forEach((file, i) => scheduler.flushed(file, [() => acknowledged.push(i)]));
         await until(() => opened.length === files.length);
         // All syncs started before any of them finished
-        expect(opened).to.eql(files);
+        expect(opened).to.eql(files.map(file => file.fileName));
         expect(acknowledged).to.eql([]);
         release();
         await scheduler.drain();
@@ -79,7 +82,7 @@ describe('SyncScheduler', function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         scheduler.created(files[0]);
         await until(() => opened.length === 2);
-        expect(opened).to.eql([files[0], dataDirectory]);
+        expect(opened).to.eql([files[0].fileName, dataDirectory]);
         release();
         await scheduler.drain();
     });
@@ -92,11 +95,11 @@ describe('SyncScheduler', function() {
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         await settle();
         // The first run is still syncing, so the second one has not started yet
-        expect(opened).to.eql([files[0]]);
+        expect(opened).to.eql([files[0].fileName]);
         release();
         await until(() => opened.length === 2);
         expect(acknowledged).to.eql([0]);
-        expect(opened).to.eql([files[0], files[1]]);
+        expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
         await scheduler.drain();
         expect(acknowledged).to.eql([0, 1]);
@@ -108,7 +111,7 @@ describe('SyncScheduler', function() {
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         await until(() => opened.length === 2);
-        expect(opened).to.eql([files[0], files[1]]);
+        expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
         await scheduler.drain();
         expect(acknowledged).to.eql([0, 1]);
@@ -120,12 +123,12 @@ describe('SyncScheduler', function() {
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
         const drained = scheduler.drain();
         await until(() => opened.length === 1);
-        expect(opened).to.eql([files[0]]);
+        expect(opened).to.eql([files[0].fileName]);
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         release();
         await until(() => opened.length === 2);
         // Writes during the run are drained as well
-        expect(opened).to.eql([files[0], files[1]]);
+        expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
         await drained;
         expect(acknowledged).to.eql([0, 1]);
