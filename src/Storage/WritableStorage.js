@@ -230,7 +230,7 @@ class WritableStorage extends ReadableStorage {
      * findTornWriteBoundary(), without any checkTornWrite() call.
      *
      * Indexes are not synced while the storage is open, only by a checkpoint. So the repair rebuilds all index
-     * entries after the last checkpoint from the partitions, including those of secondary indexes that were not loaded.
+     * entries after the last checkpoint from the partitions.
      *
      * @param {number} [checkpoint] The global position up to which all indexes were on disk. Defaults to the length of the primary index.
      */
@@ -246,26 +246,12 @@ class WritableStorage extends ReadableStorage {
         const documents = torn ? lastValidSequenceNumber : maxPartitionSequenceNumber + 1;
 
         this.index.open();
-        this.openSecondaryIndexFiles();
         const indexedUntil = Math.min(checkpoint, this.index.length, documents);
         if (torn || indexedUntil < documents || indexedUntil < this.index.length) {
             this.reindex(indexedUntil);
         }
 
         this.forEachPartition(partition => partition.close());
-    }
-
-    /**
-     * Load all secondary indexes that the scan on open found, so that the repair reaches those nobody has opened yet.
-     *
-     * @private
-     */
-    openSecondaryIndexFiles() {
-        for (const name of this.indexFiles) {
-            if (!name.endsWith('.closed') && !(name in this.secondaryIndexes)) {
-                this.openIndex(name);
-            }
-        }
     }
 
     /**
@@ -686,6 +672,20 @@ class WritableStorage extends ReadableStorage {
         }
 
         return { index, matcher };
+    }
+
+    /**
+     * The writer loads every secondary index it finds, so that new documents are added to it and the repair after a
+     * crash reaches it, even before anybody opens it. Indexes of closed streams take no new documents.
+     *
+     * @protected
+     * @param {string} name The name of the secondary index.
+     */
+    foundIndexFile(name) {
+        super.foundIndexFile(name);
+        if (!name.endsWith('.closed')) {
+            this.openIndex(name);
+        }
     }
 
     /**
