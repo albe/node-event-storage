@@ -197,6 +197,9 @@ export class Storage extends EventEmitter {
 
     /** The process holding the lock, or null if the storage is not locked or the lock has no owner information. */
     readLockOwner(): LockOwner | null;
+
+    /** Close the storage. A writer calls back once it synced everything and released the lock. */
+    close(callback?: (err?: Error | null) => void): void;
 }
 
 export class StorageLockedError extends Error {}

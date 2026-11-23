@@ -263,8 +263,18 @@ class ReadableStorage extends events.EventEmitter {
      * Will emit a 'closed' event when finished.
      *
      * @api
+     * @param {function(Error=): void} [callback] Called once the storage is closed.
      */
-    close() {
+    close(callback) {
+        this.closeFiles();
+        this.emit('closed');
+        callback?.();
+    }
+
+    /**
+     * @protected
+     */
+    closeFiles() {
         // Cancel in-progress scan so the callback does not re-open after an explicit close.
         if (this.initialized === false) {
             this.initialized = null;
@@ -276,7 +286,6 @@ class ReadableStorage extends events.EventEmitter {
         }
         this.readonlyIndexes = {};
         this.forEachPartition(partition => partition.close());
-        this.emit('closed');
     }
 
     /**

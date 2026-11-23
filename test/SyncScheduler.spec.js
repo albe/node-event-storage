@@ -2,6 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs';
 import path from 'path';
 import SyncScheduler from '../src/SyncScheduler.js';
+import FileHandlePool from '../src/FileHandlePool.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -14,10 +15,12 @@ describe('SyncScheduler', function() {
     beforeEach(function() {
         fs.rmSync(dataDirectory, { recursive: true, force: true });
         fs.mkdirSync(dataDirectory, { recursive: true });
+        // Not open in the pool, so every sync opens the file itself and can be held below.
+        const fileHandlePool = new FileHandlePool();
         files = ['a', 'b', 'c'].map(name => {
             const fileName = path.join(dataDirectory, name);
             fs.writeFileSync(fileName, name);
-            return fileName;
+            return { fileName, fileHandlePool };
         });
         syncSync = [];
         opened = [];
@@ -54,10 +57,10 @@ describe('SyncScheduler', function() {
     it('syncs all files of a run in parallel in the background', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
-        files.forEach((fileName, i) => scheduler.flushed(fileName, [() => acknowledged.push(i)]));
+        files.forEach((file, i) => scheduler.flushed(file, [() => acknowledged.push(i)]));
         await settle();
         // All syncs started before any of them finished
-        expect(opened).to.eql(files);
+        expect(opened).to.eql(files.map(file => file.fileName));
         expect(acknowledged).to.eql([]);
         release();
         await settle();
@@ -73,11 +76,11 @@ describe('SyncScheduler', function() {
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         await settle();
         // The interval of the second flush has elapsed, but the first run is still syncing
-        expect(opened).to.eql([files[0]]);
+        expect(opened).to.eql([files[0].fileName]);
         release();
         await settle();
         expect(acknowledged).to.eql([0]);
-        expect(opened).to.eql([files[0], files[1]]);
+        expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
         await settle();
         expect(acknowledged).to.eql([0, 1]);
@@ -98,7 +101,7 @@ describe('SyncScheduler', function() {
         await settle();
         // The background run that run() took over neither acknowledges twice nor starts another run
         expect(acknowledged).to.eql([0, 1]);
-        expect(opened).to.eql([files[0]]);
+        expect(opened).to.eql([files[0].fileName]);
     });
 
     it('ignores a failed background sync that run() already took over', async function() {
@@ -106,7 +109,7 @@ describe('SyncScheduler', function() {
         scheduler.flushed(files[0]);
         await settle();
         scheduler.run();
-        fs.rmSync(files[0]);
+        fs.rmSync(files[0].fileName);
         release();
         await settle();
     });
@@ -116,7 +119,7 @@ describe('SyncScheduler', function() {
         let acknowledged = false;
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
         await settle();
-        fs.rmSync(files[0]);
+        fs.rmSync(files[0].fileName);
         release();
         await settle();
         expect(acknowledged).to.be(true);

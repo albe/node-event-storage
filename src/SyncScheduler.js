@@ -1,5 +1,6 @@
 import path from 'path';
-import { syncFile, syncDirectory, syncFileInBackground, syncDirectoryInBackground, ignoreDeletedFile } from './utils/fsUtil.js';
+import { syncDirectory, syncDirectoryBlocking } from './utils/fsUtil.js';
+/** @typedef {import('./FileHandlePool.js').default} FileHandlePool */
 
 /**
  * Decides when flushed data reaches the disk, for all files of a storage:
@@ -30,14 +31,15 @@ class SyncScheduler {
     }
 
     /**
-     * @param {string} fileName The file that was flushed.
+     * @param {{fileName: string, fileHandlePool: FileHandlePool}} file The partition or index that was flushed. It is
+     *   synced through its pool, which uses the pooled descriptor if the file is still open.
      * @param {Array<function>} [callbacks] The write callbacks to invoke once the flushed data is as durable as configured.
      */
-    flushed(fileName, callbacks = []) {
+    flushed(file, callbacks = []) {
         if (this.immediate) {
-            syncExisting(fileName);
+            file.fileHandlePool.syncBlocking(file);
         } else if (this.interval > 0) {
-            this.files.add(fileName);
+            this.files.add(file);
             for (let i = 0; i < callbacks.length; i++) this.callbacks.push(callbacks[i]);
             this.schedule();
             return;
@@ -49,15 +51,15 @@ class SyncScheduler {
      * Sync a new file with its header and its directory entry. Nothing is acknowledged before a write to the new
      * file, so with an interval this waits for the next run.
      *
-     * @param {string} fileName The file that was created.
+     * @param {{fileName: string, fileHandlePool: FileHandlePool}} file The partition or index that was created.
      */
-    created(fileName) {
+    created(file) {
         if (this.immediate) {
-            syncFile(fileName);
-            syncDirectory(path.dirname(fileName));
+            file.fileHandlePool.syncBlocking(file);
+            syncDirectoryBlocking(path.dirname(file.fileName));
         } else if (this.interval > 0) {
-            this.files.add(fileName);
-            this.directories.add(path.dirname(fileName));
+            this.files.add(file);
+            this.directories.add(path.dirname(file.fileName));
         }
     }
 
@@ -110,8 +112,8 @@ class SyncScheduler {
     runInBackground() {
         const batch = this.take();
         const syncs = [];
-        for (const fileName of batch.files) syncs.push(syncFileInBackground(fileName).catch(ignoreDeletedFile));
-        for (const directory of batch.directories) syncs.push(syncDirectoryInBackground(directory));
+        for (const file of batch.files) syncs.push(file.fileHandlePool.sync(file));
+        for (const directory of batch.directories) syncs.push(syncDirectory(directory));
         this.running = batch;
         Promise.all(syncs).then(() => {
             if (this.running !== batch) return;
@@ -137,25 +139,13 @@ class SyncScheduler {
         const batch = this.take();
         this.running = null;
         if (running) {
-            for (const fileName of running.files) syncExisting(fileName);
-            for (const directory of running.directories) syncDirectory(directory);
+            for (const file of running.files) file.fileHandlePool.syncBlocking(file);
+            for (const directory of running.directories) syncDirectoryBlocking(directory);
         }
-        for (const fileName of batch.files) syncExisting(fileName);
-        for (const directory of batch.directories) syncDirectory(directory);
+        for (const file of batch.files) file.fileHandlePool.syncBlocking(file);
+        for (const directory of batch.directories) syncDirectoryBlocking(directory);
         if (running) invoke(running.callbacks);
         invoke(batch.callbacks);
-    }
-}
-
-/**
- * Sync a file unless it was deleted in the meantime.
- * @param {string} fileName
- */
-function syncExisting(fileName) {
-    try {
-        syncFile(fileName);
-    } catch (error) {
-        ignoreDeletedFile(error);
     }
 }
 

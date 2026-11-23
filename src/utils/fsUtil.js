@@ -50,11 +50,28 @@ function writeFileAtomic(fileName, data, tmpFileName = fileName + '.tmp') {
 
 /**
  * Sync a file to disk through its own descriptor, independent of whether and where the file is open otherwise.
+ * Runs on the libuv thread pool, so the event loop goes on meanwhile and several files can be synced in parallel.
+ *
+ * @param {string} fileName
+ * @param {string} [flags] The flags to open the file with. Windows needs write access to sync a file.
+ * @returns {Promise<void>}
+ */
+async function syncFile(fileName, flags = 'r+') {
+    const handle = await fs.promises.open(fileName, flags);
+    try {
+        await handle.sync();
+    } finally {
+        await handle.close();
+    }
+}
+
+/**
+ * Like `syncFile()`, but blocking the event loop until the file is on disk.
  *
  * @param {string} fileName
  * @param {string} [flags] The flags to open the file with. Windows needs write access to sync a file.
  */
-function syncFile(fileName, flags = 'r+') {
+function syncFileBlocking(fileName, flags = 'r+') {
     const fd = fs.openSync(fileName, flags);
     try {
         fs.fsyncSync(fd);
@@ -64,7 +81,17 @@ function syncFile(fileName, flags = 'r+') {
 }
 
 /**
- * A file deleted or renamed after it was written needs no sync anymore. Rethrows every other error.
+ * Sync an open descriptor to disk on the libuv thread pool. The caller must keep the descriptor open until this resolves.
+ *
+ * @param {number} fd
+ * @returns {Promise<void>}
+ */
+function syncDescriptor(fd) {
+    return new Promise((resolve, reject) => fs.fsync(fd, error => error ? reject(error) : resolve()));
+}
+
+/**
+ * A file deleted since it was written needs no sync anymore: its data is gone on purpose.
  *
  * @param {Error} error
  */
@@ -75,43 +102,26 @@ function ignoreDeletedFile(error) {
 }
 
 /**
- * Like `syncFile()`, but in the background on the libuv thread pool, so that the event loop goes on in the meantime
- * and several files can be synced in parallel.
- *
- * @param {string} fileName
- * @param {string} [flags] The flags to open the file with. Windows needs write access to sync a file.
- * @returns {Promise<void>}
- */
-async function syncFileInBackground(fileName, flags = 'r+') {
-    const handle = await fs.promises.open(fileName, flags);
-    try {
-        await handle.sync();
-    } finally {
-        await handle.close();
-    }
-}
-
-/**
  * Platforms that can not open a directory for syncing (Windows) are skipped silently.
  *
  * @param {string} dirName
+ * @returns {Promise<void>}
  */
-function syncDirectory(dirName) {
+async function syncDirectory(dirName) {
     try {
-        syncFile(dirName, 'r');
+        await syncFile(dirName, 'r');
     } catch (e) {
     }
 }
 
 /**
- * Like `syncDirectory()`, but in the background.
+ * Like `syncDirectory()`, but blocking the event loop until the directory is on disk.
  *
  * @param {string} dirName
- * @returns {Promise<void>}
  */
-async function syncDirectoryInBackground(dirName) {
+function syncDirectoryBlocking(dirName) {
     try {
-        await syncFileInBackground(dirName, 'r');
+        syncFileBlocking(dirName, 'r');
     } catch (e) {
     }
 }
@@ -254,10 +264,11 @@ export {
     scanForFiles,
     isSameOrParentDirectory,
     safeUnlink,
-    ignoreDeletedFile,
     syncDirectory,
+    syncDirectoryBlocking,
     syncFile,
-    syncFileInBackground,
-    syncDirectoryInBackground,
+    syncFileBlocking,
+    syncDescriptor,
+    ignoreDeletedFile,
     writeFileAtomic
 };

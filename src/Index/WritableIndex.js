@@ -115,7 +115,7 @@ class WritableIndex extends ReadableIndex {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeSync(this.getFileHandle(), metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = metadataBuffer.byteLength;
-        this.syncScheduler.created(this.fileName);
+        this.syncScheduler.created(this);
     }
 
     /**

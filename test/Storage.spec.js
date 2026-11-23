@@ -6,6 +6,8 @@ import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM,
 import os from 'os';
 import { spawnSync } from 'child_process';
 import { matches } from '../src/utils/metadataUtil.js';
+import FileHandlePool from '../src/FileHandlePool.js';
+import spyOnSyncs from './syncSpy.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
 //import lz4 from 'lz4';
@@ -1410,26 +1412,21 @@ describe('Storage', function() {
             storage.ensureIndex('foo', { type: 'foo' });
             storage.write({ type: 'foo' });
             storage.write({ type: 'bar' });
-            const synced = [];
-            const originalSync = fs.promises.open;
-            fs.promises.open = async (fileName, flags) => {
-                const handle = await originalSync(fileName, flags);
-                synced.push(path.basename(fileName));
-                return handle;
-            };
+            const synced = spyOnSyncs();
+            const indexSyncs = () => synced.map(fileName => path.basename(fileName));
             storage.checkpoint().then(() => {
-                expect(synced.sort()).to.eql(['storage.foo.index', 'storage.index']);
+                expect(indexSyncs().sort()).to.eql(['storage.foo.index', 'storage.index']);
                 expect(storage.storageLock.readCheckpoint()).to.be(2);
                 expect(storage.index.modified).to.be(false);
                 synced.length = 0;
                 return storage.checkpoint();
             }).then(() => {
-                fs.promises.open = originalSync;
+                synced.restore();
                 // Nothing changed since, but the checkpoint file itself is written synchronously
                 expect(synced).to.eql([]);
                 done();
             }).catch(error => {
-                fs.promises.open = originalSync;
+                synced.restore();
                 done(error);
             });
         });
@@ -1449,15 +1446,15 @@ describe('Storage', function() {
             fooIndex.close();
             fsSync.unlinkSync(fooIndex.fileName);
             const synced = [];
-            const originalOpen = fsSync.openSync;
-            fsSync.openSync = (fileName, flags) => {
-                synced.push(path.basename(fileName));
-                return originalOpen(fileName, flags);
+            const originalSync = FileHandlePool.prototype.syncBlocking;
+            FileHandlePool.prototype.syncBlocking = function(target) {
+                synced.push(path.basename(target.fileName));
+                return originalSync.call(this, target);
             };
             try {
                 storage.close();
             } finally {
-                fsSync.openSync = originalOpen;
+                FileHandlePool.prototype.syncBlocking = originalSync;
             }
             expect(synced).to.contain('storage.index');
             expect(synced).not.to.contain('storage.bar.index');
@@ -1470,15 +1467,15 @@ describe('Storage', function() {
             storage.open();
             storage.write({ type: 'foo' });
             const synced = [];
-            const originalOpen = fsSync.openSync;
-            fsSync.openSync = (fileName, flags) => {
-                synced.push(path.basename(fileName));
-                return originalOpen(fileName, flags);
+            const originalSync = FileHandlePool.prototype.syncBlocking;
+            FileHandlePool.prototype.syncBlocking = function(target) {
+                synced.push(path.basename(target.fileName));
+                return originalSync.call(this, target);
             };
             try {
                 storage.close();
             } finally {
-                fsSync.openSync = originalOpen;
+                FileHandlePool.prototype.syncBlocking = originalSync;
             }
             expect(synced).not.to.contain('storage.index');
         });

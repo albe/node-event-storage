@@ -5,7 +5,7 @@ import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableInd
 import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory, syncFileInBackground, ignoreDeletedFile } from '../utils/fsUtil.js';
+import { ensureDirectory } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import SyncScheduler from '../SyncScheduler.js';
@@ -127,30 +127,38 @@ class WritableStorage extends ReadableStorage {
     async checkpoint() {
         this.flush();
         const length = this.index.length;
-        const fileNames = this.takeModifiedIndexFiles();
-        await Promise.all(fileNames.map(fileName => syncFileInBackground(fileName).catch(ignoreDeletedFile)));
+        await this.syncIndexes(this.takeModifiedIndexes());
         if (this.locked) {
             this.storageLock.writeCheckpoint(length);
         }
     }
 
     /**
+     * @private
+     * @param {WritableIndex[]} indexes
+     * @returns {Promise<void>}
+     */
+    syncIndexes(indexes) {
+        return Promise.all(indexes.map(index => index.fileHandlePool.sync(index)));
+    }
+
+    /**
      * An index that changes again while it is synced stays modified for the next checkpoint.
      *
      * @private
-     * @returns {string[]}
+     * @returns {WritableIndex[]}
      */
-    takeModifiedIndexFiles() {
-        const fileNames = [];
+    takeModifiedIndexes() {
+        const indexes = [];
         const take = index => {
             if (index.modified) {
                 index.modified = false;
-                fileNames.push(index.fileName);
+                indexes.push(index);
             }
         };
         take(this.index);
         this.forEachSecondaryIndex(take);
-        return fileNames;
+        return indexes;
     }
 
     /**
@@ -306,20 +314,24 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * @inheritDoc
-     * Closes all files and completes the pending sync run, together with the indexes changed since the last checkpoint.
-     * Only then it unlocks the storage, because a store without a lock is not repaired on the next open.
+     * Hand the changed indexes to the sync scheduler and complete its pending run, through the still open file
+     * descriptors. Then close all files and unlock the storage, because a store without a lock is not repaired on the
+     * next open, and emit `'closed'`.
+     *
+     * @api
+     * @param {function(Error=): void} [callback] Called once the storage is closed and unlocked.
      */
-    close() {
+    close(callback) {
         clearInterval(this.checkpointTimer);
         this.flush();
-        const indexFiles = this.takeModifiedIndexFiles();
-        super.close();
-        for (const fileName of indexFiles) this.syncScheduler.flushed(fileName);
+        for (const index of this.takeModifiedIndexes()) this.syncScheduler.flushed(index);
         this.syncScheduler.run();
+        this.closeFiles();
         if (this.locked) {
             this.unlock();
         }
+        this.emit('closed');
+        callback?.();
     }
 
     /**

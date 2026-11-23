@@ -4,6 +4,7 @@ import fsSync from 'fs';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import SyncScheduler from '../src/SyncScheduler.js';
+import spyOnSyncs from './syncSpy.js';
 import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
@@ -262,9 +263,7 @@ describe('Partition', function() {
 
         it('invokes write callbacks only after one shared sync', function(done) {
             openWith({ syncInterval: 10 });
-            const synced = [];
-            const originalOpen = fsSync.promises.open;
-            fsSync.promises.open = (fileName, flags) => { synced.push(fileName); return originalOpen(fileName, flags); };
+            const synced = spyOnSyncs();
             const written = [];
             partition.write('one', () => written.push(1));
             partition.flush();
@@ -272,7 +271,7 @@ describe('Partition', function() {
             partition.flush();
             expect(written).to.eql([]);
             setTimeout(() => {
-                fsSync.promises.open = originalOpen;
+                synced.restore();
                 expect(written).to.eql([1, 2]);
                 // the file and its new directory, in the background
                 expect(synced).to.eql([partition.fileName, dataDirectory]);

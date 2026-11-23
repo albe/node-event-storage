@@ -121,7 +121,7 @@ class WritablePartition extends ReadablePartition {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeFileSync(this.fileName, metadataBuffer);
         this.headerSize = metadataBuffer.byteLength;
-        this.syncScheduler.created(this.fileName);
+        this.syncScheduler.created(this);
     }
 
     /**
@@ -143,7 +143,7 @@ class WritablePartition extends ReadablePartition {
         this.writeBufferDocuments = 0;
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
-        this.syncScheduler.flushed(this.fileName, callbacks);
+        this.syncScheduler.flushed(this, callbacks);
 
         return true;
     }
@@ -230,7 +230,7 @@ class WritablePartition extends ReadablePartition {
         this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
         bytesWritten += fs.writeSync(fd, this.writeMetaBuffer, 0, 4);
         bytesWritten += fs.writeSync(fd, DOCUMENT_SEPARATOR);
-        this.syncScheduler.flushed(this.fileName, typeof callback === 'function' ? [() => process.nextTick(callback)] : []);
+        this.syncScheduler.flushed(this, typeof callback === 'function' ? [() => process.nextTick(callback)] : []);
         return bytesWritten;
     }
 
@@ -405,7 +405,7 @@ class WritablePartition extends ReadablePartition {
         }
 
         fs.truncateSync(this.fileName, this.headerSize + after);
-        this.syncScheduler.flushed(this.fileName);
+        this.syncScheduler.flushed(this);
         this.truncateReadBuffer(after);
         this.size = after;
         this.emit('truncated', after);
