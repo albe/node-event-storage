@@ -18,7 +18,7 @@ Each partition holds 20 documents.  The number of secondary indexes equals the n
 | 10 000     |        355.5 |          0.404 |         0.025 |
 | 20 000     |        871.4 |          0.352 |         0.031 |
 
-![Write and read latency vs partition count — Scenario A](perf-scenario-a.svg)
+![Write and read latency by partition count, scenario A: write latency rises to about 0.4 ms from 10,000 partitions on, when LRU eviction is active; read latency stays below 0.07 ms](perf-scenario-a.svg)
 
 ---
 
@@ -32,7 +32,7 @@ The partition count is fixed at 100.  The document set grows proportionally so e
 | 1 000   |         22.1 |          0.034 |         0.022 |
 | 5 000   |        246.2 |          0.049 |         0.057 |
 
-![Write and read latency vs index count — Scenario B](perf-scenario-b.svg)
+![Write and read latency by index count, scenario B: both stay below 0.06 ms up to 5,000 indexes](perf-scenario-b.svg)
 
 ---
 
