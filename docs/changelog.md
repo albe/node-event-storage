@@ -2,6 +2,12 @@
 
 Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation for a released version is available through the version selector on Read the Docs.
 
+## Unreleased
+
+- **Breaking:** `typeAccessor` now maintains its type streams as `types/<type>` instead of `<type>`, like tag streams under `tags/<tag>`, so a type can no longer collide with a regular stream name. A writer moves existing type streams to the new names when it opens the store and emits `stream-migrated` for each. Selectors that name type streams directly must use the `types/` prefix; `DcbQuery` `types` are unchanged. See the [upgrade guide](upgrading/1.6.md). Also fixed `deleteEventStream()` leaving the deleted stream's index in the write path.
+- **Breaking:** `CommitCondition#without()` now takes event types instead of stream names, so callers no longer need to know how type streams are named: `condition.without('CourseUnsubscribed')` ignores the type stream `types/CourseUnsubscribed`.
+- Added `EventStore#commitCondition(selectorOrDcbQuery, matcher, noneMatchAfter)` to build the commit condition of a query at a given position without reading, with types and tags resolved by the store like in `query()`.
+
 ## 1.5.1
 
 - Restore write throughput with `syncInterval` for commits across many streams: all partitions of a storage share one sync run per interval, which syncs them in parallel in the background instead of blocking the process. New files sync their directory in that run instead of immediately, and evicting a file handle no longer syncs it.

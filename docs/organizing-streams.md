@@ -48,7 +48,7 @@ const store = new EventStore('my-store', {
 
 ```javascript
 streamSources: [
-    { path: 'type', nameBuilder: (v) => v },           // typeAccessor: 'type'
+    { path: 'type', nameBuilder: (v) => `types/${v}` }, // typeAccessor: 'type'
     { path: 'tags', nameBuilder: (v) => `tags/${v}` }  // tagsAccessor: 'tags'
 ]
 ```
