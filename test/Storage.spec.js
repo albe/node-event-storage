@@ -7,6 +7,8 @@ import { spawnSync } from 'child_process';
 import { matches } from '../src/utils/metadataUtil.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
+import fsSync from 'fs';
+import spyOnSyncs from './syncSpy.js';
 //import lz4 from 'lz4';
 import { fileURLToPath } from 'url';
 
@@ -96,11 +98,48 @@ describe('Storage', function() {
             storage.open();
 
             storage.write({ foo: 'bar' }, () => {
-                expect(storage.getPartition('').syncCallbacks.length).to.be(0);
+                expect(storage.syncScheduler.callbacks.length).to.be(0);
                 let fileContent = fs.readFileSync('test/data/storage', 'utf8');
                 expect(fileContent).to.contain(JSON.stringify({ foo: 'bar' }));
                 done();
             });
+        });
+
+        it('syncs all partitions written within the interval in one background run', function(done) {
+            storage = createStorage({ syncInterval: 5, partitioner: doc => doc.part });
+            storage.open();
+            storage.write({ part: 'a' });
+            storage.write({ part: 'b' });
+            storage.flush();
+            const synced = spyOnSyncs();
+            const originalFsync = fsSync.fsyncSync;
+            let blocking = 0;
+            fsSync.fsyncSync = (fd) => { blocking++; return originalFsync(fd); };
+            const acknowledged = [];
+            storage.write({ part: 'a' }, () => acknowledged.push('a'));
+            storage.write({ part: 'b' }, () => {
+                acknowledged.push('b');
+                fsSync.fsyncSync = originalFsync;
+                synced.restore();
+                expect(acknowledged).to.eql(['a', 'b']);
+                expect(synced.filter(name => name.includes('storage.')).sort()).to.eql([
+                    storage.getPartition('a').fileName, storage.getPartition('b').fileName
+                ].sort());
+                expect(blocking).to.be(0);
+                done();
+            });
+        });
+
+        it('syncs pending writes before releasing the lock on close', function() {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            let written = false;
+            storage.write({ foo: 'bar' }, () => {
+                written = true;
+                expect(storage.locked).to.be(true);
+            });
+            storage.close();
+            expect(written).to.be(true);
         });
 
         it('throws on an invalid sync interval', function() {

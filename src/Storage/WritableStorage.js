@@ -6,6 +6,7 @@ import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
+import SyncScheduler from '../SyncScheduler.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
@@ -40,7 +41,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
-     * @param {number} [config.syncInterval] Group commit: fsync each partition at most every this many ms and only then invoke write callbacks. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
+     * @param {number} [config.syncInterval] Group commit: fsync every partition written at most this many ms later, in one shared run, and only then invoke write callbacks. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {function(object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
      * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
@@ -61,9 +62,13 @@ class WritableStorage extends ReadableStorage {
         };
         config = Object.assign(defaults, config);
         assert(Number.isInteger(config.syncInterval) && config.syncInterval >= 0, 'syncInterval must be a non-negative integer.');
-        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush, syncInterval: config.syncInterval }, config.indexOptions);
+        // One scheduler for all partitions and indexes, so that the files flushed within an interval share one sync run.
+        const syncScheduler = new SyncScheduler(config);
+        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush, syncInterval: config.syncInterval }, config.indexOptions, { syncScheduler });
+        config.syncScheduler = syncScheduler;
         ensureDirectory(config.dataDirectory);
         super(storageName, config);
+        this.syncScheduler = syncScheduler;
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
@@ -257,9 +262,11 @@ class WritableStorage extends ReadableStorage {
 
     /**
      * @inheritDoc
-     * Unlocks the storage, then delegates to the parent close().
+     * Syncs everything written as configured, unlocks the storage, then delegates to the parent close().
      */
     close() {
+        this.forEachPartition(partition => partition.flush());
+        this.syncScheduler.run();
         if (this.locked) {
             this.unlock();
         }

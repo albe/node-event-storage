@@ -1,5 +1,6 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
+import fsSync from 'fs';
 import FileHandlePool from '../src/FileHandlePool.js';
 import { fileURLToPath } from 'url';
 
@@ -71,6 +72,129 @@ describe('FileHandlePool', function() {
         expect(pool.evict(target, false)).to.be(true);
         expect(closeCalls).to.eql([{ fd, evicted: false }]);
         expect(pool.openCount).to.be(0);
+    });
+
+    describe('sync', function() {
+
+        let fsyncs, opened, closed, originalFsync, originalOpen, originalClose, hold;
+
+        beforeEach(function() {
+            fsyncs = [];
+            opened = [];
+            closed = [];
+            hold = null;
+            originalFsync = fsSync.fsync;
+            originalOpen = fsSync.open;
+            originalClose = fsSync.closeSync;
+            fsSync.fsync = (fd, callback) => {
+                fsyncs.push(fd);
+                const sync = () => originalFsync(fd, callback);
+                if (hold) hold.push(sync); else sync();
+            };
+            fsSync.open = (fileName, flags, callback) => {
+                opened.push(fileName);
+                return originalOpen(fileName, flags, callback);
+            };
+            fsSync.closeSync = fd => {
+                closed.push(fd);
+                return originalClose(fd);
+            };
+        });
+
+        function syncInBackground(target) {
+            return new Promise((resolve, reject) => pool.sync(target, error => error ? reject(error) : resolve()));
+        }
+
+        afterEach(function() {
+            fsSync.fsync = originalFsync;
+            fsSync.open = originalOpen;
+            fsSync.closeSync = originalClose;
+        });
+
+        it('syncs an open file through its pooled descriptor', async function() {
+            pool = new FileHandlePool();
+            const target = createTarget('open');
+            const fd = pool.get(target);
+            await syncInBackground(target);
+            expect(fsyncs).to.eql([fd]);
+            expect(opened).to.eql([]);
+            expect(closed).to.eql([]);
+        });
+
+        it('closes a descriptor evicted during its sync only once the sync is done', async function() {
+            pool = new FileHandlePool();
+            const target = createTarget('evicted');
+            const fd = pool.get(target);
+            hold = [];
+            const syncing = syncInBackground(target);
+            pool.evict(target);
+            expect(pool.has(target)).to.be(false);
+            expect(closed).to.eql([]);
+            // A new descriptor for the same file does not wait for the sync
+            const reopened = pool.get(target);
+            expect(reopened).not.to.be(fd);
+            hold.splice(0).forEach(sync => sync());
+            await syncing;
+            expect(closed).to.eql([fd]);
+        });
+
+        it('syncs a file that is not open through its own descriptor', async function() {
+            pool = new FileHandlePool();
+            const target = createTarget('closed');
+            fs.writeFileSync(target.fileName, 'x');
+            await syncInBackground(target);
+            expect(opened).to.eql([target.fileName]);
+            expect(pool.has(target)).to.be(false);
+        });
+
+        it('skips a file deleted before its sync', async function() {
+            pool = new FileHandlePool();
+            const target = createTarget('deleted');
+            await syncInBackground(target);
+            expect(opened).to.eql([target.fileName]);
+        });
+
+        it('calls back with a failed fsync and still closes an evicted descriptor', async function() {
+            pool = new FileHandlePool();
+            const target = createTarget('failing');
+            const fd = pool.get(target);
+            fsSync.fsync = (fd, callback) => {
+                pool.evict(target);
+                callback(Object.assign(new Error('EIO'), { code: 'EIO' }));
+            };
+            try {
+                await syncInBackground(target);
+                expect().fail('sync() should call back with the error');
+            } catch (error) {
+                expect(error.code).to.be('EIO');
+            }
+            expect(closed).to.eql([fd]);
+        });
+
+        it('syncs an open file without a callback blocking through its pooled descriptor', function() {
+            pool = new FileHandlePool();
+            const target = createTarget('blocking');
+            const fd = pool.get(target);
+            const synced = [];
+            const originalFsyncSync = fsSync.fsyncSync;
+            fsSync.fsyncSync = fd => { synced.push(fd); return originalFsyncSync(fd); };
+            try {
+                pool.sync(target);
+            } finally {
+                fsSync.fsyncSync = originalFsyncSync;
+            }
+            expect(synced).to.eql([fd]);
+        });
+
+        it('syncs a file that is not open without a callback blocking and skips it once deleted', function() {
+            pool = new FileHandlePool();
+            const target = createTarget('blocking-closed');
+            fs.writeFileSync(target.fileName, 'x');
+            pool.sync(target);
+            expect(pool.has(target)).to.be(false);
+            fs.unlinkSync(target.fileName);
+            pool.sync(target);
+        });
     });
 
 });
