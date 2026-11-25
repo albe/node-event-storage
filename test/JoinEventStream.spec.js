@@ -231,7 +231,7 @@ describe('JoinEventStream', function() {
         }
 
         function assertCompleteJoin(store, count) {
-            const rawStream = new JoinEventStream('A-B', ['A', 'B'], store, 1, -1, null, true);
+            const rawStream = new JoinEventStream('A-B', ['types/A', 'types/B'], store, 1, -1, null, true);
             const seqs = [...rawStream].map(chunk => JSON.parse(chunk.toString('utf8')).payload.seq);
             expect(seqs.length).to.be(count);
             expect(seqs.slice().sort((a, b) => a - b)).to.eql(seqs.map((_, i) => i));

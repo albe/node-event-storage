@@ -129,7 +129,7 @@ export class CommitCondition {
     raw: boolean;
     noneMatchAfter: number;
     /** A narrowed condition at the same position that ignores new events in the given streams (e.g. event types). */
-    without(...streams: Array<string | string[]>): CommitCondition;
+    without(...types: Array<string | string[]>): CommitCondition;
 }
 
 export class OptimisticConcurrencyError extends Error {}
@@ -232,6 +232,7 @@ export class EventStore extends EventEmitter {
     getEventStreamForCategory(categoryName: string, minRevision?: number, maxRevision?: number, predicate?: EventPredicate, raw?: boolean): EventStream;
 
     query(selectorOrDcbQuery: StreamSelector | DcbQuery, matcher?: EventMatcher | null, minRevision?: number, raw?: boolean): { stream: EventStream; condition: CommitCondition };
+    commitCondition(selectorOrDcbQuery: StreamSelector | DcbQuery, matcher?: EventMatcher | null, noneMatchAfter?: number): CommitCondition;
     createEventStream(streamName: string, matcher: EventMatcher, reindex?: boolean): EventStream;
 
     commit(

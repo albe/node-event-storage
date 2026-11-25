@@ -10,6 +10,7 @@ import { assert } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 import { normalizeSelector, buildStreamSource, excludeStreams } from "./utils/indexUtil.js";
+import { migrateTypeStreams } from './TypeStreamMigration.js';
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
 const ExpectedVersion = {
@@ -22,6 +23,13 @@ const ExpectedVersion = {
  */
 const DEFAULT_MATCHER_PROPERTIES = ['stream', 'payload.type'];
 const STREAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_]*(?:[\/:@~+=\-#.][A-Za-z0-9_]+)*$/;
+/**
+ * The name of the stream that `typeAccessor` maintains for an event type.
+ * @param {string} type
+ * @returns {string}
+ */
+const typeStreamName = (type) => `types/${type}`;
+
 const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 
@@ -70,21 +78,20 @@ class CommitCondition {
     }
 
     /**
-     * Narrow this condition so that new events in the given streams no longer cause a conflict, e.g. because the
+     * Narrow this condition so that new events of the given types no longer cause a conflict, e.g. because the
      * decision only depends on part of the queried events: a concurrent unsubscribe cannot invalidate a new
      * subscription, even though the decision model counts it.
      *
-     * The streams are treated as empty: they are removed from OR levels, and an AND level containing one of them is
-     * removed as a whole. The condition therefore never gets wider. Event types address their type streams, which
-     * are named like the type when `typeAccessor` is configured.
+     * The type streams (`types/<type>`, maintained by `typeAccessor`) are treated as empty: they are removed from OR
+     * levels, and an AND level containing one of them is removed as a whole. The condition therefore never gets wider.
      *
      * @api
-     * @param {...(string|string[])} streams The stream names (e.g. event types) to ignore in the conflict check.
+     * @param {...(string|string[])} types The event types to ignore in the conflict check.
      * @returns {CommitCondition} A new condition at the same position.
      * @throws {Error} When no stream would be left to check.
      */
-    without(...streams) {
-        const selector = excludeStreams(this.selector, new Set(streams.flat()));
+    without(...types) {
+        const selector = excludeStreams(this.selector, new Set(types.flat().map(typeStreamName)));
         assert(selector !== null, 'without() would leave no streams to check. Commit without a condition instead.');
         const normalized = normalizeSelector(selector);
         return new CommitCondition(Array.isArray(normalized) ? normalized : [normalized], this.matcher, this.noneMatchAfter, this.raw);
@@ -112,7 +119,7 @@ class EventStore extends events.EventEmitter {
      *   element produces its own stream. Non-string and empty values are skipped silently. The resulting
      *   stream names must satisfy the stream-name pattern. Each entry's `path` is automatically registered
      *   in `matcherProperties` for O(1) IndexMatcher routing.
-     * @param {string} [config.typeAccessor] Shorthand for a `streamSources` entry with `nameBuilder = v => v`.
+     * @param {string} [config.typeAccessor] Shorthand for a `streamSources` entry with `nameBuilder = v => \`types/${v}\``.
      *   Dot-notation path to the event type field (e.g. `'type'`). Enables type-based
      *   {@link EventStore#query} selectors and {@link DcbQuery} `types` items.
      * @param {string} [config.tagsAccessor] Shorthand for a `streamSources` entry with
@@ -138,7 +145,7 @@ class EventStore extends events.EventEmitter {
 
         if (config.typeAccessor) {
             assert(typeof config.typeAccessor === 'string', 'typeAccessor must be a dot-notation string path (e.g. \'type\').');
-            this.typeSource = buildStreamSource(config.typeAccessor, (v) => v);
+            this.typeSource = buildStreamSource(config.typeAccessor, typeStreamName);
             this.streamSources.push(this.typeSource);
         }
 
@@ -204,6 +211,7 @@ class EventStore extends events.EventEmitter {
         this.mountStorage(storage, () => {
             if (storageConfig.readOnly !== true) {
                 this.checkUnfinishedCommits();
+                migrateTypeStreams(this);
             }
             this.emit('ready');
         });
@@ -623,6 +631,38 @@ class EventStore extends events.EventEmitter {
      * @throws {Error} if `selector` is not a non-empty array.
      */
     query(selectorOrDcbQuery, matcher = null, minRevision = 1, raw = false) {
+        const selector = this.compileSelector(selectorOrDcbQuery);
+        const condition = new CommitCondition(selector, matcher, this.storage.length, raw);
+        const stream = this.fromStreams('_query_' + Date.now(), selector, minRevision, -1, matcher, raw);
+        return { stream, condition };
+    }
+
+    /**
+     * Build the {@link CommitCondition} for a query at a given position without reading any events, e.g. for a
+     * decision made from events read earlier or by another process. The selector or {@link DcbQuery} is resolved
+     * exactly like in {@link EventStore#query}, so event types and tags address the streams this store maintains
+     * for them.
+     *
+     * @api
+     * @param {SelectorNode[]|object} selectorOrDcbQuery A non-empty selector array, or a {@link DcbQuery} object.
+     * @param {function|object|null} [matcher] Optional matcher that events must also match to conflict.
+     * @param {number} [noneMatchAfter] The global position up to which events were considered. Defaults to the
+     *   current store length.
+     * @returns {CommitCondition} The condition to pass to {@link EventStore#commit}.
+     * @throws {Error} if the selector is empty or `noneMatchAfter` is not a non-negative integer.
+     */
+    commitCondition(selectorOrDcbQuery, matcher = null, noneMatchAfter = this.storage.length) {
+        assert(Number.isInteger(noneMatchAfter) && noneMatchAfter >= 0, 'noneMatchAfter must be a non-negative integer.');
+        return new CommitCondition(this.compileSelector(selectorOrDcbQuery), matcher, noneMatchAfter);
+    }
+
+    /**
+     * Resolve a selector or {@link DcbQuery} to the normalized selector array over this store's streams.
+     * @private
+     * @param {SelectorNode[]|object} selectorOrDcbQuery
+     * @returns {SelectorNode[]}
+     */
+    compileSelector(selectorOrDcbQuery) {
         let selector = selectorOrDcbQuery;
         if (isDcbQuery(selectorOrDcbQuery)) {
             selector = compileDcbQuery(
@@ -632,14 +672,9 @@ class EventStore extends events.EventEmitter {
             );
         }
         assert(Array.isArray(selector) && selector.length > 0, 'Must specify a non-empty array of stream selectors for query.');
-        // Normalize the selector once here; both the condition and the stream use
-        // the normalized form.  Wrap a string result (single-stream reduction) in
-        // an array so fromStreams always receives an array.
+        // Wrap a string result (single-stream reduction) in an array so fromStreams always receives an array.
         const normalized = normalizeSelector(selector);
-        const querySelector = Array.isArray(normalized) ? normalized : [normalized];
-        const condition = new CommitCondition(querySelector, matcher, this.storage.length, raw);
-        const stream = this.fromStreams('_query_' + Date.now(), querySelector, minRevision, -1, matcher, raw);
-        return { stream, condition };
+        return Array.isArray(normalized) ? normalized : [normalized];
     }
 
     /**
@@ -798,6 +833,7 @@ class EventStore extends events.EventEmitter {
         if (!(streamName in this.streams)) {
             return;
         }
+        this.storage.removeSecondaryIndex('stream-' + streamName);
         this.streams[streamName].index.destroy();
         delete this.streams[streamName];
         this.emit('stream-deleted', streamName);
