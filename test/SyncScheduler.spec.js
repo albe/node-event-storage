@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import SyncScheduler from '../src/SyncScheduler.js';
 import FileHandlePool from '../src/FileHandlePool.js';
-import { drained } from './syncSpy.js';
+import { drained, waitFor } from './syncSpy.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -53,12 +53,6 @@ describe('SyncScheduler', function() {
         return new Promise(resolve => setTimeout(resolve, 20));
     }
 
-    async function until(condition) {
-        while (!condition()) {
-            await new Promise(resolve => setTimeout(resolve, 1));
-        }
-    }
-
     it('invokes the callbacks right away without a sync setting', function() {
         const scheduler = new SyncScheduler();
         let acknowledged = false;
@@ -72,7 +66,7 @@ describe('SyncScheduler', function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
         files.forEach((file, i) => scheduler.flushed(file, [() => acknowledged.push(i)]));
-        await until(() => opened.length === files.length);
+        await waitFor(() => opened.length === files.length);
         // All syncs started before any of them finished
         expect(opened).to.eql(files.map(file => file.fileName));
         expect(acknowledged).to.eql([]);
@@ -84,7 +78,7 @@ describe('SyncScheduler', function() {
     it('syncs a new file together with its directory', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         scheduler.created(files[0]);
-        await until(() => opened.length === 2);
+        await waitFor(() => opened.length === 2);
         expect(opened).to.eql([files[0].fileName, dataDirectory]);
         release();
         await drained(scheduler);
@@ -94,13 +88,13 @@ describe('SyncScheduler', function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
-        await until(() => opened.length === 1);
+        await waitFor(() => opened.length === 1);
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         await settle();
         // The first run is still syncing, so the second one has not started yet
         expect(opened).to.eql([files[0].fileName]);
         release();
-        await until(() => opened.length === 2);
+        await waitFor(() => opened.length === 2);
         expect(acknowledged).to.eql([0]);
         expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
@@ -113,7 +107,7 @@ describe('SyncScheduler', function() {
         const acknowledged = [];
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
-        await until(() => opened.length === 2);
+        await waitFor(() => opened.length === 2);
         expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
         await drained(scheduler);
@@ -125,11 +119,11 @@ describe('SyncScheduler', function() {
         const acknowledged = [];
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
         const draining = drained(scheduler);
-        await until(() => opened.length === 1);
+        await waitFor(() => opened.length === 1);
         expect(opened).to.eql([files[0].fileName]);
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         release();
-        await until(() => opened.length === 2);
+        await waitFor(() => opened.length === 2);
         // Writes during the run are drained as well
         expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
@@ -142,7 +136,7 @@ describe('SyncScheduler', function() {
         let acknowledged = false;
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
         failWith = 'ENOENT';
-        await until(() => opened.length === 1);
+        await waitFor(() => opened.length === 1);
         release();
         await drained(scheduler);
         expect(acknowledged).to.be(true);
@@ -154,7 +148,7 @@ describe('SyncScheduler', function() {
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
         const draining = drained(scheduler);
         failWith = 'EIO';
-        await until(() => opened.length === 1);
+        await waitFor(() => opened.length === 1);
         release();
         try {
             await draining;
@@ -170,7 +164,7 @@ describe('SyncScheduler', function() {
         let acknowledged = false;
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
         failWith = 'EIO';
-        await until(() => opened.length === 1);
+        await waitFor(() => opened.length === 1);
         const listeners = process.listeners('uncaughtException');
         process.removeAllListeners('uncaughtException');
         const uncaught = new Promise(resolve => process.once('uncaughtException', resolve));
