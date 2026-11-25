@@ -11,7 +11,7 @@ This page states what node-event-storage guarantees, under which conditions, and
 | `expectedVersion` and DCB conditions cannot be raced by another commit | Always (check and append happen in one synchronous call) | `EventStore.commit()`, `test/EventStore.spec.js` ("query" tests) |
 | Events have one total order | Always, via the global sequence number | primary index, `JoinEventStream` |
 | The writer reads its own writes | `dirtyReads: true` (default) | `test/Partition.spec.js` |
-| Acknowledged commits survive an OS crash or power loss | With `syncInterval` or `syncOnFlush` | `WritablePartition.flush()`, `WritablePartition.sync()` |
+| Acknowledged commits survive an OS crash or power loss | With `syncInterval` or `syncOnFlush` | `WritablePartition.flush()`, `SyncScheduler` |
 | Acknowledged commits survive a process crash | Always (data was handed to the OS) | `stress-test/` |
 | After a crash, the store repairs itself | When the next writer reclaims the lock: automatically if the crashed process is gone on the same machine, or forced with `LOCK_RECLAIM` | `test/Storage.spec.js` ("auto-repairs …"), `stress-test/recovery.js` |
 | No event is ever modified | Always; files are opened in append mode, and repair only truncates the tail after a crash, keeping a copy of the removed bytes in a `.branch` file | `WritablePartition.truncate()` |
@@ -66,7 +66,7 @@ When the `commit()` callback fires depends on the durability setting:
 | `syncInterval: <ms>` | the partition was `fsync`ed, at most `<ms>` after the write | yes | yes, for acknowledged commits | close to the default |
 | `syncOnFlush: true` | the data was `fsync`ed on every flush | yes | yes, for acknowledged commits | lowest |
 
-`syncInterval` is a group commit: all flushes of a partition within the interval share one `fsync`, and their callbacks fire after it. With either option, the directory is also synced after a new partition or index file is created, so a new stream does not disappear after a power loss.
+`syncInterval` is a group commit: all partitions of a storage flushed within the interval are synced together by one run, each with one `fsync`, and the callbacks fire after it. The run syncs the files in parallel in the background, so the process goes on writing meanwhile. With either option, the directory is also synced after a new partition or index file is created (with `syncInterval` in the next run), so a new stream does not disappear after a power loss. Evicting a file handle only flushes it; closing the store syncs everything before it releases the lock.
 
 Index files are flushed with a short delay (100 ms by default) or when their buffer is full, and are only `fsync`ed with `syncOnFlush`. A lagging index after a crash is not data loss: the repair rebuilds missing index entries from the data files.
 

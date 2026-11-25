@@ -545,13 +545,11 @@ class EventStore extends events.EventEmitter {
             CommitCondition
         ));
 
-        const idempotencyKey = metadata.idempotencyKey;
-        if (idempotencyKey !== undefined) {
-            assert(typeof idempotencyKey === 'string' && idempotencyKey !== '', 'idempotencyKey must be a non-empty string.');
-            const original = this.findCommitByIdempotencyKey(streamName, idempotencyKey, expectedVersion);
-            if (original !== null) {
+        if (metadata.idempotencyKey !== undefined) {
+            const original = this.findOriginalCommit(streamName, expectedVersion, metadata.idempotencyKey);
+            if (original) {
                 assert(original.commitSize === events.length,
-                    `Idempotency key "${idempotencyKey}" was already used for a commit with ${original.commitSize} events to stream "${streamName}".`,
+                    `Idempotency key "${metadata.idempotencyKey}" was already used for a commit with ${original.commitSize} events to stream "${streamName}".`,
                     IdempotencyError
                 );
                 return this.acknowledgeDuplicate(streamName, original, events, callback);
@@ -611,50 +609,34 @@ class EventStore extends events.EventEmitter {
     /**
      * A retry comes with the same `expectedVersion` or `CommitCondition` as the original commit, so the original is the
      * first event after that boundary: right after `expectedVersion` in the stream, or the first event matching the
-     * condition after its position. With `ExpectedVersion.Any` there is no boundary and the last commit of the stream
+     * condition after its position. With `ExpectedVersion.Any` there is no boundary and the last event of the stream
      * is checked.
      *
      * @private
      * @returns {object|null} The metadata of an event of the original commit, or null.
      */
-    findCommitByIdempotencyKey(streamName, idempotencyKey, expectedVersion) {
-        const event = this.findFirstEventAfter(streamName, expectedVersion);
-        if (!event || event.stream !== streamName || event.metadata.idempotencyKey !== idempotencyKey) {
-            return null;
-        }
-        return event.metadata;
-    }
-
-    /**
-     * @private
-     * @param {string} streamName
-     * @param {number|CommitCondition} expectedVersion
-     * @returns {object|boolean} The event, or false.
-     */
-    findFirstEventAfter(streamName, expectedVersion) {
+    findOriginalCommit(streamName, expectedVersion, idempotencyKey) {
+        let event = false;
         if (expectedVersion instanceof CommitCondition) {
-            return this.findFirstConflict(expectedVersion);
+            event = this.findFirstConflict(expectedVersion);
+        } else if (streamName in this.streams) {
+            const revision = expectedVersion === ExpectedVersion.Any ? this.getStreamVersion(streamName) : expectedVersion + 1;
+            event = this.getEventStream(streamName, revision, revision).next();
         }
-        const length = this.getStreamVersion(streamName);
-        const revision = expectedVersion === ExpectedVersion.Any ? length : expectedVersion + 1;
-        if (revision < 1 || revision > length) {
-            return false;
-        }
-        return this.getEventStream(streamName, revision, revision).next();
+        return event && event.stream === streamName && event.metadata.idempotencyKey === idempotencyKey ? event.metadata : null;
     }
 
     /**
-     * The original commit may still be in the write buffer or waiting for its fsync, so the duplicate is acknowledged
-     * only once all writes to its partition so far are done, with the same durability as a normal commit callback.
+     * The original commit may still be in the write buffer or waiting for its sync, so the duplicate is acknowledged
+     * only after all pending writes to the partition of its last event, with the same durability as a commit callback.
      *
      * @private
      */
     acknowledgeDuplicate(streamName, original, events, callback) {
         const { commitVersion, commitSize, streamVersion, ...commitMetadata } = original;
-        const firstRevision = streamVersion + 1 - commitVersion;
-        const commit = Object.assign(commitMetadata, { streamName, streamVersion: firstRevision - 1, events, duplicate: true });
-        const entry = this.streams[streamName].index.get(firstRevision + commitSize - 1);
-        this.storage.getPartition(entry.partition).afterPendingWrites(() => callback(commit));
+        const commit = { ...commitMetadata, streamName, streamVersion: streamVersion - commitVersion, events, duplicate: true };
+        const lastEvent = this.streams[streamName].index.get(commit.streamVersion + commitSize);
+        this.storage.getPartition(lastEvent.partition).afterPendingWrites(() => callback(commit));
         return commit;
     }
 

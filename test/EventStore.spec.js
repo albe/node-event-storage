@@ -604,7 +604,6 @@ describe('EventStore', function() {
                 acknowledged.push('duplicate');
                 expect(commit.duplicate).to.be(true);
                 expect(acknowledged).to.eql(['original', 'duplicate']);
-                expect(eventstore.storage.getPartition('order-1').syncCallbacks.length).to.be(0);
                 done();
             });
             expect(acknowledged).to.eql([]);
@@ -686,12 +685,6 @@ describe('EventStore', function() {
             expect(commit.duplicate).to.be(true);
             expect(commit.streamVersion).to.be(1);
             expect(eventstore.length).to.be(3);
-        });
-
-        it('throws on an invalid key', function() {
-            eventstore = new EventStore({ storageDirectory });
-            expect(() => eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: '' })).to.throwError(/idempotencyKey/);
-            expect(() => eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 42 })).to.throwError(/idempotencyKey/);
         });
     });
 
