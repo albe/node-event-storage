@@ -2,6 +2,8 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import fsSync from 'fs';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
+import path from 'path';
+import spyOnSyncs from './syncSpy.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
 import { CHUNK_CAPACITY } from '../src/Index/ReadableIndex.js';
@@ -56,16 +58,47 @@ describe('Index', function() {
         return reader;
     }
 
-    it('syncs the directory when creating a new file with a durability option', function() {
+    it('syncs the directory when creating a new file with syncOnFlush', function() {
         let fsyncCalls = 0;
         const originalFsync = fsSync.fsyncSync;
         fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
         try {
-            index = createIndex('durable.index', { syncInterval: 10 });
+            index = createIndex('durable.index', { syncOnFlush: true });
             index.open();
             expect(fsyncCalls).to.be(1);
         } finally {
             fsSync.fsyncSync = originalFsync;
+        }
+    });
+
+    it('syncs the directory when creating a new file in the next run with syncInterval', function(done) {
+        const synced = spyOnSyncs();
+        index = createIndex('durable.index', { syncInterval: 5 });
+        index.open();
+        expect(synced).to.eql([]);
+        setTimeout(() => {
+            synced.restore();
+            expect(synced).to.eql([path.dirname(index.fileName)]);
+            done();
+        }, 30);
+    });
+
+    it('does not sync on a pool eviction, but on close', function() {
+        let fsyncCalls = 0;
+        const originalFdatasync = fsSync.fdatasyncSync;
+        fsSync.fdatasyncSync = (fd) => { fsyncCalls++; return originalFdatasync(fd); };
+        try {
+            const fileHandlePool = new FileHandlePool(1);
+            index = createIndex('evicted.index', { fileHandlePool });
+            index.add(new IndexEntry(1, 0));
+            const other = createIndex('other.index', { fileHandlePool });
+            other.add(new IndexEntry(1, 0));
+            other.flush();
+            expect(fsyncCalls).to.be(0);
+            other.close();
+            expect(fsyncCalls).to.be(1);
+        } finally {
+            fsSync.fdatasyncSync = originalFdatasync;
         }
     });
 

@@ -4,6 +4,8 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
+- Restore write throughput with `syncInterval` for commits across many streams: all partitions of a storage share one sync run per interval, which syncs them in parallel in the background instead of blocking the process. New files sync their directory in that run instead of immediately, and evicting a file handle no longer syncs it.
+- Fix the callbacks of large (unbuffered) writes being invoked before the write was synced, and `close()` releasing the lock before the last sync.
 - `commit()` returns the commit object, so its position in the log is known before the commit callback confirms the write.
 - Fix `fromStreams()`, `query()` and category streams returning events backwards when reading from a position beyond the end of the store, e.g. the last event for `query(selector, null, length + 1)`. A join that starts outside the store is now empty, like a single stream; an upper bound beyond the end still reads to the end.
 - Fix single streams returning no events when the upper bound lies beyond the end of the stream, e.g. `getEventStream(name, 2, 100)`. They now read to the end, like a join.

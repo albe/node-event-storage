@@ -39,7 +39,7 @@ const eventstore = new EventStore('my-store', {
 | `writeBufferSize` | `number` | `16384` | Write buffer size in bytes. |
 | `maxWriteBufferDocuments` | `number` | `0` (unlimited) | Flush after this many buffered documents. |
 | `syncOnFlush` | `boolean` | `false` | Call `fsync` on every flush for strict durability. |
-| `syncInterval` | `number` | `0` (off) | Group commit: call `fsync` on each partition at most every this many milliseconds and only then invoke the commit callbacks. Ignored when `syncOnFlush` is set. See [Durability](guarantees.md#durability). |
+| `syncInterval` | `number` | `0` (off) | Group commit: call `fsync` on every partition written at most this many milliseconds later, in one shared run, and only then invoke the commit callbacks. Ignored when `syncOnFlush` is set. See [Durability](guarantees.md#durability). |
 | `dirtyReads` | `boolean` | `true` | Let the writer read events that are still in the write buffer. |
 | `lock` | `LOCK_AUTO\|LOCK_THROW\|LOCK_RECLAIM` | `LOCK_AUTO` | How to handle an existing lock on open: reclaim it only if its owner process is gone, never, or always. See [Operations](operations.md#crash-recovery). |
 | `hmacSecret` | `string` | `''` | Secret used to verify persisted function matchers. See [Security](customization.md#security). |
