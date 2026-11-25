@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import fsSync from 'fs';
 import path from 'path';
-import EventStoreBase, { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
+import EventStoreBase, { ExpectedVersion, OptimisticConcurrencyError, IdempotencyError, CommitCondition, LOCK_RECLAIM } from '../src/EventStore.js';
 import Consumer from '../src/Consumer.js';
 import { fileURLToPath } from 'url';
 
@@ -534,6 +534,169 @@ describe('EventStore', function() {
                 expect(() => eventstore.commit('my-foo-bar', [{ foo: 'baz', baz: 'quux' }], 1)).to.throwError(/events do not match/);
                 done();
             });
+        });
+    });
+
+    describe('commit with idempotencyKey', function() {
+
+        it('writes a commit with a new key normally', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }, { a: 2 }], ExpectedVersion.EmptyStream, { idempotencyKey: 'k1' }, (commit) => {
+                expect(commit.duplicate).to.be(undefined);
+                expect(eventstore.length).to.be(2);
+                const metadata = [];
+                eventstore.getEventStream('order-1').forEach((payload, md) => metadata.push(md.idempotencyKey));
+                expect(metadata).to.eql(['k1', 'k1']);
+                done();
+            });
+        });
+
+        it('does not write a retry with the same expectedVersion twice', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }, { a: 2 }], ExpectedVersion.EmptyStream, { idempotencyKey: 'k1' }, (original) => {
+                eventstore.commit('order-1', { b: 1 }, 2, { idempotencyKey: 'k2' }, () => {
+                    let emitted = 0;
+                    eventstore.on('commit', () => emitted++);
+                    eventstore.commit('order-1', [{ a: 1 }, { a: 2 }], ExpectedVersion.EmptyStream, { idempotencyKey: 'k1' }, (commit) => {
+                        expect(commit.duplicate).to.be(true);
+                        expect(commit.commitId).to.be(original.commitId);
+                        expect(commit.committedAt).to.be(original.committedAt);
+                        expect(commit.streamName).to.be('order-1');
+                        expect(commit.streamVersion).to.be(0);
+                        expect(commit.idempotencyKey).to.be('k1');
+                        expect(commit.events).to.eql([{ a: 1 }, { a: 2 }]);
+                        expect(eventstore.length).to.be(3);
+                        expect(emitted).to.be(0);
+                        done();
+                    });
+                });
+            });
+        });
+
+        it('recognizes a retry of the last commit with ExpectedVersion.Any after a restart', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, () => {
+                eventstore.close();
+                eventstore = new EventStore({ storageDirectory });
+                eventstore.on('ready', () => {
+                    eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, (commit) => {
+                        expect(commit.duplicate).to.be(true);
+                        expect(eventstore.length).to.be(1);
+                        done();
+                    });
+                });
+            });
+        });
+
+        it('writes again when other commits came in between with ExpectedVersion.Any', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
+            eventstore.commit('order-1', [{ b: 1 }], { idempotencyKey: 'k2' });
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
+            expect(eventstore.length).to.be(3);
+        });
+
+        it('acknowledges a duplicate only after the original commit is synced', function(done) {
+            eventstore = new EventStore({ storageDirectory, storageConfig: { syncInterval: 50 } });
+            const acknowledged = [];
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, () => acknowledged.push('original'));
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, (commit) => {
+                acknowledged.push('duplicate');
+                expect(commit.duplicate).to.be(true);
+                expect(acknowledged).to.eql(['original', 'duplicate']);
+                done();
+            });
+            expect(acknowledged).to.eql([]);
+        });
+
+        it('acknowledges a duplicate of an already durable commit on the next tick', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, () => {
+                let acknowledged = false;
+                eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }, () => {
+                    acknowledged = true;
+                    done();
+                });
+                expect(acknowledged).to.be(false);
+            });
+        });
+
+        it('only checks the stream the commit goes to', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' });
+            eventstore.commit('order-2', [{ a: 1 }], { idempotencyKey: 'k1' });
+            expect(eventstore.length).to.be(2);
+        });
+
+        it('still fails the concurrency check for a different key', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }], ExpectedVersion.EmptyStream, { idempotencyKey: 'k1' });
+            expect(() => eventstore.commit('order-1', [{ a: 1 }], ExpectedVersion.EmptyStream, { idempotencyKey: 'k2' }))
+                .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
+        });
+
+        it('throws IdempotencyError when the key is reused for a different number of events', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }, { a: 2 }], { idempotencyKey: 'k1' });
+            expect(() => eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: 'k1' }))
+                .to.throwError(e => expect(e).to.be.an(IdempotencyError));
+            expect(eventstore.length).to.be(2);
+        });
+
+        it('recognizes a retry with a CommitCondition', function(done) {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+            const { condition } = eventstore.query(['Ordered']);
+            eventstore.commit('order-1', [{ type: 'Ordered' }], condition, { idempotencyKey: 'k1' }, () => {
+                eventstore.commit('order-1', [{ type: 'Ordered' }], condition, { idempotencyKey: 'k1' }, (commit) => {
+                    expect(commit.duplicate).to.be(true);
+                    expect(eventstore.length).to.be(1);
+                    done();
+                });
+            });
+        });
+
+        it('recognizes a retry with a CommitCondition that does not select the committed events', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+            eventstore.commit('order-1', [{ type: 'Placed' }]);
+            const { condition } = eventstore.query(['Cancelled']);
+            eventstore.commit('order-2', [{ type: 'Shipped' }]);
+            const original = eventstore.commit('order-1', [{ type: 'Shipped' }], condition, { idempotencyKey: 'k1' });
+            const commit = eventstore.commit('order-1', [{ type: 'Shipped' }], condition, { idempotencyKey: 'k1' });
+            expect(commit.duplicate).to.be(true);
+            expect(commit.commitId).to.be(original.commitId);
+            expect(eventstore.length).to.be(3);
+        });
+
+        it('recognizes a retry with a CommitCondition after other commits came in between', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+            const { condition } = eventstore.query(['Ordered']);
+            const original = eventstore.commit('order-1', [{ type: 'Ordered' }, { type: 'Ordered' }], condition, { idempotencyKey: 'k1' });
+            eventstore.commit('order-1', [{ type: 'Noted' }]);
+            eventstore.commit('order-2', [{ type: 'Noted' }]);
+            const commit = eventstore.commit('order-1', [{ type: 'Ordered' }, { type: 'Ordered' }], condition, { idempotencyKey: 'k1' });
+            expect(commit.duplicate).to.be(true);
+            expect(commit.commitId).to.be(original.commitId);
+            expect(commit.streamVersion).to.be(0);
+            expect(eventstore.length).to.be(4);
+        });
+
+        it('still fails a CommitCondition when the key was used in another stream', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+            const { condition } = eventstore.query(['Ordered']);
+            eventstore.commit('order-2', [{ type: 'Ordered' }], condition, { idempotencyKey: 'k1' });
+            expect(() => eventstore.commit('order-1', [{ type: 'Ordered' }], condition, { idempotencyKey: 'k1' }))
+                .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
+        });
+
+        it('recognizes a retry with an expectedVersion after other commits came in between', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }]);
+            eventstore.commit('order-1', [{ a: 2 }], 1, { idempotencyKey: 'k1' });
+            eventstore.commit('order-1', [{ b: 1 }], 2);
+            const commit = eventstore.commit('order-1', [{ a: 2 }], 1, { idempotencyKey: 'k1' });
+            expect(commit.duplicate).to.be(true);
+            expect(commit.streamVersion).to.be(1);
+            expect(eventstore.length).to.be(3);
         });
     });
 

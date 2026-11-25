@@ -167,6 +167,20 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
+     * Invoke the callback once everything written so far is as durable as configured, just like the callback of a write.
+     *
+     * @api
+     * @param {function} callback
+     */
+    afterPendingWrites(callback) {
+        if (this.writeBufferCursor > 0) {
+            this.flushCallbacks.push(callback);
+        } else {
+            this.syncScheduler.flushed(this, [() => process.nextTick(callback)]);
+        }
+    }
+
+    /**
      * Flush the write buffer and fsync the file, then invoke all callbacks waiting for durability, including those of
      * other files of the same storage.
      *

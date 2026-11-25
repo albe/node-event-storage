@@ -360,6 +360,27 @@ describe('Partition', function() {
             });
         });
 
+        it('invokes afterPendingWrites callbacks in order with the pending writes', function(done) {
+            partition.close();
+            partition = new Partition('.part', { dataDirectory, syncInterval: 10 });
+            partition.open();
+            const order = [];
+            partition.write('one', () => order.push('write'));
+            partition.afterPendingWrites(() => order.push('buffered'));
+            partition.flush();
+            partition.afterPendingWrites(() => order.push('syncing'));
+            expect(order).to.eql([]);
+            setTimeout(() => {
+                expect(order).to.eql(['write', 'buffered', 'syncing']);
+                partition.afterPendingWrites(() => {
+                    order.push('idle');
+                    expect(order).to.eql(['write', 'buffered', 'syncing', 'idle']);
+                    done();
+                });
+                expect(order.length).to.be(3);
+            }, 30);
+        });
+
         it('is ignored when syncOnFlush is set', function() {
             partition.close();
             partition = new Partition('.part', { dataDirectory, syncInterval: 1000, syncOnFlush: true });

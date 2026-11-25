@@ -2,6 +2,10 @@
 
 Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation for a released version is available through the version selector on Read the Docs.
 
+## Unreleased
+
+- Added idempotent commits: a retry with the same `idempotencyKey` in the commit metadata is acknowledged with the original commit (`duplicate: true`) instead of being written twice. Reusing a key for a different number of events throws the new `IdempotencyError`.
+
 ## 1.5.1
 
 - Restore write throughput with `syncInterval` for commits across many streams: all partitions of a storage share one sync run per interval, which syncs them in parallel in the background instead of blocking the process. New files sync their directory in that run instead of immediately, and evicting a file handle no longer syncs it.

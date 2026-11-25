@@ -60,6 +60,37 @@ try {
 | `ExpectedVersion.EmptyStream` (`0`) | Stream must not exist yet. |
 | Positive integer | Stream must be at exactly that version. |
 
+### Idempotent Commits
+
+A client that does not get an answer for a commit (a timeout, a dropped HTTP connection) can not know whether the events were written. Retrying blindly may write them twice, and retrying with the same `expectedVersion` fails with an `OptimisticConcurrencyError` although the first attempt succeeded.
+
+Give each logical commit a unique `idempotencyKey` in the commit metadata and send the same key on every retry:
+
+```javascript
+import { IdempotencyError } from 'event-storage';
+
+const idempotencyKey = request.headers['idempotency-key'] ?? crypto.randomUUID();
+eventstore.commit('order-42', newEvents, expectedVersion, { idempotencyKey }, (commit) => {
+    if (commit.duplicate) {
+        // The events were already written by an earlier attempt, nothing was written now.
+    }
+});
+```
+
+If a commit with the same key already exists in the stream, nothing is written and the callback receives the original commit (with its original `commitId` and `committedAt`) plus `duplicate: true`. Like a normal commit callback, it fires only once the original commit is on disk with the configured durability (see `syncInterval` / `syncOnFlush`). No `'commit'` event is emitted for it. Reusing a key for a commit with a different number of events throws an `IdempotencyError`.
+
+The key is stored in the metadata of every event of the commit. A retry comes with the same `expectedVersion` or `CommitCondition` as the first attempt, so the original commit is the first event of the stream after that boundary. The store checks that event, which also works after a restart and when other commits came in between:
+
+| Retried with | Checked event |
+|--------------|---------------|
+| a stream version | the event right after `expectedVersion` in the stream |
+| a `CommitCondition` | the first event of the stream after the condition's position in the store, whatever the condition selects |
+| `ExpectedVersion.Any` | the last event of the stream |
+
+A retry with `ExpectedVersion.Any` after other commits were written to the stream in between is not recognized and writes the events again. The same holds for a `CommitCondition` when another commit to the same stream that the condition does not select came before the original. Use a stream version where that matters.
+
+A key is only checked against the stream it is committed to. Keys are compared by value only, the events themselves are not compared.
+
 ## Reading Streams
 
 ### Basic Iteration

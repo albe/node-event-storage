@@ -26,6 +26,8 @@ const STORAGE_HOOK_EVENTS = new Set(['preCommit', 'preRead']);
 
 
 class OptimisticConcurrencyError extends Error {}
+class IdempotencyError extends Error {}
+
 
 /**
  * @typedef {string | SelectorNode[]} SelectorNode
@@ -515,10 +517,14 @@ class EventStore extends events.EventEmitter {
      * @param {number|CommitCondition} [expectedVersion] One of the `ExpectedVersion` constants, a positive
      *   stream version number, or a {@link CommitCondition} obtained from {@link EventStore#query}.
      * @param {object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
+     *   Set `metadata.idempotencyKey` to a unique string per logical commit to make retries safe: if a commit with the
+     *   same key was already written to this stream, nothing is written again and the callback receives the original
+     *   commit with `duplicate: true`.
      * @param {function} [callback] A function that will be executed when all events have been committed.
      * @returns {object} The commit, which already holds its position in the log. The events are not durable before the callback fires.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version, or if a
      *   {@link CommitCondition} was provided and conflicting events have been committed since it was obtained.
+     * @throws {IdempotencyError} if the `idempotencyKey` was already used for a commit with a different number of events.
      */
     commit(streamName, events, expectedVersion = ExpectedVersion.Any, metadata = {}, callback = null) {
         assert(!(this.storage instanceof ReadOnlyStorage), 'The storage was opened in read-only mode. Can not commit to it.');
@@ -533,6 +539,17 @@ class EventStore extends events.EventEmitter {
             ExpectedVersion.Any,
             CommitCondition
         ));
+
+        if (metadata.idempotencyKey !== undefined) {
+            const original = this.findOriginalCommit(streamName, expectedVersion, metadata.idempotencyKey);
+            if (original) {
+                assert(original.commitSize === events.length,
+                    `Idempotency key "${metadata.idempotencyKey}" was already used for a commit with ${original.commitSize} events to stream "${streamName}".`,
+                    IdempotencyError
+                );
+                return this.acknowledgeDuplicate(streamName, original, events, callback);
+            }
+        }
 
         // Perform DCB-style concurrency check when a CommitCondition is provided.
         if (expectedVersion instanceof CommitCondition) {
@@ -581,6 +598,43 @@ class EventStore extends events.EventEmitter {
             commit.events.push(event);
             this.storage.write(storedEvent, commitVersion !== events.length ? undefined : commitCallback);
         }
+        return commit;
+    }
+
+    /**
+     * A retry comes with the same `expectedVersion` or `CommitCondition` as the original commit, so the original is the
+     * first event of the stream after that boundary: right after `expectedVersion`, or after the condition's position in
+     * the store, whatever the condition selects. With `ExpectedVersion.Any` there is no boundary and the last event of
+     * the stream is checked.
+     *
+     * @private
+     * @returns {object|null} The metadata of an event of the original commit, or null.
+     */
+    findOriginalCommit(streamName, expectedVersion, idempotencyKey) {
+        if (!(streamName in this.streams)) {
+            return null;
+        }
+        let event;
+        if (expectedVersion instanceof CommitCondition) {
+            event = this.fromStreams('_idempotency_' + Date.now(), [streamName], expectedVersion.noneMatchAfter + 1).next();
+        } else {
+            const revision = expectedVersion === ExpectedVersion.Any ? this.getStreamVersion(streamName) : expectedVersion + 1;
+            event = this.getEventStream(streamName, revision, revision).next();
+        }
+        return event && event.metadata.idempotencyKey === idempotencyKey ? event.metadata : null;
+    }
+
+    /**
+     * The original commit may still be in the write buffer or waiting for its sync, so the duplicate is acknowledged
+     * only after all pending writes to the partition of its last event, with the same durability as a commit callback.
+     *
+     * @private
+     */
+    acknowledgeDuplicate(streamName, original, events, callback) {
+        const { commitVersion, commitSize, streamVersion, ...commitMetadata } = original;
+        const commit = { ...commitMetadata, streamName, streamVersion: streamVersion - commitVersion, events, duplicate: true };
+        const lastEvent = this.streams[streamName].index.get(commit.streamVersion + commitSize);
+        this.storage.getPartition(lastEvent.partition).afterPendingWrites(() => callback(commit));
         return commit;
     }
 
@@ -923,4 +977,4 @@ EventStore.Storage = Storage;
 EventStore.Index = Index;
 
 export default EventStore;
-export { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO };
+export { ExpectedVersion, OptimisticConcurrencyError, IdempotencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO };

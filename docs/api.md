@@ -66,13 +66,15 @@ Append one or more events to a stream.
 | `streamName` | `string` | — | Name of the target stream. |
 | `events` | `object\|Array<object>` | — | Event or array of events to commit. |
 | `expectedVersion` | `number` | `ExpectedVersion.Any` | Optimistic concurrency version check. Use `ExpectedVersion.Any` (`-1`) to skip, `ExpectedVersion.EmptyStream` (`0`) for a new stream, or any positive integer for an exact version match. |
-| `metadata` | `object` | `{}` | Additional metadata merged into every event's metadata envelope. |
+| `metadata` | `object` | `{}` | Additional metadata merged into every event's metadata envelope. Set `metadata.idempotencyKey` to make retries safe, see [Idempotent Commits](reading-writing.md#idempotent-commits). |
 | `expectedVersion` | `number\|CommitCondition` | `ExpectedVersion.Any` | Either a stream version (see above) or the `condition` returned by `query()` for a DCB-style check. |
 | `callback` | `function(commit)` | — | Called with the `commit` object after all events have been flushed to disk. |
 
 Returns the `commit` object as soon as the events are in the write buffer. It already holds its position in the log (`commitId` is the number of events before it), so a caller can hand it on before the events are durable. The callback receives the same object once the events are acknowledged as described in [Guarantees](guarantees.md).
 
 Throws `OptimisticConcurrencyError` synchronously when the stream is not at `expectedVersion`, or when events matching the `CommitCondition` were appended since the query. The callback is not called with an error.
+
+When `metadata.idempotencyKey` matches a commit that was already written to the stream, nothing is written and the callback receives the original commit with `duplicate: true`. Throws `IdempotencyError` when the key was used for a commit with a different number of events.
 
 ---
 
@@ -332,6 +334,7 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `ExpectedVersion.Any` | `-1` | Skip version check. |
 | `ExpectedVersion.EmptyStream` | `0` | Assert the stream is new. |
 | `OptimisticConcurrencyError` | `Error` subclass | Thrown when an expected-version or `CommitCondition` check fails. |
+| `IdempotencyError` | class | Thrown by `commit()` when an `idempotencyKey` is reused for a different commit. |
 | `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. `condition.without(...streams)` returns a narrowed condition at the same position that ignores new events in those streams (event types with `typeAccessor`). |
 | `LOCK_AUTO` | constant | Reclaim the storage lock only if the process holding it is gone, otherwise throw (default). |
 | `LOCK_THROW` | constant | Always throw if the storage lock is held. |
