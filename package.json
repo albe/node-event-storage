@@ -44,6 +44,7 @@
     "src/Partition*.js",
     "src/Storage*.js",
     "src/FileHandlePool.js",
+    "src/SyncScheduler.js",
     "src/Watcher*.js",
     "src/Clock*.js",
     "src/Index/*.js",
