@@ -40,7 +40,7 @@ function compareTermBuffers(a, b) {
 }
 
 /**
- * An inverted index that maps terms (e.g. `type:OrderPlaced`, `tag:course/1`) to the ascending list of global
+ * An inverted index that maps terms (e.g. `types/OrderPlaced`, `tags/course/1`) to the ascending list of global
  * positions of the documents carrying them. All terms share a few immutable segment files plus an in-memory
  * memtable, instead of one file per term.
  *

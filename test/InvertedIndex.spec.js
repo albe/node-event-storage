@@ -63,21 +63,21 @@ describe('InvertedIndex', function() {
 
     it('returns positions per term from the memtable', function() {
         createIndex();
-        index.add(1, ['type:A', 'tag:x']);
-        index.add(2, ['type:B']);
-        index.add(5, ['type:A']);
-        expect(get('type:A')).to.eql([1, 5]);
-        expect(get('type:A', 2)).to.eql([5]);
+        index.add(1, ['types/A', 'tags/x']);
+        index.add(2, ['types/B']);
+        index.add(5, ['types/A']);
+        expect(get('types/A')).to.eql([1, 5]);
+        expect(get('types/A', 2)).to.eql([5]);
         expect(get('unknown')).to.eql([]);
-        expect(index.count('type:A')).to.be(2);
-        expect(index.lastPosition('type:A')).to.be(5);
+        expect(index.count('types/A')).to.be(2);
+        expect(index.lastPosition('types/A')).to.be(5);
         expect(index.length).to.be(5);
     });
 
     it('ignores a term repeated for the same position', function() {
         createIndex();
-        index.add(1, ['tag:x', 'tag:x']);
-        expect(get('tag:x')).to.eql([1]);
+        index.add(1, ['tags/x', 'tags/x']);
+        expect(get('tags/x')).to.eql([1]);
     });
 
     it('rejects positions that are not ascending', function() {
@@ -187,13 +187,13 @@ describe('InvertedIndex', function() {
         const expected = { a: [], b: [] };
         for (let position = 1; position <= 200; position++) {
             const term = position % 3 ? 'a' : 'b';
-            index.add(position, [term, 'tag:' + (position % 10)]);
+            index.add(position, [term, 'tags/' + (position % 10)]);
             expected[term].push(position);
         }
         expect(index.stats().segments).to.be.below(4);
         expect(get('a')).to.eql(expected.a);
         expect(get('b')).to.eql(expected.b);
-        expect(get('tag:7').length).to.be(20);
+        expect(get('tags/7').length).to.be(20);
         reopen({ flushThreshold: 5, mergeFactor: 3 });
         expect(get('a')).to.eql(expected.a);
         expect(segmentFiles().length).to.be(index.stats().segments);
@@ -203,22 +203,22 @@ describe('InvertedIndex', function() {
     it('evaluates the selector algebra with OR at even and AND at odd depth', function() {
         createIndex({ flushThreshold: 7 });
         const events = [
-            ['type:CourseDefined', 'tag:course/1'],
-            ['type:StudentRegistered', 'tag:student/1'],
-            ['type:StudentSubscribed', 'tag:course/1', 'tag:student/1'],
-            ['type:CourseDefined', 'tag:course/2'],
-            ['type:StudentSubscribed', 'tag:course/2', 'tag:student/1'],
-            ['type:CourseCapacityChanged', 'tag:course/1']
+            ['types/CourseDefined', 'tags/course/1'],
+            ['types/StudentRegistered', 'tags/student/1'],
+            ['types/StudentSubscribed', 'tags/course/1', 'tags/student/1'],
+            ['types/CourseDefined', 'tags/course/2'],
+            ['types/StudentSubscribed', 'tags/course/2', 'tags/student/1'],
+            ['types/CourseCapacityChanged', 'tags/course/1']
         ];
         events.forEach((terms, i) => index.add(i + 1, terms));
 
-        expect(query(['type:CourseDefined', 'type:StudentRegistered'])).to.eql([1, 2, 4]);
-        expect(query([['tag:course/1', 'tag:student/1']])).to.eql([3]);
+        expect(query(['types/CourseDefined', 'types/StudentRegistered'])).to.eql([1, 2, 4]);
+        expect(query([['tags/course/1', 'tags/student/1']])).to.eql([3]);
         expect(query([
-            ['tag:course/1', ['type:CourseDefined', 'type:CourseCapacityChanged']],
-            ['tag:student/1', 'type:StudentSubscribed']
+            ['tags/course/1', ['types/CourseDefined', 'types/CourseCapacityChanged']],
+            ['tags/student/1', 'types/StudentSubscribed']
         ])).to.eql([1, 3, 5, 6]);
-        expect(query('tag:course/2', 5)).to.eql([5]);
+        expect(query('tags/course/2', 5)).to.eql([5]);
     });
 
     it('skips ahead when next() is called with a target position', function() {
@@ -237,16 +237,16 @@ describe('InvertedIndex', function() {
 
     it('checks DCB conditions only against positions after the given one', function() {
         createIndex({ flushThreshold: 3 });
-        index.add(1, ['type:A', 'tag:x']);
-        index.add(2, ['type:B', 'tag:y']);
-        const selector = [['type:A', 'tag:x']];
+        index.add(1, ['types/A', 'tags/x']);
+        index.add(2, ['types/B', 'tags/y']);
+        const selector = [['types/A', 'tags/x']];
         expect(index.hasMatchAfter(selector, 2)).to.be(false);
-        index.add(3, ['type:A', 'tag:y']);
+        index.add(3, ['types/A', 'tags/y']);
         expect(index.hasMatchAfter(selector, 2)).to.be(false);
-        index.add(4, ['type:A', 'tag:x']);
+        index.add(4, ['types/A', 'tags/x']);
         expect(index.hasMatchAfter(selector, 2)).to.be(true);
         expect(index.hasMatchAfter(selector, 4)).to.be(false);
-        expect(index.hasMatchAfter('tag:y', 1)).to.be(true);
+        expect(index.hasMatchAfter('tags/y', 1)).to.be(true);
     });
 
     it('matches a brute-force evaluation on random data across segments, merges and memtable', function() {
@@ -257,8 +257,8 @@ describe('InvertedIndex', function() {
         let position = 0;
         for (let i = 0; i < 3000; i++) {
             position += 1 + random(3);
-            const terms = ['type:' + random(4), 'tag:a/' + random(20)];
-            if (random(2)) terms.push('tag:b/' + random(50));
+            const terms = ['types/' + random(4), 'tags/a/' + random(20)];
+            if (random(2)) terms.push('tags/b/' + random(50));
             index.add(position, terms);
             docs.push({ position, terms: new Set(terms) });
         }
@@ -266,10 +266,10 @@ describe('InvertedIndex', function() {
             ? terms.has(node)
             : (depth % 2 === 0 ? node.some(c => matches(c, terms, depth + 1)) : node.every(c => matches(c, terms, depth + 1)));
         const selectors = [
-            ['type:1'],
-            [['tag:a/3', 'type:2']],
-            [['tag:a/3', ['type:1', 'type:2']], ['tag:b/7', 'type:0'], 'tag:a/19'],
-            [['tag:a/1', 'tag:b/1', 'type:3']]
+            ['types/1'],
+            [['tags/a/3', 'types/2']],
+            [['tags/a/3', ['types/1', 'types/2']], ['tags/b/7', 'types/0'], 'tags/a/19'],
+            [['tags/a/1', 'tags/b/1', 'types/3']]
         ];
         for (const selector of selectors) {
             for (const from of [1, 500, 4000]) {
@@ -282,24 +282,24 @@ describe('InvertedIndex', function() {
 
     it('lists terms by prefix across segments and memtable', function() {
         createIndex({ flushThreshold: 2 });
-        index.add(1, ['tag:course/1', 'tag:student/1']);
-        index.add(2, ['tag:course/2']);
-        index.add(3, ['tag:course/3', 'type:X']);
-        expect(index.terms('tag:course/')).to.eql(['tag:course/1', 'tag:course/2', 'tag:course/3']);
-        expect(index.terms('tag:z')).to.eql([]);
+        index.add(1, ['tags/course/1', 'tags/student/1']);
+        index.add(2, ['tags/course/2']);
+        index.add(3, ['tags/course/3', 'types/X']);
+        expect(index.terms('tags/course/')).to.eql(['tags/course/1', 'tags/course/2', 'tags/course/3']);
+        expect(index.terms('tags/z')).to.eql([]);
         expect(index.terms().length).to.be(5);
     });
 
     it('handles many terms across dictionary blocks, including non-ASCII terms', function() {
         createIndex();
         const terms = [];
-        for (let i = 0; i < 500; i++) terms.push('tag:entity/' + i);
-        terms.push('tag:straße', 'tag:日本', 'tag:😀');
+        for (let i = 0; i < 500; i++) terms.push('tags/entity/' + i);
+        terms.push('tags/straße', 'tags/日本', 'tags/😀');
         terms.forEach((term, i) => index.add(i + 1, [term]));
         reopen();
         terms.forEach((term, i) => expect(get(term)).to.eql([i + 1]));
-        expect(get('tag:entity/5000')).to.eql([]);
-        expect(index.terms('tag:entity/49').length).to.be(11);
+        expect(get('tags/entity/5000')).to.eql([]);
+        expect(index.terms('tags/entity/49').length).to.be(11);
     });
 
     it('detects a corrupted segment', function() {

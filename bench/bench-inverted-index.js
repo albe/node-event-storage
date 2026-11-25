@@ -17,8 +17,8 @@ import { resolveSelector } from '../src/utils/indexUtil.js';
 const __filename = fileURLToPath(import.meta.url);
 const dataRoot = path.join(path.dirname(__filename), 'data', 'inverted-bench');
 
-const COURSE_TYPES = ['type:CourseDefined', 'type:CourseCapacityChanged', 'type:StudentSubscribedToCourse', 'type:StudentUnsubscribed'];
-const STUDENT_TYPES = ['type:StudentRegistered', 'type:StudentSubscribedToCourse', 'type:StudentUnsubscribed'];
+const COURSE_TYPES = ['types/CourseDefined', 'types/CourseCapacityChanged', 'types/StudentSubscribedToCourse', 'types/StudentUnsubscribed'];
+const STUDENT_TYPES = ['types/StudentRegistered', 'types/StudentSubscribedToCourse', 'types/StudentUnsubscribed'];
 const QUERIES = 2000;
 const MAX_OPEN_INDEXES = 1024;
 
@@ -38,13 +38,13 @@ function* generateEvents(count, courses, students) {
     const random = createRandom(7);
     for (let position = 1; position <= count; position++) {
         const r = random(100);
-        const course = 'tag:course/' + random(courses);
-        const student = 'tag:student/' + random(students);
-        if (r < 5) yield ['type:CourseDefined', course];
-        else if (r < 10) yield ['type:CourseCapacityChanged', course];
-        else if (r < 25) yield ['type:StudentRegistered', student];
-        else if (r < 90) yield ['type:StudentSubscribedToCourse', course, student];
-        else yield ['type:StudentUnsubscribed', course, student];
+        const course = 'tags/course/' + random(courses);
+        const student = 'tags/student/' + random(students);
+        if (r < 5) yield ['types/CourseDefined', course];
+        else if (r < 10) yield ['types/CourseCapacityChanged', course];
+        else if (r < 25) yield ['types/StudentRegistered', student];
+        else if (r < 90) yield ['types/StudentSubscribedToCourse', course, student];
+        else yield ['types/StudentUnsubscribed', course, student];
     }
 }
 
@@ -53,8 +53,8 @@ function decisionSelectors(courses, students) {
     const selectors = [];
     for (let i = 0; i < QUERIES; i++) {
         selectors.push([
-            ['tag:course/' + random(courses), COURSE_TYPES],
-            ['tag:student/' + random(students), STUDENT_TYPES]
+            ['tags/course/' + random(courses), COURSE_TYPES],
+            ['tags/student/' + random(students), STUDENT_TYPES]
         ]);
     }
     return selectors;
