@@ -9,6 +9,7 @@ import { ensureDirectory, resolvePath } from '../utils/fsUtil.js';
 const MANIFEST_VERSION = 1;
 const DEFAULT_FLUSH_THRESHOLD = 256000;
 const DEFAULT_FLUSH_INTERVAL = 60000;
+const MAX_FLUSH_INTERVAL = 24 * 60 * 60 * 1000;
 const DEFAULT_MERGE_FACTOR = 10;
 
 /**
@@ -56,8 +57,8 @@ class InvertedIndex {
      * @param {string} [options.dataDirectory] Directory for the index files. Default '.'.
      * @param {number} [options.flushThreshold] Number of buffered postings that triggers a flush. Default 256 000.
      * @param {number} [options.flushInterval] Flush at the latest this many ms after the first unpersisted add, so that
-     *   a crash only needs to re-add that much from the event log. 0 disables it. Default 60 000.
-     * @param {number} [options.mergeFactor] Merge once more than this many segments exist. Default 10.
+     *   a crash only needs to re-add that much from the event log. 0 disables it, at most 24 hours. Default 60 000.
+     * @param {number} [options.mergeFactor] Merge this many adjacent segments of similar size into one. Default 10.
      * @param {boolean} [options.syncOnFlush] fsync segments and manifest on flush. Default true.
      */
     constructor(name = 'inverted', options = {}) {
@@ -66,6 +67,8 @@ class InvertedIndex {
         this.dataDirectory = resolvePath(options.dataDirectory || '.');
         this.flushThreshold = options.flushThreshold ?? DEFAULT_FLUSH_THRESHOLD;
         this.flushInterval = options.flushInterval ?? DEFAULT_FLUSH_INTERVAL;
+        assert(Number.isInteger(this.flushInterval) && this.flushInterval >= 0 && this.flushInterval <= MAX_FLUSH_INTERVAL,
+            `flushInterval must be between 0 and ${MAX_FLUSH_INTERVAL} ms (24 hours).`);
         this.flushTimeout = null;
         this.mergeFactor = Math.max(2, options.mergeFactor ?? DEFAULT_MERGE_FACTOR);
         this.syncOnFlush = options.syncOnFlush ?? true;
@@ -229,22 +232,42 @@ class InvertedIndex {
     }
 
     /**
-     * Merge the `mergeFactor` adjacent segments with the smallest total size once there are too many.
-     * Only adjacent segments are merged so that segment ranges stay disjoint and ascending.
+     * Merge `mergeFactor` adjacent segments of the same size tier, like a carry in a counter with base `mergeFactor`.
+     * Each posting is rewritten about once per tier instead of with every merge, so a store that flushes many small
+     * segments does not rewrite its large segments again and again. Only adjacent segments are merged so that
+     * segment ranges stay disjoint and ascending.
      */
     maybeMerge() {
-        while (this.segments.length > this.mergeFactor) {
-            let bestStart = 0, bestSize = Infinity;
-            for (let start = 0; start + this.mergeFactor <= this.segments.length; start++) {
-                let size = 0;
-                for (let i = start; i < start + this.mergeFactor; i++) size += this.segments[i].size;
-                if (size < bestSize) {
-                    bestSize = size;
-                    bestStart = start;
-                }
-            }
-            this.mergeSegments(bestStart, bestStart + this.mergeFactor);
+        let start;
+        while ((start = this.findMergeRun()) >= 0) {
+            this.mergeSegments(start, start + this.mergeFactor);
         }
+    }
+
+    /**
+     * @returns {number} The first slot of `mergeFactor` adjacent segments in the same size tier, or -1.
+     */
+    findMergeRun() {
+        let runStart = 0;
+        for (let i = 0; i < this.segments.length; i++) {
+            if (this.sizeTier(this.segments[i]) !== this.sizeTier(this.segments[runStart])) {
+                runStart = i;
+            }
+            if (i - runStart + 1 === this.mergeFactor) {
+                return runStart;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Segments in one tier differ in size by less than the factor `mergeFactor`.
+     *
+     * @param {SegmentReader} segment
+     * @returns {number}
+     */
+    sizeTier(segment) {
+        return Math.floor(Math.log(segment.size) / Math.log(this.mergeFactor));
     }
 
     /**

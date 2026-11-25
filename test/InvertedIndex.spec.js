@@ -200,6 +200,35 @@ describe('InvertedIndex', function() {
         expect(index.verify()).to.be(true);
     });
 
+    it('only merges segments of similar size, so large segments are not rewritten by small flushes', function() {
+        createIndex({ mergeFactor: 3 });
+        const mergedSizes = [];
+        const mergeSegments = index.mergeSegments;
+        index.mergeSegments = function(start, end) {
+            mergedSizes.push(this.segments.slice(start, end).map(segment => segment.size));
+            return mergeSegments.call(this, start, end);
+        };
+        let position = 0;
+        for (; position < 2000; position++) index.add(position + 1, ['types/a', 'tags/' + (position % 100)]);
+        index.flush();
+        const [largeSegment] = segmentFiles();
+        for (let flushes = 0; flushes < 30; flushes++) {
+            index.add(++position, ['types/a', 'tags/new/' + position]);
+            index.flush();
+        }
+        expect(mergedSizes.length).to.be.above(0);
+        for (const sizes of mergedSizes) {
+            expect(Math.max(...sizes) / Math.min(...sizes)).to.be.below(3);
+        }
+        expect(segmentFiles()).to.contain(largeSegment);
+        expect(get('types/a').length).to.be(2030);
+    });
+
+    it('rejects a flush interval above 24 hours', function() {
+        expect(() => new InvertedIndex('test', { dataDirectory, flushInterval: 24 * 60 * 60 * 1000 + 1 })).to.throwError(/flushInterval/);
+        expect(() => new InvertedIndex('test', { dataDirectory, flushInterval: -1 })).to.throwError(/flushInterval/);
+    });
+
     it('evaluates the selector algebra with OR at even and AND at odd depth', function() {
         createIndex({ flushThreshold: 7 });
         const events = [
