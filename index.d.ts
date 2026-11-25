@@ -34,7 +34,16 @@ export interface DcbQuery {
     items: DcbQueryItem[];
 }
 
-export type CommitCallback = (commit: Record<string, unknown>) => void;
+export interface Commit {
+    commitId: number;
+    committedAt: number;
+    streamName: string;
+    streamVersion: number;
+    events: any[];
+    [metadata: string]: unknown;
+}
+
+export type CommitCallback = (commit: Commit) => void;
 
 export interface Serializer {
     serialize(document: any): string | Buffer;
@@ -233,10 +242,10 @@ export class EventStore extends EventEmitter {
         expectedVersion?: number | CommitCondition,
         metadata?: Record<string, unknown>,
         callback?: CommitCallback
-    ): void;
-    commit(streamName: string, events: any | any[], expectedVersion: number | CommitCondition, callback: CommitCallback): void;
-    commit(streamName: string, events: any | any[], metadata: Record<string, unknown>, callback?: CommitCallback): void;
-    commit(streamName: string, events: any | any[], callback: CommitCallback): void;
+    ): Commit;
+    commit(streamName: string, events: any | any[], expectedVersion: number | CommitCondition, callback: CommitCallback): Commit;
+    commit(streamName: string, events: any | any[], metadata: Record<string, unknown>, callback?: CommitCallback): Commit;
+    commit(streamName: string, events: any | any[], callback: CommitCallback): Commit;
 
     getConsumer(streamName: string, identifier: string, initialState?: Record<string, unknown>, since?: number): Consumer;
     getConsumer(identifier: string): Consumer | null;

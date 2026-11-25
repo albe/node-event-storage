@@ -461,22 +461,27 @@ class EventStore extends events.EventEmitter {
      * @throws {OptimisticConcurrencyError}
      */
     checkCondition(condition) {
-        if (this.storage.length <= condition.noneMatchAfter) return; // no new events since condition was obtained
+        assert(this.findFirstConflict(condition) === false, `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`, OptimisticConcurrencyError);
+    }
 
-        const selector = condition.selector || condition.types;
+    /**
+     * @private
+     * @param {CommitCondition} condition
+     * @returns {object|boolean} The first event matching the condition after its position, or false.
+     */
+    findFirstConflict(condition) {
+        if (this.storage.length <= condition.noneMatchAfter) return false; // no new events since condition was obtained
 
         // Only events after condition.noneMatchAfter can be conflicts.
         // Pass the original matcher and raw flag so the stream filters at the source.
-        const stream = this.fromStreams(
+        return this.fromStreams(
             '_check_' + Date.now(),
-            selector,
+            condition.selector || condition.types,
             condition.noneMatchAfter + 1,
             -1,
             condition.matcher,
             condition.raw
-        );
-
-        assert(stream.next() === false, `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`, OptimisticConcurrencyError);
+        ).next();
     }
 
     /**
@@ -521,6 +526,7 @@ class EventStore extends events.EventEmitter {
      *   same key was already written to this stream, nothing is written again and the callback receives the original
      *   commit with `duplicate: true`.
      * @param {function} [callback] A function that will be executed when all events have been committed.
+     * @returns {object} The commit, which already holds its position in the log. The events are not durable before the callback fires.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version, or if a
      *   {@link CommitCondition} was provided and conflicting events have been committed since it was obtained.
      * @throws {IdempotencyError} if the `idempotencyKey` was already used for a commit with a different number of events.
@@ -548,8 +554,7 @@ class EventStore extends events.EventEmitter {
                     `Idempotency key "${idempotencyKey}" was already used for a commit with ${original.commitSize} events to stream "${streamName}".`,
                     IdempotencyError
                 );
-                this.acknowledgeDuplicate(streamName, original, events, callback);
-                return;
+                return this.acknowledgeDuplicate(streamName, original, events, callback);
             }
         }
 
@@ -600,27 +605,42 @@ class EventStore extends events.EventEmitter {
             commit.events.push(event);
             this.storage.write(storedEvent, commitVersion !== events.length ? undefined : commitCallback);
         }
+        return commit;
     }
 
     /**
-     * A retry either comes with the `expectedVersion` the original commit was written at, or right after it, so only the
-     * commit after `expectedVersion` and the last commit of the stream are checked.
+     * A retry comes with the same `expectedVersion` or `CommitCondition` as the original commit, so the original is the
+     * first event after that boundary: right after `expectedVersion` in the stream, or the first event matching the
+     * condition after its position. With `ExpectedVersion.Any` there is no boundary and the last commit of the stream
+     * is checked.
      *
      * @private
      * @returns {object|null} The metadata of an event of the original commit, or null.
      */
     findCommitByIdempotencyKey(streamName, idempotencyKey, expectedVersion) {
-        const length = streamName in this.streams ? this.streams[streamName].index.length : 0;
-        const candidates = typeof expectedVersion === 'number' && expectedVersion >= 0 && length > expectedVersion
-            ? [expectedVersion + 1, length]
-            : [length];
-        for (const revision of candidates.filter(revision => revision > 0)) {
-            const event = this.getEventStream(streamName, revision, revision).next();
-            if (event && event.metadata.idempotencyKey === idempotencyKey) {
-                return Object.assign({}, event.metadata, { revision: revision - event.metadata.commitVersion });
-            }
+        const event = this.findFirstEventAfter(streamName, expectedVersion);
+        if (!event || event.stream !== streamName || event.metadata.idempotencyKey !== idempotencyKey) {
+            return null;
         }
-        return null;
+        return event.metadata;
+    }
+
+    /**
+     * @private
+     * @param {string} streamName
+     * @param {number|CommitCondition} expectedVersion
+     * @returns {object|boolean} The event, or false.
+     */
+    findFirstEventAfter(streamName, expectedVersion) {
+        if (expectedVersion instanceof CommitCondition) {
+            return this.findFirstConflict(expectedVersion);
+        }
+        const length = this.getStreamVersion(streamName);
+        const revision = expectedVersion === ExpectedVersion.Any ? length : expectedVersion + 1;
+        if (revision < 1 || revision > length) {
+            return false;
+        }
+        return this.getEventStream(streamName, revision, revision).next();
     }
 
     /**
@@ -630,10 +650,12 @@ class EventStore extends events.EventEmitter {
      * @private
      */
     acknowledgeDuplicate(streamName, original, events, callback) {
-        const { revision, commitVersion, commitSize, streamVersion, ...commitMetadata } = original;
-        const commit = Object.assign(commitMetadata, { streamName, streamVersion: revision - 1, events, duplicate: true });
-        const entry = this.streams[streamName].index.get(revision + commitSize - 1);
+        const { commitVersion, commitSize, streamVersion, ...commitMetadata } = original;
+        const firstRevision = streamVersion + 1 - commitVersion;
+        const commit = Object.assign(commitMetadata, { streamName, streamVersion: firstRevision - 1, events, duplicate: true });
+        const entry = this.streams[streamName].index.get(firstRevision + commitSize - 1);
         this.storage.getPartition(entry.partition).afterPendingWrites(() => callback(commit));
+        return commit;
     }
 
     /**

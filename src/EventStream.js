@@ -39,8 +39,8 @@ class EventStream extends stream.Readable {
         if (eventStore.streams[name]) {
             this.streamIndex = eventStore.streams[name].index;
             this.minRevision = normalizeRevision(minRevision, this.streamIndex.length);
-            this.maxRevision = normalizeRevision(maxRevision, this.streamIndex.length);
-            this.version = normalizeMaxRevision(this.streamIndex.length, maxRevision);
+            this.maxRevision = normalizeMaxRevision(this.streamIndex.length, maxRevision);
+            this.version = this.maxRevision;
             this._iterator = null;
             this.fetch = () => eventStore.storage.readRange(this.minRevision, this.maxRevision, this.streamIndex, raw);
         } else {
@@ -66,8 +66,8 @@ class EventStream extends stream.Readable {
      * @returns {EventStream}
      */
     until(revision) {
-        this.maxRevision = normalizeRevision(revision, this.streamIndex.length);
-        this.version = normalizeMaxRevision(this.streamIndex.length, this.maxRevision);
+        this.maxRevision = normalizeMaxRevision(this.streamIndex.length, revision);
+        this.version = this.maxRevision;
         return this;
     }
 

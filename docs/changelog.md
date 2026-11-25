@@ -4,7 +4,10 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
-- Added idempotent commits: pass a unique `idempotencyKey` in the commit metadata, and a retry of the commit after `expectedVersion` or of the last commit of the stream is acknowledged with the original commit (`duplicate: true`) instead of being written twice or failing the concurrency check. The acknowledgement waits for the original commit's durability like a normal commit callback. Reusing a key for a commit with a different number of events throws the new `IdempotencyError`. Added `Partition.afterPendingWrites(callback)`.
+- Added idempotent commits: pass a unique `idempotencyKey` in the commit metadata, and a retry with the same key is acknowledged with the original commit (`duplicate: true`) instead of being written twice or failing the concurrency check. The original is found as the first event after the retry's `expectedVersion` or `CommitCondition` position, or as the last commit of the stream for `ExpectedVersion.Any`. The acknowledgement waits for the original commit's durability like a normal commit callback. Reusing a key for a commit with a different number of events throws the new `IdempotencyError`. Added `Partition.afterPendingWrites(callback)`.
+- `commit()` returns the commit object, so its position in the log is known before the commit callback confirms the write.
+- Fix `fromStreams()`, `query()` and category streams returning events backwards when reading from a position beyond the end of the store, e.g. the last event for `query(selector, null, length + 1)`. A join that starts outside the store is now empty, like a single stream; an upper bound beyond the end still reads to the end.
+- Fix single streams returning no events when the upper bound lies beyond the end of the stream, e.g. `getEventStream(name, 2, 100)`. They now read to the end, like a join.
 
 ## 1.5.0
 

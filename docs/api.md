@@ -56,7 +56,7 @@ This is mainly useful for deployment handover workflows where one process stops 
 #### `commit(streamName, events, [expectedVersion], [metadata], [callback])` ✅ Stable
 
 ```javascript
-eventstore.commit(streamName, events [, expectedVersion] [, metadata] [, callback])
+eventstore.commit(streamName, events [, expectedVersion] [, metadata] [, callback]) → commit
 ```
 
 Append one or more events to a stream.
@@ -69,6 +69,8 @@ Append one or more events to a stream.
 | `metadata` | `object` | `{}` | Additional metadata merged into every event's metadata envelope. Set `metadata.idempotencyKey` to make retries safe, see [Idempotent Commits](reading-writing.md#idempotent-commits). |
 | `expectedVersion` | `number\|CommitCondition` | `ExpectedVersion.Any` | Either a stream version (see above) or the `condition` returned by `query()` for a DCB-style check. |
 | `callback` | `function(commit)` | — | Called with the `commit` object after all events have been flushed to disk. |
+
+Returns the `commit` object as soon as the events are in the write buffer. It already holds its position in the log (`commitId` is the number of events before it), so a caller can hand it on before the events are durable. The callback receives the same object once the events are acknowledged as described in [Guarantees](guarantees.md).
 
 Throws `OptimisticConcurrencyError` synchronously when the stream is not at `expectedVersion`, or when events matching the `CommitCondition` were appended since the query. The callback is not called with an error.
 

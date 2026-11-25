@@ -79,12 +79,15 @@ eventstore.commit('order-42', newEvents, expectedVersion, { idempotencyKey }, (c
 
 If a commit with the same key already exists in the stream, nothing is written and the callback receives the original commit (with its original `commitId` and `committedAt`) plus `duplicate: true`. Like a normal commit callback, it fires only once the original commit is on disk with the configured durability (see `syncInterval` / `syncOnFlush`). No `'commit'` event is emitted for it. Reusing a key for a commit with a different number of events throws an `IdempotencyError`.
 
-The key is stored in the metadata of every event of the commit. The store looks for it in two places, which also works after a restart:
+The key is stored in the metadata of every event of the commit. A retry comes with the same `expectedVersion` or `CommitCondition` as the first attempt, so the original commit is the first event after that boundary. The store checks that event, which also works after a restart and when other commits came in between:
 
-1. The commit right after `expectedVersion`, if the stream has moved past it.
-2. The last commit of the stream. This covers a retry with `ExpectedVersion.Any` or a `CommitCondition` right after a timeout.
+| Retried with | Checked event |
+|--------------|---------------|
+| a stream version | the event right after `expectedVersion` in the stream |
+| a `CommitCondition` | the first event matching the condition after its position (the original is found if its events match the condition's query, the usual case with DCB) |
+| `ExpectedVersion.Any` | the last event of the stream |
 
-A retry with `ExpectedVersion.Any` or a `CommitCondition` after other commits were written to the stream in between is not recognized and writes the events again. Use a concrete `expectedVersion` where that matters.
+A retry with `ExpectedVersion.Any` after other commits were written to the stream in between is not recognized and writes the events again. Use a stream version or a `CommitCondition` where that matters.
 
 A key is only checked against the stream it is committed to. Keys are compared by value only, the events themselves are not compared.
 

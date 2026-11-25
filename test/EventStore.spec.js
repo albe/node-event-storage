@@ -316,6 +316,25 @@ describe('EventStore', function() {
             expect(() => eventstore.commit({ foo: 'bar' })).to.throwError();
         });
 
+        it('returns the commit before the callback fires', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', { foo: 'bar' });
+            let callbackFired = false;
+            const commit = eventstore.commit('foo-bar', [{ foo: 'baz' }, { foo: 'qux' }], 1, persisted => {
+                callbackFired = true;
+                expect(persisted).to.be(commit);
+                done();
+            });
+            expect(callbackFired).to.be(false);
+            expect(commit.commitId).to.be(1);
+            expect(commit.streamName).to.be('foo-bar');
+            expect(commit.streamVersion).to.be(1);
+            expect(commit.events).to.eql([{ foo: 'baz' }, { foo: 'qux' }]);
+        });
+
         it('throws when no events specified', function() {
             eventstore = new EventStore({
                 storageDirectory
@@ -637,6 +656,38 @@ describe('EventStore', function() {
             });
         });
 
+        it('recognizes a retry with a CommitCondition after other commits came in between', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+            const { condition } = eventstore.query(['Ordered']);
+            const original = eventstore.commit('order-1', [{ type: 'Ordered' }, { type: 'Ordered' }], condition, { idempotencyKey: 'k1' });
+            eventstore.commit('order-1', [{ type: 'Noted' }]);
+            eventstore.commit('order-2', [{ type: 'Noted' }]);
+            const commit = eventstore.commit('order-1', [{ type: 'Ordered' }, { type: 'Ordered' }], condition, { idempotencyKey: 'k1' });
+            expect(commit.duplicate).to.be(true);
+            expect(commit.commitId).to.be(original.commitId);
+            expect(commit.streamVersion).to.be(0);
+            expect(eventstore.length).to.be(4);
+        });
+
+        it('still fails a CommitCondition when the first matching event has the key but another stream', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+            const { condition } = eventstore.query(['Ordered']);
+            eventstore.commit('order-2', [{ type: 'Ordered' }], condition, { idempotencyKey: 'k1' });
+            expect(() => eventstore.commit('order-1', [{ type: 'Ordered' }], condition, { idempotencyKey: 'k1' }))
+                .to.throwError(e => expect(e).to.be.an(OptimisticConcurrencyError));
+        });
+
+        it('recognizes a retry with an expectedVersion after other commits came in between', function() {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('order-1', [{ a: 1 }]);
+            eventstore.commit('order-1', [{ a: 2 }], 1, { idempotencyKey: 'k1' });
+            eventstore.commit('order-1', [{ b: 1 }], 2);
+            const commit = eventstore.commit('order-1', [{ a: 2 }], 1, { idempotencyKey: 'k1' });
+            expect(commit.duplicate).to.be(true);
+            expect(commit.streamVersion).to.be(1);
+            expect(eventstore.length).to.be(3);
+        });
+
         it('throws on an invalid key', function() {
             eventstore = new EventStore({ storageDirectory });
             expect(() => eventstore.commit('order-1', [{ a: 1 }], { idempotencyKey: '' })).to.throwError(/idempotencyKey/);
@@ -719,6 +770,18 @@ describe('EventStore', function() {
                 expect(stream.events.length).to.be(1);
                 done();
             });
+        });
+
+        it('reads to the end when the upper bound lies beyond it and is empty when it starts beyond the end', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 1 }, { foo: 2 }, { foo: 3 }]);
+
+            expect(eventstore.getEventStream('foo-bar', 2, 100).events).to.eql([{ foo: 2 }, { foo: 3 }]);
+            expect(eventstore.getEventStream('foo-bar', 3, 1).events).to.eql([{ foo: 3 }, { foo: 2 }, { foo: 1 }]);
+            expect(eventstore.getEventStream('foo-bar', 4).events).to.eql([]);
+            expect(eventstore.getEventStream('foo-bar', 10, 1).events).to.eql([]);
         });
 
         it('can iterate events in reverse order', function() {
