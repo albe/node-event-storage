@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { assert } from '../utils/util.js';
-import { syncFile, syncDirectory, ignoreDeletedFile } from '../utils/fsUtil.js';
+import { syncFile, syncDirectory } from '../utils/fsUtil.js';
 
 const LOCK_RECLAIM = 0x1;
 const LOCK_THROW = 0x2;
@@ -143,21 +143,24 @@ class StorageLock {
      * a crash, which finds the lock left behind, needs it.
      *
      * @param {number} position
-     * @returns {Promise<void>}
+     * @param {function(Error|null)} callback
      */
-    async writeCheckpoint(position) {
+    writeCheckpoint(position, callback) {
         const fileName = path.join(this.directory, CHECKPOINT_FILE);
         // Written asynchronously, so a scan of the storage files can see it: like all lock files, it ends with `.lock`.
         const tmpFileName = path.join(this.directory, 'checkpoint.tmp.lock');
-        try {
-            await fs.promises.writeFile(tmpFileName, String(position));
-            await syncFile(tmpFileName);
-            await fs.promises.rename(tmpFileName, fileName);
-            await syncDirectory(this.directory);
-        } catch (error) {
-            // The lock was released meanwhile, so there is nothing to repair.
-            ignoreDeletedFile(error);
-        }
+        const then = next => error => {
+            if (!error) {
+                next();
+            } else {
+                // The lock was released meanwhile, so there is nothing to repair.
+                callback(error.code === 'ENOENT' ? null : error);
+            }
+        };
+        fs.writeFile(tmpFileName, String(position), then(() =>
+            syncFile(tmpFileName, then(() =>
+                fs.rename(tmpFileName, fileName, then(() =>
+                    syncDirectory(this.directory, callback)))))));
     }
 
     /**

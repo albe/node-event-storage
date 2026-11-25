@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import SyncScheduler from '../src/SyncScheduler.js';
 import FileHandlePool from '../src/FileHandlePool.js';
+import { drained } from './syncSpy.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -26,19 +27,21 @@ describe('SyncScheduler', function() {
         releases = [];
         failWith = null;
         // Hold every sync until the test releases it, to observe a run while it is in flight.
-        originalOpen = fs.promises.open;
-        fs.promises.open = async (fileName, flags) => {
+        originalOpen = fs.open;
+        fs.open = (fileName, flags, callback) => {
             opened.push(fileName);
-            await new Promise(resolve => releases.push(resolve));
-            if (failWith) {
-                throw Object.assign(new Error(failWith), { code: failWith });
-            }
-            return originalOpen(fileName, flags);
+            releases.push(() => {
+                if (failWith) {
+                    callback(Object.assign(new Error(failWith), { code: failWith }));
+                } else {
+                    originalOpen(fileName, flags, callback);
+                }
+            });
         };
     });
 
     afterEach(function() {
-        fs.promises.open = originalOpen;
+        fs.open = originalOpen;
         fs.rmSync(dataDirectory, { recursive: true, force: true });
     });
 
@@ -62,7 +65,7 @@ describe('SyncScheduler', function() {
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
         scheduler.created(files[1]);
         expect(acknowledged).to.be(true);
-        expect(scheduler.loop).to.be(null);
+        expect(scheduler.running).to.be(false);
     });
 
     it('syncs all files of a run in parallel in the background', async function() {
@@ -74,7 +77,7 @@ describe('SyncScheduler', function() {
         expect(opened).to.eql(files.map(file => file.fileName));
         expect(acknowledged).to.eql([]);
         release();
-        await scheduler.drain();
+        await drained(scheduler);
         expect(acknowledged).to.eql([0, 1, 2]);
     });
 
@@ -84,7 +87,7 @@ describe('SyncScheduler', function() {
         await until(() => opened.length === 2);
         expect(opened).to.eql([files[0].fileName, dataDirectory]);
         release();
-        await scheduler.drain();
+        await drained(scheduler);
     });
 
     it('leaves writes during a run to the next run', async function() {
@@ -101,7 +104,7 @@ describe('SyncScheduler', function() {
         expect(acknowledged).to.eql([0]);
         expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
-        await scheduler.drain();
+        await drained(scheduler);
         expect(acknowledged).to.eql([0, 1]);
     });
 
@@ -113,7 +116,7 @@ describe('SyncScheduler', function() {
         await until(() => opened.length === 2);
         expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
-        await scheduler.drain();
+        await drained(scheduler);
         expect(acknowledged).to.eql([0, 1]);
     });
 
@@ -121,7 +124,7 @@ describe('SyncScheduler', function() {
         const scheduler = new SyncScheduler({ syncInterval: 60000 });
         const acknowledged = [];
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
-        const drained = scheduler.drain();
+        const draining = drained(scheduler);
         await until(() => opened.length === 1);
         expect(opened).to.eql([files[0].fileName]);
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
@@ -130,7 +133,7 @@ describe('SyncScheduler', function() {
         // Writes during the run are drained as well
         expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
-        await drained;
+        await draining;
         expect(acknowledged).to.eql([0, 1]);
     });
 
@@ -141,24 +144,41 @@ describe('SyncScheduler', function() {
         failWith = 'ENOENT';
         await until(() => opened.length === 1);
         release();
-        await scheduler.drain();
+        await drained(scheduler);
         expect(acknowledged).to.be(true);
     });
 
-    it('rejects drain() and never acknowledges when a sync fails', async function() {
+    it('passes a failed sync to drain() and never acknowledges when a sync fails', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         let acknowledged = false;
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
-        const drained = scheduler.drain();
+        const draining = drained(scheduler);
         failWith = 'EIO';
         await until(() => opened.length === 1);
         release();
         try {
-            await drained;
-            expect().fail('drain() should reject');
+            await draining;
+            expect().fail('drain() should call back with the error');
         } catch (error) {
             expect(error.code).to.be('EIO');
         }
         expect(acknowledged).to.be(false);
+    });
+
+    it('throws a failed sync as an uncaught exception without anybody draining', async function() {
+        const scheduler = new SyncScheduler({ syncInterval: 1 });
+        let acknowledged = false;
+        scheduler.flushed(files[0], [() => (acknowledged = true)]);
+        failWith = 'EIO';
+        await until(() => opened.length === 1);
+        const listeners = process.listeners('uncaughtException');
+        process.removeAllListeners('uncaughtException');
+        const uncaught = new Promise(resolve => process.once('uncaughtException', resolve));
+        release();
+        const error = await uncaught;
+        listeners.forEach(listener => process.on('uncaughtException', listener));
+        expect(error.code).to.be('EIO');
+        expect(acknowledged).to.be(false);
+        expect(scheduler.running).to.be(false);
     });
 });

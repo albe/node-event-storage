@@ -4,7 +4,7 @@ import fsSync from 'fs';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import SyncScheduler from '../src/SyncScheduler.js';
-import spyOnSyncs from './syncSpy.js';
+import spyOnSyncs, { drained } from './syncSpy.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
 import { CHUNK_CAPACITY } from '../src/Index/ReadableIndex.js';
 import { fileURLToPath } from 'url';
@@ -74,11 +74,11 @@ describe('Index', function() {
             const syncScheduler = new SyncScheduler({ syncOnFlush: true });
             index = createIndex('durable.index', { syncScheduler });
             index.open();
-            await syncScheduler.drain();
+            await drained(syncScheduler);
             expect(synced).to.eql([index.fileName, dataDirectory]);
             index.add(new Index.Entry(1, 0));
             index.flush();
-            await syncScheduler.drain();
+            await drained(syncScheduler);
             expect(synced.length).to.be(2);
         });
 
@@ -89,7 +89,7 @@ describe('Index', function() {
             index.add(new Index.Entry(1, 0));
             index.flush();
             expect(synced).to.eql([]);
-            await syncScheduler.drain();
+            await drained(syncScheduler);
             expect(synced).to.eql([index.fileName, dataDirectory]);
         });
 

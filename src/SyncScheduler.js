@@ -1,6 +1,6 @@
 import path from 'path';
+import { syncDirectory, parallel } from './utils/fsUtil.js';
 /** @typedef {import('./FileHandlePool.js').default} FileHandlePool */
-import { syncDirectory } from './utils/fsUtil.js';
 
 /**
  * Decides when flushed data reaches the disk, for all files of a storage:
@@ -26,9 +26,9 @@ class SyncScheduler {
         this.files = new Set();
         this.directories = new Set();
         this.callbacks = [];
-        this.loop = null;
-        this.wakeUp = null;
-        this.draining = false;
+        this.running = false;
+        this.timer = null;
+        this.drained = [];
     }
 
     /**
@@ -63,74 +63,74 @@ class SyncScheduler {
     /**
      * Start the next run right away instead of waiting for the interval, e.g. when closing the storage.
      *
-     * @returns {Promise<void>} Resolves once everything flushed so far is synced and its callbacks were invoked.
-     *   Rejects if a sync failed.
+     * @param {function(Error|null)} callback Called once everything flushed so far is synced and its write callbacks
+     *   were invoked, or with the error of a failed sync.
      */
-    drain() {
-        if (this.loop === null) {
-            return Promise.resolve();
+    drain(callback) {
+        if (!this.running) {
+            callback(null);
+            return;
         }
-        this.draining = true;
-        this.wakeUp?.();
-        return this.loop;
+        this.drained.push(callback);
+        if (this.timer !== null) {
+            clearTimeout(this.timer);
+            clearImmediate(this.timer);
+            this.run();
+        }
     }
 
     /**
      * @private
      */
     start() {
-        if (this.loop === null) {
-            this.loop = this.run();
-            // A failed sync is reported through `drain()`; without a caller waiting for it, it crashes the process
-            // as an unhandled rejection, because acknowledged writes may be lost.
+        if (!this.running) {
+            this.running = true;
+            this.wait();
         }
     }
 
     /**
+     * Run after the interval, after the current tick for an interval of 0, or right away while draining.
      * @private
-     * @returns {Promise<void>} Resolves after the interval, after the current tick for an interval of 0, or right
-     *   away while draining.
      */
     wait() {
-        if (this.draining) {
-            return Promise.resolve();
+        if (this.drained.length > 0) {
+            this.run();
+        } else {
+            this.timer = this.interval > 0 ? setTimeout(() => this.run(), this.interval) : setImmediate(() => this.run());
         }
-        return new Promise(resolve => {
-            const timer = this.interval > 0 ? setTimeout(resolve, this.interval) : setImmediate(resolve);
-            this.wakeUp = () => {
-                clearTimeout(timer);
-                clearImmediate(timer);
-                resolve();
-            };
-        }).finally(() => {
-            this.wakeUp = null;
-        });
     }
 
     /**
-     * Wait for the interval, then sync everything flushed meanwhile in parallel and invoke its callbacks. Repeat until
-     * nothing is waiting anymore.
+     * Sync everything flushed since the previous run in parallel and invoke its callbacks, then wait for the next run
+     * while something is waiting. A failed sync ends the loop: it is passed to those draining, or thrown as an uncaught
+     * exception, because acknowledged writes may be lost.
      * @private
-     * @returns {Promise<void>}
      */
-    async run() {
-        try {
-            while (this.files.size > 0 || this.callbacks.length > 0) {
-                await this.wait();
-                const { files, directories, callbacks } = this;
-                this.files = new Set();
-                this.directories = new Set();
-                this.callbacks = [];
-                const syncs = [];
-                for (const file of files) syncs.push(file.fileHandlePool.sync(file));
-                for (const directory of directories) syncs.push(syncDirectory(directory));
-                await Promise.all(syncs);
+    run() {
+        this.timer = null;
+        const { files, directories, callbacks } = this;
+        this.files = new Set();
+        this.directories = new Set();
+        this.callbacks = [];
+        const syncs = [];
+        for (const file of files) syncs.push(next => file.fileHandlePool.sync(file, next));
+        for (const directory of directories) syncs.push(next => syncDirectory(directory, next));
+        parallel(syncs, error => {
+            if (!error) {
                 invoke(callbacks);
+                if (this.files.size > 0 || this.callbacks.length > 0) {
+                    this.wait();
+                    return;
+                }
             }
-        } finally {
-            this.loop = null;
-            this.draining = false;
-        }
+            this.running = false;
+            const drained = this.drained.splice(0);
+            if (error && drained.length === 0) {
+                process.nextTick(() => { throw error; });
+            }
+            for (const callback of drained) callback(error);
+        });
     }
 }
 

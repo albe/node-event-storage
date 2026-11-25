@@ -4,7 +4,7 @@ import fsSync from 'fs';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import SyncScheduler from '../src/SyncScheduler.js';
-import spyOnSyncs from './syncSpy.js';
+import spyOnSyncs, { drained } from './syncSpy.js';
 import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
@@ -246,19 +246,19 @@ describe('Partition', function() {
             partition.flush();
             partition.close();
             expect(written).to.be(true);
-            await partition.syncScheduler.drain();
+            await drained(partition.syncScheduler);
             expect(synced).to.eql([]);
         });
 
         it('syncs a new file with its directory and every flush with syncOnFlush', async function() {
             openWith({ syncOnFlush: true });
-            await partition.syncScheduler.drain();
+            await drained(partition.syncScheduler);
             expect(synced).to.eql([partition.fileName, dataDirectory]);
             let written = false;
             partition.write('one', () => (written = true));
             partition.flush();
             expect(written).to.be(false);
-            await partition.syncScheduler.drain();
+            await drained(partition.syncScheduler);
             expect(written).to.be(true);
             expect(synced.length).to.be(3);
         });
@@ -271,7 +271,7 @@ describe('Partition', function() {
             partition.write('two', () => written.push(2));
             partition.flush();
             expect(written).to.eql([]);
-            await partition.syncScheduler.drain();
+            await drained(partition.syncScheduler);
             expect(written).to.eql([1, 2]);
             // the file and its new directory
             expect(synced).to.eql([partition.fileName, dataDirectory]);
@@ -281,7 +281,7 @@ describe('Partition', function() {
             openWith({ syncInterval: 10 }, { writeBufferSize: 64 });
             let written = false;
             partition.write('x'.repeat(100), () => (written = true));
-            await partition.syncScheduler.drain();
+            await drained(partition.syncScheduler);
             expect(synced.length).to.be(2);
             await new Promise(resolve => setImmediate(resolve));
             expect(written).to.be(true);
@@ -295,7 +295,7 @@ describe('Partition', function() {
             partition.close();
             expect(written).to.be(false);
             expect(synced).to.eql([]);
-            await syncScheduler.drain();
+            await drained(syncScheduler);
             expect(written).to.be(true);
             expect(synced.length).to.be(2);
         });
@@ -309,7 +309,7 @@ describe('Partition', function() {
             const other = new Partition('.other', { dataDirectory, fileHandlePool });
             other.open();
             expect(synced).to.eql([]);
-            await partition.syncScheduler.drain();
+            await drained(partition.syncScheduler);
             expect(written).to.be(true);
             expect(synced).to.eql([partition.fileName, dataDirectory]);
             other.close();

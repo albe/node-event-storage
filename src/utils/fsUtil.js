@@ -53,49 +53,60 @@ function writeFileAtomic(fileName, data, tmpFileName = fileName + '.tmp') {
  * Runs on the libuv thread pool, so the event loop goes on meanwhile and several files can be synced in parallel.
  *
  * @param {string} fileName
- * @param {string} [flags] The flags to open the file with. Windows needs write access to sync a file.
- * @returns {Promise<void>}
+ * @param {function(Error|null)} callback
  */
-async function syncFile(fileName, flags = 'r+') {
-    const handle = await fs.promises.open(fileName, flags);
-    try {
-        await handle.sync();
-    } finally {
-        await handle.close();
-    }
+function syncFile(fileName, callback) {
+    syncPath(fileName, 'r+', callback);
 }
 
 /**
- * Sync an open descriptor to disk on the libuv thread pool. The caller must keep the descriptor open until this resolves.
- *
- * @param {number} fd
- * @returns {Promise<void>}
- */
-function syncDescriptor(fd) {
-    return new Promise((resolve, reject) => fs.fsync(fd, error => error ? reject(error) : resolve()));
-}
-
-/**
- * A file deleted since it was written needs no sync anymore: its data is gone on purpose.
- *
- * @param {Error} error
- */
-function ignoreDeletedFile(error) {
-    if (error.code !== 'ENOENT') {
-        throw error;
-    }
-}
-
-/**
- * Platforms that can not open a directory for syncing (Windows) are skipped silently.
+ * Like `syncFile()` for a directory. Platforms that can not open a directory for syncing (Windows) are skipped silently.
  *
  * @param {string} dirName
- * @returns {Promise<void>}
+ * @param {function(Error|null)} callback Always called without an error.
  */
-async function syncDirectory(dirName) {
-    try {
-        await syncFile(dirName, 'r');
-    } catch (e) {
+function syncDirectory(dirName, callback) {
+    syncPath(dirName, 'r', () => callback(null));
+}
+
+/**
+ * @param {string} fileName
+ * @param {string} flags The flags to open the file with. Windows needs write access to sync a file.
+ * @param {function(Error|null)} callback
+ */
+function syncPath(fileName, flags, callback) {
+    fs.open(fileName, flags, (openError, fd) => {
+        if (openError) {
+            callback(openError);
+            return;
+        }
+        fs.fsync(fd, syncError => fs.close(fd, closeError => callback(syncError || closeError || null)));
+    });
+}
+
+/**
+ * Call all tasks at once and the callback once all of them called back, or with the first error.
+ *
+ * @param {Array<function(function(Error|null))>} tasks
+ * @param {function(Error|null)} callback
+ */
+function parallel(tasks, callback) {
+    let pending = tasks.length;
+    let failed = false;
+    if (pending === 0) {
+        callback(null);
+        return;
+    }
+    for (const task of tasks) {
+        task(error => {
+            if (failed) return;
+            if (error) {
+                failed = true;
+                callback(error);
+            } else if (--pending === 0) {
+                callback(null);
+            }
+        });
     }
 }
 
@@ -239,7 +250,6 @@ export {
     safeUnlink,
     syncDirectory,
     syncFile,
-    syncDescriptor,
-    ignoreDeletedFile,
+    parallel,
     writeFileAtomic
 };

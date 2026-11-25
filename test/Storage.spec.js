@@ -8,7 +8,8 @@ import { spawnSync } from 'child_process';
 import { matches } from '../src/utils/metadataUtil.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
-import spyOnSyncs from './syncSpy.js';
+import FileHandlePool from '../src/FileHandlePool.js';
+import spyOnSyncs, { drained, checkpointed, checkpoint } from './syncSpy.js';
 //import lz4 from 'lz4';
 import { fileURLToPath } from 'url';
 
@@ -125,9 +126,9 @@ describe('Storage', function() {
             const opened = new Promise(resolve => storage.once('opened', resolve));
             storage.open();
             await opened;
-            await storage.checkpointing;
+            await checkpointed(storage);
             // The primary index file created on open
-            await storage.syncScheduler.drain();
+            await drained(storage.syncScheduler);
             const synced = spyOnSyncs();
             try {
                 const acknowledged = [];
@@ -137,7 +138,7 @@ describe('Storage', function() {
                 }
                 expect(synced).to.eql([]);
                 await new Promise(resolve => setImmediate(resolve));
-                await storage.syncScheduler.drain();
+                await drained(storage.syncScheduler);
                 // 10 new partitions and one shared directory sync; index entries are only synced by a checkpoint
                 expect(synced.length).to.be(11);
                 expect(new Set(synced).size).to.be(11);
@@ -161,6 +162,43 @@ describe('Storage', function() {
                 done();
             });
             expect(storage.locked).to.be(true);
+        });
+
+        it('passes a failed sync to every close callback and keeps the lock', function(done) {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            storage.write({ foo: 'bar' });
+            storage.flush();
+            const originalSync = FileHandlePool.prototype.sync;
+            FileHandlePool.prototype.sync = (target, callback) => setImmediate(() => callback(Object.assign(new Error('EIO'), { code: 'EIO' })));
+            const errors = [];
+            const closed = error => {
+                errors.push(error.code);
+                if (errors.length < 2) return;
+                FileHandlePool.prototype.sync = originalSync;
+                expect(errors).to.eql(['EIO', 'EIO']);
+                // Not unlocked, so that the next open repairs the store
+                expect(storage.locked).to.be(true);
+                storage.unlock();
+                done();
+            };
+            storage.close(closed);
+            storage.close(closed);
+        });
+
+        it('emits a failed sync on close as error without a callback', function(done) {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            storage.write({ foo: 'bar' });
+            const originalSync = FileHandlePool.prototype.sync;
+            FileHandlePool.prototype.sync = (target, callback) => setImmediate(() => callback(Object.assign(new Error('EIO'), { code: 'EIO' })));
+            storage.once('error', error => {
+                FileHandlePool.prototype.sync = originalSync;
+                expect(error.code).to.be('EIO');
+                storage.unlock();
+                done();
+            });
+            storage.close();
         });
 
         it('treats syncOnFlush as an interval of 0', function() {
@@ -1397,7 +1435,7 @@ describe('Storage', function() {
             for (let i = 1; i <= 3; i++) {
                 crashedStorage.write({ type: 'foo', i });
             }
-            crashedStorage.checkpoint().then(() => {
+            checkpoint(crashedStorage).then(() => {
             expect(crashedStorage.storageLock.readCheckpoint()).to.be(3);
             for (let i = 4; i <= 5; i++) {
                 crashedStorage.write({ type: 'foo', i });
@@ -1414,9 +1452,9 @@ describe('Storage', function() {
             repairedStorage.once('opened', () => {
                 expect(repairedStorage.openIndex('foo').length).to.be(5);
                 // The rebuilt entries are only on disk with the next checkpoint
-                repairedStorage.checkpointing.then(() => {
+                checkpointed(repairedStorage).then(() => {
                     expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
-                    return repairedStorage.checkpoint();
+                    return checkpoint(repairedStorage);
                 }).then(() => {
                     expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
                     done();
@@ -1435,9 +1473,9 @@ describe('Storage', function() {
             storage.write({ type: 'bar' });
             let synced;
             const indexSyncs = () => synced.filter(fileName => fileName.endsWith('.index')).map(fileName => path.basename(fileName));
-            storage.checkpointing.then(() => {
+            checkpointed(storage).then(() => {
                 synced = spyOnSyncs();
-                return storage.checkpoint();
+                return checkpoint(storage);
             }).then(() => {
                 expect(indexSyncs().sort()).to.eql(['storage.foo.index', 'storage.index']);
                 // The checkpoint file is synced only after the indexes
@@ -1445,7 +1483,7 @@ describe('Storage', function() {
                 expect(storage.storageLock.readCheckpoint()).to.be(2);
                 expect(storage.index.modified).to.be(false);
                 synced.length = 0;
-                return storage.checkpoint();
+                return checkpoint(storage);
             }).then(() => {
                 synced.restore();
                 expect(indexSyncs()).to.eql([]);
@@ -1464,9 +1502,9 @@ describe('Storage', function() {
             storage.write({ type: 'foo' });
             storage.write({ type: 'bar' });
             storage.flush();
-            await storage.checkpointing;
+            await checkpointed(storage);
             // Sync the new files, so that only the changed indexes are left for close
-            await storage.syncScheduler.drain();
+            await drained(storage.syncScheduler);
             storage.openIndex('bar').modified = false;
             const fooIndex = storage.openIndex('foo');
             fooIndex.close();
@@ -1479,7 +1517,8 @@ describe('Storage', function() {
             }
             const indexSyncs = synced.map(fileName => path.basename(fileName));
             expect(indexSyncs).to.contain('storage.index');
-            expect(indexSyncs).to.contain('storage.foo.index');
+            // Deleted meanwhile, so there is nothing to sync
+            expect(indexSyncs).not.to.contain('storage.foo.index');
             expect(indexSyncs).not.to.contain('storage.bar.index');
             expect(storage.locked).to.be(false);
         });
@@ -1488,7 +1527,7 @@ describe('Storage', function() {
             storage = createStorage();
             storage.open();
             storage.write({ type: 'foo' });
-            await storage.checkpointing;
+            await checkpointed(storage);
             const synced = spyOnSyncs();
             try {
                 await new Promise((resolve, reject) => storage.close(error => error ? reject(error) : resolve()));
