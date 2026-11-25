@@ -1,10 +1,13 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
+import fsSync from 'fs';
 import path from 'path';
 import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM, LOCK_THROW } from '../src/Storage.js';
 import os from 'os';
 import { spawnSync } from 'child_process';
 import { matches } from '../src/utils/metadataUtil.js';
+import FileHandlePool from '../src/FileHandlePool.js';
+import spyOnSyncs from './syncSpy.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
 //import lz4 from 'lz4';
@@ -96,11 +99,56 @@ describe('Storage', function() {
             storage.open();
 
             storage.write({ foo: 'bar' }, () => {
-                expect(storage.getPartition('').syncCallbacks.length).to.be(0);
+                expect(storage.syncScheduler.callbacks.length).to.be(0);
                 let fileContent = fs.readFileSync('test/data/storage', 'utf8');
                 expect(fileContent).to.contain(JSON.stringify({ foo: 'bar' }));
                 done();
             });
+        });
+
+        it('syncs all changed partitions and new directories in one shared run', function(done) {
+            storage = createStorage({ syncInterval: 1000, partitioner: (document) => document.stream });
+            storage.open();
+            let fsyncCalls = 0;
+            const originalFsync = fsSync.fsyncSync;
+            fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
+            const acknowledged = [];
+            for (let i = 0; i < 10; i++) {
+                storage.write({ stream: 'stream-' + i }, () => acknowledged.push(i));
+                storage.write({ stream: 'stream-' + i });
+            }
+            // The partitions flush their write buffers on the next tick
+            setImmediate(() => {
+                try {
+                    expect(fsyncCalls).to.be(0);
+                    storage.syncScheduler.run();
+                    // 10 partitions, the new primary index file and one shared directory sync; index entries are only synced by a checkpoint
+                    expect(fsyncCalls).to.be(12);
+                    expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+                    done();
+                } catch (e) {
+                    done(e);
+                } finally {
+                    fsSync.fsyncSync = originalFsync;
+                }
+            });
+        });
+
+        it('acknowledges pending writes on close', function() {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            let acknowledged = false;
+            storage.write({ foo: 'bar' }, () => (acknowledged = true));
+            storage.close();
+            expect(acknowledged).to.be(true);
+        });
+
+        it('ignores the sync interval when syncOnFlush is set', function() {
+            storage = createStorage({ syncInterval: 1000, syncOnFlush: true });
+            storage.open();
+            expect(storage.syncScheduler.immediate).to.be(true);
+            expect(storage.syncScheduler.interval).to.be(0);
+            expect(storage.getPartition('').syncScheduler).to.be(storage.syncScheduler);
         });
 
         it('throws on an invalid sync interval', function() {
@@ -1305,6 +1353,130 @@ describe('Storage', function() {
             repairedStorage.open();
             // Prevent afterEach from trying to remove the now-gone lock file
             crashedStorage.storageLock.held = false;
+        });
+
+        it('adds new documents to the secondary indexes found on open before anybody opens them', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.ensureIndex('foo', { type: 'foo' });
+            storage.write({ type: 'foo' });
+            storage.close();
+            storage = createStorage();
+            storage.once('opened', () => {
+                storage.write({ type: 'foo' });
+                storage.write({ type: 'bar' });
+                expect(storage.openIndex('foo').length).to.be(2);
+                done();
+            });
+            storage.open();
+        });
+
+        it('rebuilds the index entries after the last checkpoint, also of secondary indexes nobody opened', function(done) {
+            const crashedStorage = new Storage({ dataDirectory });
+            crashedStorage.open();
+            const index = crashedStorage.ensureIndex('foo', { type: 'foo' });
+            for (let i = 1; i <= 3; i++) {
+                crashedStorage.write({ type: 'foo', i });
+            }
+            crashedStorage.checkpoint();
+            expect(crashedStorage.storageLock.readCheckpoint()).to.be(3);
+            for (let i = 4; i <= 5; i++) {
+                crashedStorage.write({ type: 'foo', i });
+            }
+            crashedStorage.flush();
+            // Simulate a power loss that kept the primary index, but lost the secondary entries after the checkpoint
+            index.truncate(3);
+            index.close();
+            crashedStorage.index.close();
+            crashedStorage.forEachPartition(partition => partition.close());
+
+            const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
+            refs.push(repairedStorage);
+            repairedStorage.once('opened', () => {
+                expect(repairedStorage.openIndex('foo').length).to.be(5);
+                // The rebuilt entries are only on disk with the next checkpoint
+                expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
+                repairedStorage.checkpoint();
+                expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
+                done();
+            });
+            repairedStorage.open();
+            crashedStorage.storageLock.held = false;
+        });
+
+        it('records the checkpoint only after the changed indexes were synced', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.ensureIndex('foo', { type: 'foo' });
+            storage.write({ type: 'foo' });
+            storage.write({ type: 'bar' });
+            const synced = spyOnSyncs();
+            const indexSyncs = () => synced.map(fileName => path.basename(fileName));
+            const finish = error => {
+                synced.restore();
+                done(error);
+            };
+            storage.checkpoint(error => {
+                if (error) return finish(error);
+                expect(indexSyncs().sort()).to.eql(['storage.foo.index', 'storage.index']);
+                expect(storage.storageLock.readCheckpoint()).to.be(2);
+                expect(storage.index.modified).to.be(false);
+                synced.length = 0;
+                storage.checkpoint(error => {
+                    // Nothing changed since, but the checkpoint file itself is written synchronously
+                    if (!error) expect(synced).to.eql([]);
+                    finish(error);
+                });
+            });
+        });
+
+        it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', function() {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            storage.ensureIndex('foo', { type: 'foo' });
+            storage.ensureIndex('bar', { type: 'bar' });
+            storage.write({ type: 'foo' });
+            storage.write({ type: 'bar' });
+            storage.flush();
+            // Sync the new files, so that only the changed indexes are left for close
+            storage.syncScheduler.run();
+            storage.openIndex('bar').modified = false;
+            const fooIndex = storage.openIndex('foo');
+            fooIndex.close();
+            fsSync.unlinkSync(fooIndex.fileName);
+            const synced = [];
+            const originalSync = FileHandlePool.prototype.sync;
+            FileHandlePool.prototype.sync = function(target, callback) {
+                if (!callback) synced.push(path.basename(target.fileName));
+                return originalSync.call(this, target, callback);
+            };
+            try {
+                storage.close();
+            } finally {
+                FileHandlePool.prototype.sync = originalSync;
+            }
+            expect(synced).to.contain('storage.index');
+            expect(synced).not.to.contain('storage.bar.index');
+            expect(synced).to.contain('storage.foo.index');
+            expect(storage.locked).to.be(false);
+        });
+
+        it('does not sync the indexes on close without a sync configuration', function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ type: 'foo' });
+            const synced = [];
+            const originalSync = FileHandlePool.prototype.sync;
+            FileHandlePool.prototype.sync = function(target, callback) {
+                if (!callback) synced.push(path.basename(target.fileName));
+                return originalSync.call(this, target, callback);
+            };
+            try {
+                storage.close();
+            } finally {
+                FileHandlePool.prototype.sync = originalSync;
+            }
+            expect(synced).not.to.contain('storage.index');
         });
 
     });

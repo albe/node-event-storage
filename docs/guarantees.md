@@ -11,7 +11,7 @@ This page states what node-event-storage guarantees, under which conditions, and
 | `expectedVersion` and DCB conditions cannot be raced by another commit | Always (check and append happen in one synchronous call) | `EventStore.commit()`, `test/EventStore.spec.js` ("query" tests) |
 | Events have one total order | Always, via the global sequence number | primary index, `JoinEventStream` |
 | The writer reads its own writes | `dirtyReads: true` (default) | `test/Partition.spec.js` |
-| Acknowledged commits survive an OS crash or power loss | With `syncInterval` or `syncOnFlush` | `WritablePartition.flush()`, `WritablePartition.sync()` |
+| Acknowledged commits survive an OS crash or power loss | With `syncInterval` or `syncOnFlush` | `SyncScheduler`, `WritablePartition.flush()` |
 | Acknowledged commits survive a process crash | Always (data was handed to the OS) | `stress-test/` |
 | After a crash, the store repairs itself | When the next writer reclaims the lock: automatically if the crashed process is gone on the same machine, or forced with `LOCK_RECLAIM` | `test/Storage.spec.js` ("auto-repairs …"), `stress-test/recovery.js` |
 | No event is ever modified | Always; files are opened in append mode, and repair only truncates the tail after a crash, keeping a copy of the removed bytes in a `.branch` file | `WritablePartition.truncate()` |
@@ -63,12 +63,14 @@ When the `commit()` callback fires depends on the durability setting:
 | Setting | Commit callback fires when | Survives process crash | Survives OS crash / power loss | Write throughput |
 |---------|----------------------------|------------------------|--------------------------------|------------------|
 | default | the data was handed to the OS | yes | no | highest |
-| `syncInterval: <ms>` | the partition was `fsync`ed, at most `<ms>` after the write | yes | yes, for acknowledged commits | close to the default |
+| `syncInterval: <ms>` | the next sync run `fsync`ed it, at most `<ms>` after the write | yes | yes, for acknowledged commits | close to the default for pipelined commits; an awaited commit takes about the interval ([details](performance.md#syncinterval-and-commit-latency)) |
 | `syncOnFlush: true` | the data was `fsync`ed on every flush | yes | yes, for acknowledged commits | lowest |
 
-`syncInterval` is a group commit: all flushes of a partition within the interval share one `fsync`, and their callbacks fire after it. With either option, the directory is also synced after a new partition or index file is created, so a new stream does not disappear after a power loss.
+Every flush of a partition is handed to the storage's sync scheduler, which syncs it right away (`syncOnFlush`), with the next run (`syncInterval`) or not at all (default). A newly created partition or index file is synced together with its directory by the same rule, so a new stream does not disappear after a power loss.
 
-Index files are flushed with a short delay (100 ms by default) or when their buffer is full, and are only `fsync`ed with `syncOnFlush`. A lagging index after a crash is not data loss: the repair rebuilds missing index entries from the data files.
+`syncInterval` is a group commit: one run per interval flushes all partitions written since the last run, `fsync`s each of them and every new file and directory once, and only then fires the callbacks. Commits to different streams therefore share the same run. A run syncs its files in parallel in the background, so the process goes on writing meanwhile; the next run starts only after it finished, so the callbacks fire in the order of the writes. If an `fsync` fails, the error is thrown as an uncaught exception and the callbacks of that run never fire, because the data may be lost. Closing the store completes a pending run and syncs the files of a running one again, synchronously, before it releases the lock. Evicting a file handle because of `maxOpenPartitions` or `maxOpenIndexes` only flushes the file.
+
+Index files are flushed with a short delay (100 ms by default) or when their buffer is full, but their entries are not synced while the store is open: an index can always be rebuilt from the partitions. With `syncInterval` or `syncOnFlush`, closing the store syncs every changed index together with the last sync run. While it is open, the writer records a **checkpoint** in the lock directory every 5 minutes: it syncs every index changed since the previous checkpoint in the background, and only then records the length the primary index had before. The repair after a crash rebuilds all index entries after the last checkpoint from the partitions, so it scans at most the events written since then. The repair does not sync the entries it rebuilt either: it keeps the previous checkpoint until the next one.
 
 Consumer state files are replaced atomically (write a temporary file, then rename) but are not `fsync`ed. After an OS crash a consumer may resume from an earlier position, which means at-least-once redelivery, never a state that does not match its position.
 
@@ -86,7 +88,7 @@ An upper bound for the default case per stream is `writeBufferSize / average eve
 Opening a writer runs these steps:
 
 1. If a lock is left behind: reclaim it when its owner process is gone on this machine (`LOCK_AUTO`, the default) or unconditionally (`LOCK_RECLAIM`), otherwise throw `StorageLockedError`.
-2. If a lock was reclaimed: scan all partitions for torn writes, truncate every partition and index to the last complete document, and rebuild lagging index entries from the data (`checkTornWrites()`, `reindex()`).
+2. If a lock was reclaimed: scan all partitions for torn writes, truncate every partition to the last complete document, and rebuild all index entries after the last checkpoint from the data, including those of secondary indexes that were not loaded (`checkTornWrites()`, `reindex()`).
 3. Always: roll back an unfinished last commit (see [Atomicity](#atomicity)).
 4. Emit `'ready'`.
 

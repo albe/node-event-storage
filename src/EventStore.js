@@ -297,13 +297,15 @@ class EventStore extends events.EventEmitter {
      * Stops all registered consumers before closing storage.
      *
      * @api
+     * @param {function(Error=): void} [callback] Called once all written events are as durable as configured and
+     *   the storage is unlocked.
      */
-    close() {
+    close(callback) {
         for (const consumer of this.consumers.values()) {
             consumer.stop();
         }
         this.consumers.clear();
-        this.storage.close();
+        this.storage.close(callback);
     }
 
     /**

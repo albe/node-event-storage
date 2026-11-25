@@ -4,6 +4,11 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
+- `close()` of `EventStore` and `Storage` takes an optional callback, invoked once everything is synced and the lock is released.
+- Restore write throughput with `syncInterval` for commits across many streams: all files of a storage now share one sync run per interval, new files no longer sync their directory immediately, and evicting or closing an unchanged file no longer syncs it. A run syncs its files in parallel in the background, so it no longer blocks the process. Removed `Partition.sync()`.
+- The crash repair now rebuilds all index entries after a checkpoint that the writer records every 5 minutes, including those of secondary indexes that were not loaded. Before, a stream index could miss events after a power loss.
+- Fix a writing `Storage` not adding new documents to the secondary indexes of a previous run until they were opened again. It now loads all secondary indexes on open, as `EventStore` already did for streams.
+- Fix large unbuffered writes being acknowledged before they were synced with `syncInterval` or `syncOnFlush`.
 - `commit()` returns the commit object, so its position in the log is known before the commit callback confirms the write.
 - Fix `fromStreams()`, `query()` and category streams returning events backwards when reading from a position beyond the end of the store, e.g. the last event for `query(selector, null, length + 1)`. A join that starts outside the store is now empty, like a single stream; an upper bound beyond the end still reads to the end.
 - Fix single streams returning no events when the upper bound lies beyond the end of the stream, e.g. `getEventStream(name, 2, 100)`. They now read to the end, like a join.
