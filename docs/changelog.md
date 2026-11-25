@@ -5,11 +5,14 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 ## Unreleased
 
 - **Breaking:** `close()` of a writing `EventStore` or `Storage` completes asynchronously: it syncs everything written and the changed indexes in the background, and only then releases the lock and emits `'closed'`. `syncOnFlush` now starts a sync run right after the current tick, so commits within one tick share an `fsync`. See the [upgrade guide](upgrading/1.6.md).
-- Restore write throughput with `syncInterval` for commits across many streams: all partitions of a storage share one sync run per interval, which syncs them in parallel in the background instead of blocking the process. New files sync their directory in that run instead of immediately, and evicting a file handle no longer syncs it.
-- Fix the callbacks of large (unbuffered) writes being invoked before the write was synced, and `close()` releasing the lock before the last sync.
 - Indexes are no longer synced while the store is open, and closing an unchanged partition or index no longer syncs it. Removed `Partition.sync()`.
 - The crash repair now rebuilds all index entries after a checkpoint that the writer records every 5 minutes, including those of secondary indexes that were not loaded. Before, a stream index could miss events after a power loss.
 - Fix a writing `Storage` not adding new documents to the secondary indexes of a previous run until they were opened again. It now loads all secondary indexes on open, as `EventStore` already did for streams.
+
+## 1.5.1
+
+- Restore write throughput with `syncInterval` for commits across many streams: all partitions of a storage share one sync run per interval, which syncs them in parallel in the background instead of blocking the process. New files sync their directory in that run instead of immediately, and evicting a file handle no longer syncs it.
+- Fix the callbacks of large (unbuffered) writes being invoked before the write was synced, and `close()` releasing the lock before the last sync.
 - `commit()` returns the commit object, so its position in the log is known before the commit callback confirms the write.
 - Fix `fromStreams()`, `query()` and category streams returning events backwards when reading from a position beyond the end of the store, e.g. the last event for `query(selector, null, length + 1)`. A join that starts outside the store is now empty, like a single stream; an upper bound beyond the end still reads to the end.
 - Fix single streams returning no events when the upper bound lies beyond the end of the stream, e.g. `getEventStream(name, 2, 100)`. They now read to the end, like a join.
