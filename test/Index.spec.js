@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import fsSync from 'fs';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
 import path from 'path';
-import spyOnSyncs from './syncSpy.js';
+import spyOnSyncs, { waitFor } from './syncSpy.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
 import { CHUNK_CAPACITY } from '../src/Index/ReadableIndex.js';
@@ -71,16 +71,17 @@ describe('Index', function() {
         }
     });
 
-    it('syncs the directory when creating a new file in the next run with syncInterval', function(done) {
+    it('syncs the directory when creating a new file in the next run with syncInterval', async function() {
         const synced = spyOnSyncs();
-        index = createIndex('durable.index', { syncInterval: 5 });
-        index.open();
-        expect(synced).to.eql([]);
-        setTimeout(() => {
-            synced.restore();
+        try {
+            index = createIndex('durable.index', { syncInterval: 5 });
+            index.open();
+            expect(synced).to.eql([]);
+            await waitFor(() => synced.length > 0);
             expect(synced).to.eql([path.dirname(index.fileName)]);
-            done();
-        }, 30);
+        } finally {
+            synced.restore();
+        }
     });
 
     it('does not sync on a pool eviction, but on close', function() {
