@@ -38,7 +38,7 @@ const eventstore = new EventStore('my-store', {
 | `readBufferSize` | `number` | `4096` | Read buffer size in bytes. |
 | `writeBufferSize` | `number` | `16384` | Write buffer size in bytes. |
 | `maxWriteBufferDocuments` | `number` | `0` (unlimited) | Flush after this many buffered documents. |
-| `syncOnFlush` | `boolean` | `false` | Call `fsync` on every flush for strict durability. |
+| `syncOnFlush` | `boolean` | `false` | Sync every flush as soon as possible: like `syncInterval` with an interval of 0, a sync run starts right after the current tick. |
 | `syncInterval` | `number` | `0` (off) | Group commit: sync all partitions changed since the last run together, at most every this many milliseconds, and only then invoke the commit callbacks. Ignored when `syncOnFlush` is set. See [Durability](guarantees.md#durability). |
 | `dirtyReads` | `boolean` | `true` | Let the writer read events that are still in the write buffer. |
 | `lock` | `LOCK_AUTO\|LOCK_THROW\|LOCK_RECLAIM` | `LOCK_AUTO` | How to handle an existing lock on open: reclaim it only if its owner process is gone, never, or always. See [Operations](operations.md#crash-recovery). |

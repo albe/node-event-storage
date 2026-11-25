@@ -170,31 +170,6 @@ describe('FileHandlePool', function() {
             }
             expect(closed).to.eql([fd]);
         });
-
-        it('syncs an open file without a callback blocking through its pooled descriptor', function() {
-            pool = new FileHandlePool();
-            const target = createTarget('blocking');
-            const fd = pool.get(target);
-            const synced = [];
-            const originalFsyncSync = fsSync.fsyncSync;
-            fsSync.fsyncSync = fd => { synced.push(fd); return originalFsyncSync(fd); };
-            try {
-                pool.sync(target);
-            } finally {
-                fsSync.fsyncSync = originalFsyncSync;
-            }
-            expect(synced).to.eql([fd]);
-        });
-
-        it('syncs a file that is not open without a callback blocking and skips it once deleted', function() {
-            pool = new FileHandlePool();
-            const target = createTarget('blocking-closed');
-            fs.writeFileSync(target.fileName, 'x');
-            pool.sync(target);
-            expect(pool.has(target)).to.be(false);
-            fs.unlinkSync(target.fileName);
-            pool.sync(target);
-        });
     });
 
 });

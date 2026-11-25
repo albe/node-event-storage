@@ -50,11 +50,10 @@ function writeFileAtomic(fileName, data, tmpFileName = fileName + '.tmp') {
 
 /**
  * Sync a file to disk through its own descriptor, independent of whether and where the file is open otherwise.
- * Without a callback this blocks until the file is on disk. With a callback it runs on the libuv thread pool, so the
- * event loop goes on meanwhile and several files can be synced in parallel.
+ * Runs on the libuv thread pool, so the event loop goes on meanwhile and several files can be synced in parallel.
  *
  * @param {string} fileName
- * @param {function(Error|null)} [callback]
+ * @param {function(Error|null)} callback
  */
 function syncFile(fileName, callback) {
     syncPath(fileName, 'r+', callback);
@@ -64,34 +63,18 @@ function syncFile(fileName, callback) {
  * Like `syncFile()` for a directory. Platforms that can not open a directory for syncing (Windows) are skipped silently.
  *
  * @param {string} dirName
- * @param {function(Error|null)} [callback] Always called without an error.
+ * @param {function(Error|null)} callback Always called without an error.
  */
 function syncDirectory(dirName, callback) {
-    if (typeof callback === 'function') {
-        syncPath(dirName, 'r', () => callback(null));
-        return;
-    }
-    try {
-        syncPath(dirName, 'r');
-    } catch (e) {
-    }
+    syncPath(dirName, 'r', () => callback(null));
 }
 
 /**
  * @param {string} fileName
  * @param {string} flags The flags to open the file with. Windows needs write access to sync a file.
- * @param {function(Error|null)} [callback]
+ * @param {function(Error|null)} callback
  */
 function syncPath(fileName, flags, callback) {
-    if (typeof callback !== 'function') {
-        const fd = fs.openSync(fileName, flags);
-        try {
-            fs.fsyncSync(fd);
-        } finally {
-            fs.closeSync(fd);
-        }
-        return;
-    }
     fs.open(fileName, flags, (openError, fd) => {
         if (openError) {
             callback(openError);
@@ -99,17 +82,6 @@ function syncPath(fileName, flags, callback) {
         }
         fs.fsync(fd, syncError => fs.close(fd, closeError => callback(syncError || closeError || null)));
     });
-}
-
-/**
- * A file deleted since it was written needs no sync anymore: its data is gone on purpose.
- *
- * @param {Error} error
- */
-function ignoreDeletedFile(error) {
-    if (error.code !== 'ENOENT') {
-        throw error;
-    }
 }
 
 /**
@@ -278,7 +250,6 @@ export {
     safeUnlink,
     syncDirectory,
     syncFile,
-    ignoreDeletedFile,
     parallel,
     writeFileAtomic
 };

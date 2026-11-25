@@ -61,8 +61,8 @@ describe('Projection', function () {
         store.once('ready', done);
     });
 
-    afterEach(function () {
-        store.close();
+    afterEach(function (done) {
+        store.close(() => done());
     });
 
     it('derives the query from when and tagFilter', function () {
