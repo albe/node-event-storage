@@ -26,3 +26,26 @@ export default function spyOnSyncs() {
     } });
     return synced;
 }
+
+/**
+ * Wait until the condition holds, e.g. until a sync in the background started or acknowledged its writes. Unlike a
+ * fixed delay this does not depend on how fast the machine runs the timers and the thread pool.
+ *
+ * @param {function(): boolean} condition
+ * @param {number} [timeout] Fail after this many ms, below the test timeout so that the reason is reported.
+ * @returns {Promise<void>}
+ */
+export function waitFor(condition, timeout = 1500) {
+    const start = Date.now();
+    return new Promise((resolve, reject) => {
+        (function check() {
+            if (condition()) {
+                resolve();
+            } else if (Date.now() - start > timeout) {
+                reject(new Error(`Timed out waiting for ${condition}`));
+            } else {
+                setTimeout(check, 1);
+            }
+        })();
+    });
+}
