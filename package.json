@@ -1,6 +1,6 @@
 {
   "name": "event-storage",
-  "version": "1.4.1",
+  "version": "1.5.1",
   "type": "module",
   "description": "An optimized embedded event store for node.js",
   "keywords": [
@@ -22,7 +22,11 @@
     "url": "https://github.com/albe/node-event-storage/issues"
   },
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./projections": {
+      "types": "./projections.d.ts",
+      "default": "./projections.js"
+    }
   },
   "types": "./index.d.ts",
   "scripts": {
@@ -42,6 +46,7 @@
     "src/Partition*.js",
     "src/Storage*.js",
     "src/FileHandlePool.js",
+    "src/SyncScheduler.js",
     "src/Watcher*.js",
     "src/Clock*.js",
     "src/Index/*.js",
@@ -50,7 +55,10 @@
     "src/WatchesFile.js",
     "index.js",
     "index.d.ts",
-    "src/utils/*.js"
+    "src/utils/*.js",
+    "src/Projection.js",
+    "projections.js",
+    "projections.d.ts"
   ],
   "license": "MIT",
   "maintainers": [

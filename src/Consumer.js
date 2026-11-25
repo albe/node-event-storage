@@ -83,7 +83,7 @@ class Consumer extends stream.Readable {
         ({ initialState, startFrom } = normalizeConsumerStateArgs(initialState, startFrom));
         try {
             const consumerData = fs.readFileSync(this.fileName);
-            this.position = consumerData.readInt32LE(0);
+            this.position = consumerData.readUInt32LE(0);
             this.state = JSON.parse(consumerData.toString('utf8', 4));
         } catch (e) {
             this.position = startFrom;
@@ -155,7 +155,7 @@ class Consumer extends stream.Readable {
         this.persisting = setImmediate(() => {
             const consumerState = JSON.stringify(this.state);
             const consumerData = Buffer.allocUnsafe(4 + Buffer.byteLength(consumerState, 'utf8'));
-            consumerData.writeInt32LE(this.position, 0);
+            consumerData.writeUInt32LE(this.position, 0);
             consumerData.write(consumerState, 4, 'utf8');
             const tmpFile = this.fileName + '.' + this.position + '.tmp';
             this.persisting = null;

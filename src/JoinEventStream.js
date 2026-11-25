@@ -1,7 +1,7 @@
 import EventStream from './EventStream.js';
 import {assert} from './utils/util.js';
 import {normalizeSelector, resolveSelector} from './utils/indexUtil.js';
-import {normalizeRevision} from './utils/apiHelpers.js';
+import {normalizeMaxRevision, normalizeRevision} from './utils/apiHelpers.js';
 
 /**
  * JoinEventStream is a virtual stream over one or multiple physical stream indexes.
@@ -37,7 +37,7 @@ class JoinEventStream extends EventStream {
         this.selector = normalizeSelector(selector);
         this.streamIndex = eventStore.storage.index;
         this.minRevision = normalizeRevision(minRevision, eventStore.length);
-        this.maxRevision = normalizeRevision(maxRevision, eventStore.length);
+        this.maxRevision = normalizeMaxRevision(eventStore.length, maxRevision);
         this.version = this.streamIndex.length;
 
         this.fetch = () => this.iterateDocuments();
@@ -69,6 +69,13 @@ class JoinEventStream extends EventStream {
      * @returns {Generator<object|{ buffer: Buffer, time64: number, sequenceNumber: number }>}
      */
     * iterateDocuments() {
+        // Revisions counted from the end are already resolved and the upper bound is clamped to the end, so anything
+        // below 1 here lies before the first event. A range that starts outside the store is empty, like for a single
+        // stream. Clamping the start too would turn a read from beyond the end into a backwards read.
+        const length = this.eventStore.length;
+        if (this.minRevision < 1 || this.minRevision > length || this.maxRevision < 1) {
+            return;
+        }
         const forwards = this.minRevision <= this.maxRevision;
         for (const entry of resolveSelector(this.selector, name => this.streamRange(name), forwards)) {
             const event = this.eventStore.storage.readFrom(entry.partition, entry.position, entry.size, this.raw, !forwards);

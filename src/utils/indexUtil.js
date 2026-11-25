@@ -166,6 +166,28 @@ function optimizeSelectorNode(selectorNode, depth) {
 }
 
 /**
+ * Remove streams from a selector by treating them as empty: an OR level drops them, an AND level that contains one
+ * matches nothing anymore and is dropped as a whole. The result therefore never matches more than the input.
+ * `'_all'` is never removed.
+ *
+ * @param {string|Array} selector A selector in the algebra of `fromStreams()` (depth 0 = OR).
+ * @param {Set<string>} names The stream names to treat as empty.
+ * @param {number} [depth=0]
+ * @returns {string|Array|null} The reduced selector, or `null` if nothing is left.
+ */
+function excludeStreams(selector, names, depth = 0) {
+    if (typeof selector === 'string') {
+        return names.has(selector) && selector !== '_all' ? null : selector;
+    }
+    const children = selector.map(node => excludeStreams(node, names, depth + 1));
+    if (depth % 2 === 0) {
+        const remaining = children.filter(node => node !== null);
+        return remaining.length > 0 ? remaining : null;
+    }
+    return children.includes(null) ? null : children;
+}
+
+/**
  * Pre-compile a stream source descriptor with a single curried matcher factory:
  * `matcherFn(operator)(value) => objectMatcher`. The scalar and `$has` shapes are compiled
  * once per source so callers can pick the correct one based on the event property type
@@ -187,6 +209,7 @@ function buildStreamSource(sourcePath, nameBuilder) {
 }
 
 export {
+    excludeStreams,
     union,
     intersect,
     resolveSelector,

@@ -413,6 +413,55 @@ describe('metadataUtil', function () {
             expect(matcher(Buffer.from('{"type":"OrderCancelled","tags":["vip"]}', 'utf8'))).to.be(false);
         });
 
+        it('matches with $startsWith', function () {
+            const matcher = buildRawBufferMatcher({type: {$startsWith: 'Order'}});
+            expect(matcher(Buffer.from('{"type":"OrderPlaced"}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"type":"Order"}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"type":"PaymentOrder"}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"type":"Ord"}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"other":"OrderPlaced"}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"type":["OrderPlaced"]}', 'utf8'))).to.be(false);
+        });
+
+        it('$startsWith ignores matches inside nested objects and string values', function () {
+            const matcher = buildRawBufferMatcher({type: {$startsWith: 'Order'}});
+            expect(matcher(Buffer.from('{"nested":{"type":"OrderPlaced"},"type":"Payment"}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"note":"\\"type\\":\\"Order","type":"Payment"}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"nested":{"type":"Payment"},"type":"OrderPlaced"}', 'utf8'))).to.be(true);
+        });
+
+        it('$startsWith matches prefixes containing escaped characters', function () {
+            const prefix = 'a"b\\c\n\u00e4\u{1F600}';
+            const matcher = buildRawBufferMatcher({name: {$startsWith: prefix}});
+            expect(matcher(Buffer.from(JSON.stringify({name: prefix + 'rest'}), 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from(JSON.stringify({name: prefix}), 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from(JSON.stringify({name: 'a"b'}), 'utf8'))).to.be(false);
+        });
+
+        it('$startsWith with a prefix ending in a lone surrogate matches like String.startsWith', function () {
+            const matcher = buildRawBufferMatcher({name: {$startsWith: '\uD83D'}});
+            expect(matcher(Buffer.from(JSON.stringify({name: '\u{1F600}'}), 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from(JSON.stringify({name: 'x'}), 'utf8'))).to.be(false);
+        });
+
+        it('$startsWith combines with other operators on the same field', function () {
+            const matcher = buildRawBufferMatcher({type: {$startsWith: 'Order', $ne: 'OrderCancelled'}});
+            expect(matcher(Buffer.from('{"type":"OrderPlaced"}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"type":"OrderCancelled"}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"type":"PaymentReceived"}', 'utf8'))).to.be(false);
+        });
+
+        it('$startsWith combines with other property matchers', function () {
+            const matcher = buildRawBufferMatcher({stream: 'orders', payload: {type: {$startsWith: 'Order'}}});
+            expect(matcher(Buffer.from('{"stream":"orders","payload":{"type":"OrderPlaced"}}', 'utf8'))).to.be(true);
+            expect(matcher(Buffer.from('{"stream":"payments","payload":{"type":"OrderPlaced"}}', 'utf8'))).to.be(false);
+            expect(matcher(Buffer.from('{"stream":"orders","payload":{"type":"Refund"}}', 'utf8'))).to.be(false);
+        });
+
+        it('$startsWith throws on a non-string prefix', function () {
+            expect(() => buildRawBufferMatcher({type: {$startsWith: 1}})).to.throwError(TypeError);
+        });
+
     });
 
     describe('matches with operators ($gt, $gte, $lt, $lte, $eq, $ne)', function () {
@@ -531,6 +580,24 @@ describe('metadataUtil', function () {
         it('$hasAny returns false when the document value is not an array', function () {
             expect(matches({tags: 'a'}, {tags: {$hasAny: ['a']}})).to.be(false);
             expect(matches({tags: {a: 1}}, {tags: {$hasAny: ['a']}})).to.be(false);
+        });
+
+        it('matches with $startsWith', function () {
+            expect(matches({type: 'OrderPlaced'}, {type: {$startsWith: 'Order'}})).to.be(true);
+            expect(matches({type: 'Order'}, {type: {$startsWith: 'Order'}})).to.be(true);
+            expect(matches({type: 'PaymentOrder'}, {type: {$startsWith: 'Order'}})).to.be(false);
+            expect(matches({type: 'anything'}, {type: {$startsWith: ''}})).to.be(true);
+            expect(matches({}, {type: {$startsWith: 'Order'}})).to.be(false);
+        });
+
+        it('$startsWith returns false when the document value is not a string', function () {
+            expect(matches({type: ['OrderPlaced']}, {type: {$startsWith: 'Order'}})).to.be(false);
+            expect(matches({code: 123}, {code: {$startsWith: '1'}})).to.be(false);
+            expect(matches({type: null}, {type: {$startsWith: ''}})).to.be(false);
+        });
+
+        it('$startsWith throws on a non-string prefix', function () {
+            expect(() => matches({code: '123'}, {code: {$startsWith: 1}})).to.throwError(TypeError);
         });
 
         it('scalar matcher against array document value no longer performs containment', function () {

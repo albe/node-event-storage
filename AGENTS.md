@@ -54,6 +54,8 @@ EventStore  →  Storage  →  Partition (append-only data files)
 - **`initialized` three-state**: `null` = not started, `false` = scan in progress, `true` = scan done. Re-opens after `close()` are synchronous.
 - **`open(callback)` hook** — fires after `openIndexes()` and before `'opened'`. Used by `WritableStorage` for torn-write repair.
 - **LOCK_RECLAIM in `open()`** — orphaned lock removal lives in `WritableStorage.open()`, directly before `lock()`; torn-write repair runs via the `open(callback)` hook.
+- **Torn-write repair only reaches loaded secondary indexes** — `checkTornWrites()`/`reindex()` truncate via `forEachWritableSecondaryIndex`. Anything that registers indexes without loading them (lazy open, a startup manifest, an index that catches up from a persisted position) must truncate or rebuild them inside the repair run itself, not defer it to a later `openIndex()`: its stale-tail check (`lastEntry.number > index.length`) no longer fires once the primary index has grown past the stale entries again.
+- **One sync scheduler per storage**: partitions hand every flush and every new file to the storage-wide `SyncScheduler` (`flushed()`, `created()`), which syncs immediately (`syncOnFlush`), in the next run (`syncInterval`) or never. A run syncs its files in parallel in the background through `FileHandlePool.sync()` (the pooled descriptor, pinned during the sync); runs never overlap, so callbacks fire in write order. Evicting a handle only flushes; closing a partition, an index or the storage syncs.
 - **EventStore `initialize()`** — register `storage.on('index-created', ...)` *before* calling `storage.open()`.
 - **Watcher singleton key includes watch options** — do not share one `DirectoryWatcher` across different `fs.watch` option sets (notably recursive vs non-recursive), or read-only/file watchers can miss events.
 - **ReadOnlyStorage watcher filenames may contain leading directories** — normalize watched filenames to the storage-relative segment (starting at `<storageFile>...`) so nested index roots (e.g. `streams/`) and hierarchical stream paths both resolve correctly.
@@ -94,6 +96,7 @@ No build step; source is plain ESM consumed directly. No linter configured.
 - User docs live in `docs/` (MkDocs, built by Read the Docs per release tag). Write them for the current state only: no "since version x" notes; version history belongs in `docs/changelog.md` and `docs/upgrading.md`.
 - When a public API changes, update `docs/api.md`, `index.d.ts`, the relevant guide page and `docs/changelog.md` in the same change. Mark breaking changes as such in the changelog.
 - Read the Docs builds one documentation version per release tag (`vX.Y.Z`, activated by an automation rule); `stable` is the latest tag, `latest` is `main`. Link docs as `/en/stable/` from README and package metadata.
+- Changes to file layouts, durability or locking must be reflected in `docs/storage-format.md`, `docs/guarantees.md` and, if limits change, `docs/limitations.md`. Claims in `docs/guarantees.md` name the code and tests that back them; keep `docs/verify.md` in sync when tests are renamed.
 - Breaking changes get a page under `docs/upgrading/` and a row in its overview table.
 - `concepts/` holds internal design drafts. Never link them from user docs; document only what was implemented.
 

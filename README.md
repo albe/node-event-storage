@@ -63,13 +63,13 @@ eventstore.on('ready', () => {
 | **Optimistic concurrency** | Pass `expectedVersion` to `commit()` to guarantee conflict-free writes. |
 | **Flexible stream reading** | Range queries, reverse iteration, and a fluent builder API. |
 | **Joined and derived streams** | Combine any number of streams with a nested OR/AND selector tree into one globally-ordered virtual stream; filter events into reusable derived projection streams. |
-| **Object matchers** | Support nested equality, array values (OR semantics), scalar operators (`$gt` / `$gte` / `$lt` / `$lte` / `$eq` / `$ne`), plus array-containment operators (`$has` / `$hasAny`), while still benefiting from O(1) discriminant routing on writes. |
+| **Object matchers** | Support nested equality, array values (OR semantics), scalar operators (`$gt` / `$gte` / `$lt` / `$lte` / `$eq` / `$ne`), string prefixes (`$startsWith`), plus array-containment operators (`$has` / `$hasAny`), while still benefiting from O(1) discriminant routing on writes. |
 | **DCB** | Configure `typeAccessor` to have per-type stream indexes maintained automatically, and use `query()` / `Condition` for fine-grained, query-scoped optimistic concurrency (Dynamic Consistency Boundaries). |
 | **Stream categories** | Name streams `<category>-<id>` and query the whole category at once. |
 | **Durable consumers** | At-least-once (and exactly-once with `setState`) event delivery with automatic position tracking. |
 | **Consistency guards** | Build aggregates that enforce business invariants with built-in snapshotting. |
 | **Read-only mode** | Open the store from a second process to build projections without touching the writer. |
-| **Crash safety** | Torn writes detected and truncated on startup; automatic index repair via `LOCK_RECLAIM`; bounded, predictable data loss validated by a dedicated stress test. |
+| **Crash safety** | Torn writes detected and truncated on startup; automatic lock reclaim and index repair after a crashed writer; bounded, predictable data loss validated by a dedicated stress test. |
 | **Custom serialization** | Plug in msgpack, protobuf, or any other codec. |
 | **Compression** | Apply LZ4, zstd, or any other compression via the `serializer` option. |
 | **Access control hooks** | `preCommit` / `preRead` hooks with per-stream metadata for authorization. |
@@ -89,7 +89,7 @@ The full documentation is hosted at **<https://node-event-storage.readthedocs.io
 
 - **New to event sourcing?** [Event Sourcing in 5 Minutes](https://node-event-storage.readthedocs.io/en/stable/event-sourcing/), [When to Use](https://node-event-storage.readthedocs.io/en/stable/when-to-use/), [Getting Started](https://node-event-storage.readthedocs.io/en/stable/getting-started/).
 - **Guides:** [Writing and Reading Events](https://node-event-storage.readthedocs.io/en/stable/reading-writing/), [Organizing Streams](https://node-event-storage.readthedocs.io/en/stable/organizing-streams/), [Matchers](https://node-event-storage.readthedocs.io/en/stable/matchers/), [DCB](https://node-event-storage.readthedocs.io/en/stable/dcb/), [Consumers](https://node-event-storage.readthedocs.io/en/stable/consumers/), [Multiple Processes](https://node-event-storage.readthedocs.io/en/stable/multi-process/), [Customization](https://node-event-storage.readthedocs.io/en/stable/customization/), [Operations](https://node-event-storage.readthedocs.io/en/stable/operations/).
-- **Evaluating the implementation?** [Guarantees](https://node-event-storage.readthedocs.io/en/stable/guarantees/), [Implementation Architecture](https://node-event-storage.readthedocs.io/en/stable/architecture/), [Performance](https://node-event-storage.readthedocs.io/en/stable/performance/).
+- **Evaluating the implementation?** [Guarantees](https://node-event-storage.readthedocs.io/en/stable/guarantees/), [Storage Format](https://node-event-storage.readthedocs.io/en/stable/storage-format/), [Implementation Architecture](https://node-event-storage.readthedocs.io/en/stable/architecture/), [Performance](https://node-event-storage.readthedocs.io/en/stable/performance/), [Limitations](https://node-event-storage.readthedocs.io/en/stable/limitations/), [Verify It Yourself](https://node-event-storage.readthedocs.io/en/stable/verify/).
 - **Reference:** [API](https://node-event-storage.readthedocs.io/en/stable/api/), [Configuration](https://node-event-storage.readthedocs.io/en/stable/configuration/), [Changelog](https://node-event-storage.readthedocs.io/en/stable/changelog/), [Upgrading](https://node-event-storage.readthedocs.io/en/stable/upgrading/).
 
 ---

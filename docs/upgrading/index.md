@@ -7,6 +7,7 @@ Each page covers one release with breaking changes. When skipping several versio
 | 0.x | 1.0 | [ESM migration, named exports](1.0.md) |
 | 1.0 / 1.1 | 1.2 | [Consumer scanning, stream-name validation](1.2.md) |
 | 1.2 / 1.3 | 1.4 | [Missing streams, string-only `typeAccessor`](1.4.md) |
+| 1.4 | 1.5 | [Lazy `Index.range()`, automatic lock recovery](1.5.md) |
 
 All other releases are backwards compatible; see the [Changelog](../changelog.md).
 

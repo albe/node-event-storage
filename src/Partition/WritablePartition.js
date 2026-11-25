@@ -4,6 +4,7 @@ import { assert, alignTo } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
 import Clock from '../Clock.js';
+import SyncScheduler from '../SyncScheduler.js';
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 const DOCUMENT_PAD = ' '.repeat(DOCUMENT_ALIGNMENT);
@@ -22,6 +23,8 @@ class WritablePartition extends ReadablePartition {
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
+     * @param {number} [config.syncInterval] Call fsync at most every this many ms and only invoke write callbacks after it. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
+     * @param {SyncScheduler} [config.syncScheduler] The scheduler that syncs the flushes, shared by all files of a storage. Defaults to one for this partition, configured by `syncOnFlush` and `syncInterval`.
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {object} [config.metadata] A metadata object that will be written to the file header.
      * @param {typeof Clock} [config.clock] The constructor to a clock interface
@@ -31,6 +34,7 @@ class WritablePartition extends ReadablePartition {
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
             syncOnFlush: false,
+            syncInterval: 0,
             dirtyReads: true,
             metadata: {
                 epoch: Date.now()
@@ -44,7 +48,7 @@ class WritablePartition extends ReadablePartition {
         this.fileMode = 'a+';
         this.writeBufferSize = config.writeBufferSize >>> 0; // jshint ignore:line
         this.maxWriteBufferDocuments = config.maxWriteBufferDocuments >>> 0; // jshint ignore:line
-        this.syncOnFlush = !!config.syncOnFlush;
+        this.syncScheduler = config.syncScheduler || new SyncScheduler({ syncOnFlush: config.syncOnFlush, syncInterval: config.syncInterval >>> 0 }); // jshint ignore:line
         this.dirtyReads = !!config.dirtyReads;
         this.metadata = config.metadata;
         assert(typeof(config.clock.prototype) === 'object' && typeof(config.clock.prototype.time) === 'function', 'Clock needs to implement the method time()');
@@ -93,6 +97,12 @@ class WritablePartition extends ReadablePartition {
      * @returns void
      */
     close() {
+        if (this.writeBuffer) {
+            this.flush();
+        }
+        if (this.syncScheduler.isWaiting(this)) {
+            this.syncScheduler.run();
+        }
         super.close();
         if (this.writeBuffer) {
             this.writeBuffer = null;
@@ -103,16 +113,20 @@ class WritablePartition extends ReadablePartition {
     }
 
     /**
-     * Flush pending buffered writes before the pool closes the descriptor.
+     * Flush pending buffered writes before the pool closes the descriptor. Closing the partition also syncs it. An
+     * eviction does not: a flush waiting for a sync is synced by the scheduler, through its own descriptor if needed.
      *
      * @param {number} fd
+     * @param {boolean} evicted
      */
-    onBeforeClose(fd) {
+    onBeforeClose(fd, evicted) {
         if (!this.writeBuffer) {
             return;
         }
         this.flush();
-        fs.fsyncSync(fd);
+        if (!evicted) {
+            fs.fsyncSync(fd);
+        }
     }
 
     /**
@@ -125,6 +139,7 @@ class WritablePartition extends ReadablePartition {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeFileSync(this.fileName, metadataBuffer);
         this.headerSize = metadataBuffer.byteLength;
+        this.syncScheduler.created(this);
     }
 
     /**
@@ -141,19 +156,30 @@ class WritablePartition extends ReadablePartition {
             return false;
         }
 
-        const fd = this.getFileHandle();
-        fs.writeSync(fd, this.writeBuffer, 0, this.writeBufferCursor);
-        if (this.syncOnFlush) {
-            fs.fsyncSync(fd);
-        }
-
+        fs.writeSync(this.getFileHandle(), this.writeBuffer, 0, this.writeBufferCursor);
         this.writeBufferCursor = 0;
         this.writeBufferDocuments = 0;
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
-        for (let i = 0; i < callbacks.length; i++) callbacks[i]();
+        this.syncScheduler.flushed(this, callbacks);
 
         return true;
+    }
+
+    /**
+     * Flush the write buffer and fsync the file, then invoke all callbacks waiting for durability, including those of
+     * other files of the same storage.
+     *
+     * @api
+     */
+    sync() {
+        if (this.isOpen()) {
+            this.flush();
+        }
+        this.syncScheduler.run();
+        if (this.isOpen()) {
+            this.fileHandlePool.sync(this);
+        }
     }
 
     /**
@@ -238,9 +264,7 @@ class WritablePartition extends ReadablePartition {
         this.writeMetaBuffer.writeUInt32BE(dataSize, 0);
         bytesWritten += fs.writeSync(fd, this.writeMetaBuffer, 0, 4);
         bytesWritten += fs.writeSync(fd, DOCUMENT_SEPARATOR);
-        if (typeof callback === 'function') {
-            process.nextTick(callback);
-        }
+        this.syncScheduler.flushed(this, typeof callback === 'function' ? [() => process.nextTick(callback)] : []);
         return bytesWritten;
     }
 

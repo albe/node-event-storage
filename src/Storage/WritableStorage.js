@@ -3,8 +3,10 @@ import path from 'path';
 import WritablePartition from '../Partition/WritablePartition.js';
 import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableIndex.js';
 import ReadableStorage from './ReadableStorage.js';
+import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
+import SyncScheduler from '../SyncScheduler.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
@@ -13,10 +15,8 @@ const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 
-const LOCK_RECLAIM = 0x1;
-const LOCK_THROW = 0x2;
-
-class StorageLockedError extends Error {}
+// Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
+const MAX_UINT32 = 0xFFFFFFFF;
 
 /**
  * @typedef {object|function(object):boolean} Matcher
@@ -41,11 +41,12 @@ class WritableStorage extends ReadableStorage {
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
+     * @param {number} [config.syncInterval] Group commit: fsync every partition written at most this many ms later, in one shared run, and only then invoke write callbacks. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {function(object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
      * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
      * @param {string} [config.hmacSecret] A private key that is used to verify matchers retrieved from indexes.
-     * @param {number} [config.lock] One of LOCK_* constants that defines how an existing lock should be handled.
+     * @param {number} [config.lock] One of LOCK_* constants that defines how an existing lock should be handled. Default LOCK_AUTO.
      */
     constructor(storageName = 'storage', config = {}) {
         ({ name: storageName, options: config } = normalizeNamedCtorArgs(storageName, config));
@@ -54,24 +55,31 @@ class WritableStorage extends ReadableStorage {
             writeBufferSize: DEFAULT_WRITE_BUFFER_SIZE,
             maxWriteBufferDocuments: 0,
             syncOnFlush: false,
+            syncInterval: 0,
             dirtyReads: true,
-            dataDirectory: '.'
+            dataDirectory: '.',
+            lock: LOCK_AUTO
         };
         config = Object.assign(defaults, config);
-        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush }, config.indexOptions);
+        assert(Number.isInteger(config.syncInterval) && config.syncInterval >= 0, 'syncInterval must be a non-negative integer.');
+        // One scheduler for all partitions and indexes, so that the files flushed within an interval share one sync run.
+        const syncScheduler = new SyncScheduler(config);
+        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush, syncInterval: config.syncInterval }, config.indexOptions, { syncScheduler });
+        config.syncScheduler = syncScheduler;
         ensureDirectory(config.dataDirectory);
         super(storageName, config);
+        this.syncScheduler = syncScheduler;
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
-        this._lockMode = config.lock;
+        this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
         this.partitioner = config.partitioner;
         this.partitionIds = {};
     }
 
     /**
      * Acquires the write lock synchronously.
-     * For LOCK_RECLAIM, removes any orphaned lock before trying to acquire our own; torn-write
-     * repair runs after the primary index is open, before `'opened'` is emitted.
+     * Removes an orphaned lock first (always with LOCK_RECLAIM, with LOCK_AUTO only when its owner process is gone);
+     * torn-write repair then runs after the primary index is open, before `'opened'` is emitted.
      *
      * @param {function(): void} [callback] Called after indexes open, before `'opened'` is emitted.
      *   Can be used as a synchronous alternative to listening to the `'opened'` event.
@@ -79,7 +87,7 @@ class WritableStorage extends ReadableStorage {
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open(callback) {
-        const needsRepair = this._lockMode === LOCK_RECLAIM && this.unlock();
+        const needsRepair = this.storageLock.reclaimOrphaned();
 
         if (!this.lock()) {
             return true;
@@ -218,52 +226,66 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * @api
+     * @returns {{pid: number, hostname: string, pidNamespace: string|null, lockedAt: string}|null} The process holding
+     *   the lock, or null if the storage is not locked or the lock carries no owner information.
+     */
+    readLockOwner() {
+        return this.storageLock.readOwner();
+    }
+
+    /**
+     * @returns {boolean} If this writer holds the storage lock.
+     */
+    get locked() {
+        return this.storageLock.held;
+    }
+
+    /**
      * Attempt to lock this storage by means of a lock directory.
      * @returns {boolean} True if the lock was created or false if the lock is already in place.
      * @throws {StorageLockedError} If this storage is already locked by another process.
      * @throws {Error} If the lock could not be created.
      */
     lock() {
-        if (this.locked) {
-            return false;
-        }
-        try {
-            fs.mkdirSync(this.lockFile);
-            this.locked = true;
-        } catch (e) {
-            /* c8 ignore next */
-            assert(e.code === 'EEXIST', `Error creating lock for storage ${this.storageFile}: ` + e.message)
-
-            throw new StorageLockedError(`Storage ${this.storageFile} is locked by another process`);
-        }
-        return true;
+        return this.storageLock.acquire();
     }
 
     /**
      * Unlock this storage, no matter if it was previously locked by this writer.
      * Only use this if you are sure there is no other process still having a writer open.
-     * Current implementation just deletes a lock file that is named like the storage.
      * @returns {boolean} True if an orphaned lock from another process was removed.
      */
     unlock() {
-        const lockExists = fs.existsSync(this.lockFile);
-        const orphaned = lockExists && !this.locked;
-        if (lockExists) {
-            fs.rmdirSync(this.lockFile);
-        }
-        this.locked = false;
-        return orphaned;
+        return this.storageLock.release();
     }
 
     /**
      * @inheritDoc
-     * Unlocks the storage, then delegates to the parent close().
+     * Syncs everything written as configured, unlocks the storage, then delegates to the parent close().
      */
     close() {
+        this.forEachPartition(partition => partition.flush());
+        this.syncScheduler.run();
         if (this.locked) {
             this.unlock();
         }
         super.close();
+    }
+
+    /**
+     * Reject a write that the index format can not record, before anything is written. Otherwise the document would
+     * land in the partition and the index entry would fail afterwards, leaving data and index diverged.
+     *
+     * @private
+     * @param {WritablePartition} partition The partition the document will be written to.
+     * @throws {Error} if the storage or the partition is full.
+     */
+    assertWithinLimits(partition) {
+        assert(this.index.length < MAX_UINT32,
+            `Storage is full: it can hold at most ${MAX_UINT32} documents.`);
+        assert(partition.size <= MAX_UINT32,
+            `Partition ${partition.name} is full: documents must start within the first 4 GiB of a partition. Use a partitioner that spreads the documents over more partitions.`);
     }
 
     /**
@@ -402,6 +424,7 @@ class WritableStorage extends ReadableStorage {
 
         const partitionName = this.partitioner(document, this.index.length + 1);
         const partition = this.getPartition(partitionName);
+        this.assertWithinLimits(partition);
         this.emit('preCommit', document, partition.metadata);
 
         const position = partition.write(data, this.length, callback);
@@ -599,4 +622,4 @@ class WritableStorage extends ReadableStorage {
 }
 
 export default WritableStorage;
-export { StorageLockedError, LOCK_THROW, LOCK_RECLAIM };
+export { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO };

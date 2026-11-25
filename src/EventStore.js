@@ -3,13 +3,13 @@ import JoinEventStream from './JoinEventStream.js';
 import fs from 'fs';
 import path from 'path';
 import events from 'events';
-import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM } from './Storage.js';
+import Storage, { ReadOnly as ReadOnlyStorage, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './Storage.js';
 import Index from './Index.js';
 import Consumer from './Consumer.js';
 import { assert } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
-import { normalizeSelector, buildStreamSource } from "./utils/indexUtil.js";
+import { normalizeSelector, buildStreamSource, excludeStreams } from "./utils/indexUtil.js";
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
 const ExpectedVersion = {
@@ -67,6 +67,27 @@ class CommitCondition {
         this.matcher = matcher;
         this.raw = raw;
         this.noneMatchAfter = noneMatchAfter;
+    }
+
+    /**
+     * Narrow this condition so that new events in the given streams no longer cause a conflict, e.g. because the
+     * decision only depends on part of the queried events: a concurrent unsubscribe cannot invalidate a new
+     * subscription, even though the decision model counts it.
+     *
+     * The streams are treated as empty: they are removed from OR levels, and an AND level containing one of them is
+     * removed as a whole. The condition therefore never gets wider. Event types address their type streams, which
+     * are named like the type when `typeAccessor` is configured.
+     *
+     * @api
+     * @param {...(string|string[])} streams The stream names (e.g. event types) to ignore in the conflict check.
+     * @returns {CommitCondition} A new condition at the same position.
+     * @throws {Error} When no stream would be left to check.
+     */
+    without(...streams) {
+        const selector = excludeStreams(this.selector, new Set(streams.flat()));
+        assert(selector !== null, 'without() would leave no streams to check. Commit without a condition instead.');
+        const normalized = normalizeSelector(selector);
+        return new CommitCondition(Array.isArray(normalized) ? normalized : [normalized], this.matcher, this.noneMatchAfter, this.raw);
     }
 }
 
@@ -495,6 +516,7 @@ class EventStore extends events.EventEmitter {
      *   stream version number, or a {@link CommitCondition} obtained from {@link EventStore#query}.
      * @param {object} [metadata] The commit metadata to use as base. Useful for replication and adding storage metadata.
      * @param {function} [callback] A function that will be executed when all events have been committed.
+     * @returns {object} The commit, which already holds its position in the log. The events are not durable before the callback fires.
      * @throws {OptimisticConcurrencyError} if the stream is not at the expected version, or if a
      *   {@link CommitCondition} was provided and conflicting events have been committed since it was obtained.
      */
@@ -559,6 +581,7 @@ class EventStore extends events.EventEmitter {
             commit.events.push(event);
             this.storage.write(storedEvent, commitVersion !== events.length ? undefined : commitCallback);
         }
+        return commit;
     }
 
     /**
@@ -900,4 +923,4 @@ EventStore.Storage = Storage;
 EventStore.Index = Index;
 
 export default EventStore;
-export { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM };
+export { ExpectedVersion, OptimisticConcurrencyError, CommitCondition, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO };

@@ -1,10 +1,14 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
-import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM } from '../src/Storage.js';
+import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM, LOCK_THROW } from '../src/Storage.js';
+import os from 'os';
+import { spawnSync } from 'child_process';
 import { matches } from '../src/utils/metadataUtil.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
+import fsSync from 'fs';
+import spyOnSyncs from './syncSpy.js';
 //import lz4 from 'lz4';
 import { fileURLToPath } from 'url';
 
@@ -87,6 +91,87 @@ describe('Storage', function() {
                 expect(fileContent).to.contain(JSON.stringify({ foo: 'bar' }));
                 done();
             });
+        });
+
+        it('can write durable with a sync interval', function(done) {
+            storage = createStorage({ syncInterval: 5 });
+            storage.open();
+
+            storage.write({ foo: 'bar' }, () => {
+                expect(storage.syncScheduler.callbacks.length).to.be(0);
+                let fileContent = fs.readFileSync('test/data/storage', 'utf8');
+                expect(fileContent).to.contain(JSON.stringify({ foo: 'bar' }));
+                done();
+            });
+        });
+
+        it('syncs all partitions written within the interval in one background run', function(done) {
+            storage = createStorage({ syncInterval: 5, partitioner: doc => doc.part });
+            storage.open();
+            storage.write({ part: 'a' });
+            storage.write({ part: 'b' });
+            storage.flush();
+            const synced = spyOnSyncs();
+            const originalFsync = fsSync.fsyncSync;
+            let blocking = 0;
+            fsSync.fsyncSync = (fd) => { blocking++; return originalFsync(fd); };
+            const acknowledged = [];
+            storage.write({ part: 'a' }, () => acknowledged.push('a'));
+            storage.write({ part: 'b' }, () => {
+                acknowledged.push('b');
+                fsSync.fsyncSync = originalFsync;
+                synced.restore();
+                expect(acknowledged).to.eql(['a', 'b']);
+                expect(synced.filter(name => name.includes('storage.')).sort()).to.eql([
+                    storage.getPartition('a').fileName, storage.getPartition('b').fileName
+                ].sort());
+                expect(blocking).to.be(0);
+                done();
+            });
+        });
+
+        it('syncs pending writes before releasing the lock on close', function() {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            let written = false;
+            storage.write({ foo: 'bar' }, () => {
+                written = true;
+                expect(storage.locked).to.be(true);
+            });
+            storage.close();
+            expect(written).to.be(true);
+        });
+
+        it('throws on an invalid sync interval', function() {
+            expect(() => createStorage({ syncInterval: -1 })).to.throwError(/syncInterval/);
+            expect(() => createStorage({ syncInterval: 1.5 })).to.throwError(/syncInterval/);
+        });
+
+        it('rejects a document that would start beyond 4 GiB of its partition without writing it', function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+            const partition = storage.getPartition('');
+            const size = partition.size;
+            partition.size = 2 ** 32;
+
+            expect(() => storage.write({ foo: 'baz' })).to.throwError(/Partition .* is full/);
+            partition.size = size;
+            expect(storage.index.length).to.be(1);
+            expect(partition.size).to.be(size);
+        });
+
+        it('rejects a document when the index can hold no further entries', function() {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+            const partitionSize = storage.getPartition('').size;
+            Object.defineProperty(storage.index, 'length', { value: 0xFFFFFFFF, configurable: true });
+
+            expect(() => storage.write({ foo: 'baz' })).to.throwError(/Storage is full/);
+            delete storage.index.length;
+            expect(storage.index.length).to.be(1);
+            expect(storage.getPartition('').size).to.be(partitionSize);
         });
 
         it('reopens partition if partition was closed', function() {
@@ -1258,7 +1343,7 @@ describe('Storage', function() {
             });
             repairedStorage.open();
             // Prevent afterEach from trying to remove the now-gone lock file
-            crashedStorage.locked = false;
+            crashedStorage.storageLock.held = false;
         });
 
     });
@@ -1332,6 +1417,67 @@ describe('Storage', function() {
                 storage.open();
             }).to.throwError(e => e instanceof StorageLockedError);
             storage2.close();
+        });
+
+        function leaveLock(storageInstance, owner) {
+            fs.mkdirSync(storageInstance.lockFile);
+            if (owner) {
+                const pidNamespace = (() => { try { return fs.readlinkSync('/proc/self/ns/pid'); } catch (e) { return null; } })();
+                fs.writeFileSync(path.join(storageInstance.lockFile, 'owner.lock'), JSON.stringify(Object.assign({
+                    hostname: os.hostname(), pidNamespace, lockedAt: new Date().toISOString()
+                }, owner)));
+            }
+        }
+
+        function deadPid() {
+            return spawnSync(process.execPath, ['-e', '']).pid;
+        }
+
+        it('records the lock owner', function() {
+            storage = createStorage();
+            storage.open();
+            const owner = storage.readLockOwner();
+            expect(owner.pid).to.be(process.pid);
+            expect(owner.hostname).to.be(os.hostname());
+            expect(owner.lockedAt).to.be.a('string');
+        });
+
+        it('reclaims the lock of a process that is gone and repairs the storage', function(done) {
+            const crashedStorage = createStorage();
+            crashedStorage.open();
+            for (let i = 1; i <= 5; i++) {
+                crashedStorage.write({ foo: i });
+            }
+            crashedStorage.flush();
+            crashedStorage.index.truncate(3);
+            crashedStorage.index.flush();
+            crashedStorage.close();
+            leaveLock(crashedStorage, { pid: deadPid() });
+
+            storage = createStorage();
+            storage.once('opened', () => {
+                expect(storage.index.length).to.be(5);
+                expect(storage.readLockOwner().pid).to.be(process.pid);
+                done();
+            });
+            storage.open();
+        });
+
+        it('does not treat lock files as partitions', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+            storage.flush();
+            const reader = createReader();
+            expect(reader.storageFilesFilter('storage.lock')).to.be(false);
+            expect(reader.storageFilesFilter('storage.lock/owner.lock')).to.be(false);
+            reader.open();
+            reader.once('opened', () => {
+                const partitionNames = [];
+                reader.forEachPartition(partition => partitionNames.push(partition.name));
+                expect(partitionNames).to.eql(['storage']);
+                done();
+            });
         });
 
         it('releases write lock after closing', function(){

@@ -56,7 +56,7 @@ This is mainly useful for deployment handover workflows where one process stops 
 #### `commit(streamName, events, [expectedVersion], [metadata], [callback])` ✅ Stable
 
 ```javascript
-eventstore.commit(streamName, events [, expectedVersion] [, metadata] [, callback])
+eventstore.commit(streamName, events [, expectedVersion] [, metadata] [, callback]) → commit
 ```
 
 Append one or more events to a stream.
@@ -69,6 +69,8 @@ Append one or more events to a stream.
 | `metadata` | `object` | `{}` | Additional metadata merged into every event's metadata envelope. |
 | `expectedVersion` | `number\|CommitCondition` | `ExpectedVersion.Any` | Either a stream version (see above) or the `condition` returned by `query()` for a DCB-style check. |
 | `callback` | `function(commit)` | — | Called with the `commit` object after all events have been flushed to disk. |
+
+Returns the `commit` object as soon as the events are in the write buffer. It already holds its position in the log (`commitId` is the number of events before it), so a caller can hand it on before the events are durable. The callback receives the same object once the events are acknowledged as described in [Guarantees](guarantees.md).
 
 Throws `OptimisticConcurrencyError` synchronously when the stream is not at `expectedVersion`, or when events matching the `CommitCondition` were appended since the query. The callback is not called with an error.
 
@@ -151,6 +153,7 @@ Create a new named stream backed by an index that includes every event matching 
 - a plain object using nested equality,
 - array values for OR semantics,
 - scalar comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`),
+- the string prefix operator `$startsWith`,
 - array-containment operators (`$has`, `$hasAny`), or
 - a predicate `(document) => boolean`.
 
@@ -329,11 +332,26 @@ These are named exports of the package (`import { ExpectedVersion } from 'event-
 | `ExpectedVersion.Any` | `-1` | Skip version check. |
 | `ExpectedVersion.EmptyStream` | `0` | Assert the stream is new. |
 | `OptimisticConcurrencyError` | `Error` subclass | Thrown when an expected-version or `CommitCondition` check fails. |
-| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. |
-| `LOCK_THROW` | constant | Throw if storage lock is held (default). |
+| `CommitCondition` | class | Returned by `query()`; pass it to `commit()`. `condition.without(...streams)` returns a narrowed condition at the same position that ignores new events in those streams (event types with `typeAccessor`). |
+| `LOCK_AUTO` | constant | Reclaim the storage lock only if the process holding it is gone, otherwise throw (default). |
+| `LOCK_THROW` | constant | Always throw if the storage lock is held. |
 | `LOCK_RECLAIM` | constant | Forcefully reclaim storage lock on open. |
 | `VERSION` | `string` | Package version (also available as `EventStore.VERSION`). |
 | `matches`, `buildRawBufferMatcher` | functions | Low-level matcher utilities. |
+
+### Projections subpath
+
+`import { createProjection, composeProjections, buildDecisionModel } from 'event-storage/projections'` (not yet stable).
+
+| Export | Description |
+|--------|-------------|
+| `createProjection({ initialState, when, tagFilter? })` | Creates a projection; its `query` is derived from the handler types and the tag filter. |
+| `composeProjections({ name: projection, ... })` | Combines projections; state has one key per projection, query is the OR of all parts. |
+| `buildDecisionModel(store, projectionOrMap)` | Reads the matching events and returns an immutable `DecisionModel` with `state` and `commitCondition`; pass `commitCondition` to `commit()`. |
+| `DecisionModel#since([condition])` | `EventStream` of the events matching the condition (default `commitCondition`) committed after the model was built, i.e. those that block a commit. |
+| `DecisionModel#update()` | Returns a new model with only the events committed since applied (or the same model when nothing is new). |
+
+See [DCB → Projections and Decision Models](dcb.md#projections-and-decision-models).
 
 ---
 
@@ -596,7 +614,7 @@ Accepts the same options except the write-specific ones. In addition to the read
 storage.open() → boolean
 ```
 
-Open the storage and all loaded indexes.  Emits `'opened'`.  The writable variant also acquires a lock; throws `StorageLockedError` if the storage is already locked by another process (unless `config.lock = LOCK_RECLAIM`).
+Open the storage and all loaded indexes.  Emits `'opened'`.  The writable variant also acquires a lock; throws `StorageLockedError` if the storage is already locked by another process that is still running (unless `config.lock = LOCK_RECLAIM`).
 
 ---
 

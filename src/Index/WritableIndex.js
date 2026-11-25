@@ -3,6 +3,7 @@ import ReadableIndex, { Entry, CorruptedIndexError, HEADER_MAGIC, CHUNK_CAPACITY
 import { assert, assertEqual } from '../utils/util.js';
 import { buildMetadataHeader } from '../utils/metadataUtil.js';
 import { ensureDirectory } from '../utils/fsUtil.js';
+import SyncScheduler from '../SyncScheduler.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 
 /**
@@ -26,6 +27,7 @@ class WritableIndex extends ReadableIndex {
      * @param {number} [options.writeBufferSize] The amount of bytes of unwritten entries after which they are flushed. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
+     * @param {SyncScheduler} [options.syncScheduler] Syncs the directory of a new index file, shared by all files of a storage. Defaults to one for this index, configured by `syncOnFlush` and `syncInterval`.
      */
     constructor(name = '.index', options = {}) {
         ({ name, options } = normalizeNamedCtorArgs(name, options, '.index'));
@@ -53,6 +55,7 @@ class WritableIndex extends ReadableIndex {
         this.flushCallbacks = [];
         this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
         this.syncOnFlush = !!options.syncOnFlush;
+        this.syncScheduler = options.syncScheduler || new SyncScheduler({ syncOnFlush: options.syncOnFlush, syncInterval: options.syncInterval });
     }
 
     /**
@@ -112,19 +115,35 @@ class WritableIndex extends ReadableIndex {
         const metadataBuffer = buildMetadataHeader(HEADER_MAGIC, this.metadata);
         fs.writeSync(this.getFileHandle(), metadataBuffer, 0, metadataBuffer.byteLength, 0);
         this.headerSize = metadataBuffer.byteLength;
+        this.syncScheduler.created(this);
     }
 
     /**
-     * Flush pending buffered writes before the pool closes the descriptor.
+     * Flush pending buffered writes before the pool closes the descriptor. Closing the index also syncs it, an eviction
+     * does not.
      *
      * @param {number} fd
+     * @param {boolean} evicted
      */
-    onBeforeClose(fd) {
+    onBeforeClose(fd, evicted) {
         if (!this.flushCallbacks) {
             return;
         }
         this.flush();
-        fs.fdatasyncSync(fd);
+        if (!evicted) {
+            fs.fdatasyncSync(fd);
+        }
+    }
+
+    /**
+     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it
+     * since the last write, so no buffered entry is lost.
+     *
+     * @api
+     */
+    close() {
+        this.flush();
+        super.close();
     }
 
     /**

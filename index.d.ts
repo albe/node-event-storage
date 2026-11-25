@@ -34,7 +34,93 @@ export interface DcbQuery {
     items: DcbQueryItem[];
 }
 
-export type CommitCallback = (commit: Record<string, unknown>) => void;
+export interface Commit {
+    commitId: number;
+    committedAt: number;
+    streamName: string;
+    streamVersion: number;
+    events: any[];
+    [metadata: string]: unknown;
+}
+
+export type CommitCallback = (commit: Commit) => void;
+
+export interface Serializer {
+    serialize(document: any): string | Buffer;
+    deserialize(data: string | Buffer): any;
+}
+
+export interface LockOwner {
+    pid: number;
+    hostname: string;
+    pidNamespace: string | null;
+    lockedAt: string;
+}
+
+export interface StorageConfig {
+    /** Directory for partition (event) files. Defaults to `storageDirectory`. */
+    dataDirectory?: string;
+    /** Directory for index files. Defaults to `streamsDirectory`. */
+    indexDirectory?: string;
+    /** File name of the primary index. Default `'{storeName}.index'`. */
+    indexFile?: string;
+    /** Returns the partition (file) name for a document. */
+    partitioner?: (document: any, sequenceNumber: number) => string;
+    /** Custom serialization or compression. Default JSON. */
+    serializer?: Serializer;
+    /** Read buffer size in bytes. Default 4096. */
+    readBufferSize?: number;
+    /** Write buffer size in bytes. Default 16384. */
+    writeBufferSize?: number;
+    /** Flush after this many buffered documents. Default 0 (unlimited). */
+    maxWriteBufferDocuments?: number;
+    /** Call fsync on every flush. Default false. */
+    syncOnFlush?: boolean;
+    /** Group commit: fsync each partition at most every this many ms and only then invoke the commit callbacks. Default 0 (off). */
+    syncInterval?: number;
+    /** Let the writer read events that are still in the write buffer. Default true. */
+    dirtyReads?: boolean;
+    /** How to handle an existing lock on open: `LOCK_AUTO` (default), `LOCK_THROW` or `LOCK_RECLAIM`. */
+    lock?: number;
+    /** Secret used to verify persisted function matchers. */
+    hmacSecret?: string;
+    /** Metadata written to each partition header. */
+    metadata?: Record<string, unknown> | ((partitionName: string) => Record<string, unknown>);
+    /** Document paths used for O(1) routing of writes to indexes. Default `['stream', 'payload.type']`. */
+    matcherProperties?: string[];
+    /** Maximum open partition file descriptors (0 = unlimited). Default 1024. */
+    maxOpenPartitions?: number;
+    /** Maximum open index file descriptors (0 = unlimited). Default 1024. */
+    maxOpenIndexes?: number;
+    /** Options passed to every index on construction. */
+    indexOptions?: Record<string, unknown>;
+}
+
+export interface StreamSource {
+    /** Dot-notation path into the event payload. */
+    path: string;
+    /** Builds the stream name from the value at `path`. */
+    nameBuilder: (value: string) => string;
+}
+
+export interface EventStoreConfig {
+    /** Directory for data files. Default `'./data'`. */
+    storageDirectory?: string;
+    /** Directory for stream index files. Default `'{storageDirectory}/streams'`. */
+    streamsDirectory?: string;
+    /** Open the store in read-only mode. Default false. */
+    readOnly?: boolean;
+    /** Dot-notation path to the event type; maintains one stream per type value. */
+    typeAccessor?: string;
+    /** Dot-notation path to an array of tag strings; maintains one stream `tags/<tag>` per tag value. */
+    tagsAccessor?: string;
+    /** Generic automatically maintained streams. */
+    streamSources?: StreamSource[];
+    /** Metadata stored once per stream at creation. */
+    streamMetadata?: Record<string, Record<string, unknown>> | ((streamName: string) => Record<string, unknown>);
+    /** Storage options. */
+    storageConfig?: StorageConfig;
+}
 
 export class CommitCondition {
     constructor(selector: StreamSelector | string, matcher: EventMatcher | null | undefined, noneMatchAfter: number, raw?: boolean);
@@ -42,6 +128,8 @@ export class CommitCondition {
     matcher: EventMatcher | null;
     raw: boolean;
     noneMatchAfter: number;
+    /** A narrowed condition at the same position that ignores new events in the given streams (e.g. event types). */
+    without(...streams: Array<string | string[]>): CommitCondition;
 }
 
 export class OptimisticConcurrencyError extends Error {}
@@ -78,6 +166,7 @@ export class EventStream extends Readable {
         options: { concurrency?: number; signal?: AbortSignal }
     ): Readable;
     next(): any | false;
+    [Symbol.iterator](): Iterator<any>;
 }
 
 export class Consumer extends Readable {
@@ -96,11 +185,18 @@ export class Storage extends EventEmitter {
     static StorageLockedError: typeof StorageLockedError;
     static LOCK_THROW: number;
     static LOCK_RECLAIM: number;
+    static LOCK_AUTO: number;
+
+    constructor(storageName?: string, config?: StorageConfig);
+    constructor(config: StorageConfig);
 
     initialized: boolean | null;
     length: number;
     indexDirectory: string;
     storageFile: string;
+
+    /** The process holding the lock, or null if the storage is not locked or the lock has no owner information. */
+    readLockOwner(): LockOwner | null;
 }
 
 export class StorageLockedError extends Error {}
@@ -123,7 +219,8 @@ export class EventStore extends EventEmitter {
     consumers: Map<string, Consumer>;
     length: number;
 
-    constructor(storeName?: string, config?: Record<string, unknown>);
+    constructor(storeName?: string, config?: EventStoreConfig);
+    constructor(config: EventStoreConfig);
 
     open(callback?: (err?: Error | null) => void): void;
     close(callback?: (err?: Error | null) => void): void;
@@ -143,10 +240,10 @@ export class EventStore extends EventEmitter {
         expectedVersion?: number | CommitCondition,
         metadata?: Record<string, unknown>,
         callback?: CommitCallback
-    ): void;
-    commit(streamName: string, events: any | any[], expectedVersion: number | CommitCondition, callback: CommitCallback): void;
-    commit(streamName: string, events: any | any[], metadata: Record<string, unknown>, callback?: CommitCallback): void;
-    commit(streamName: string, events: any | any[], callback: CommitCallback): void;
+    ): Commit;
+    commit(streamName: string, events: any | any[], expectedVersion: number | CommitCondition, callback: CommitCallback): Commit;
+    commit(streamName: string, events: any | any[], metadata: Record<string, unknown>, callback?: CommitCallback): Commit;
+    commit(streamName: string, events: any | any[], callback: CommitCallback): Commit;
 
     getConsumer(streamName: string, identifier: string, initialState?: Record<string, unknown>, since?: number): Consumer;
     getConsumer(identifier: string): Consumer | null;
@@ -158,6 +255,7 @@ export class EventStore extends EventEmitter {
 
 export const LOCK_THROW: number;
 export const LOCK_RECLAIM: number;
+export const LOCK_AUTO: number;
 
 export function matches(document: Record<string, unknown>, matcher: Record<string, unknown>): boolean;
 export function buildRawBufferMatcher(matcher: Record<string, unknown>): (buffer: Buffer, startOffset?: number) => boolean;

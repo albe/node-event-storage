@@ -1,6 +1,9 @@
 import expect from 'expect.js';
 import fs from 'fs-extra';
+import fsSync from 'fs';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
+import path from 'path';
+import spyOnSyncs from './syncSpy.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
@@ -215,6 +218,157 @@ describe('Partition', function() {
             }
         });
 
+    });
+
+    describe('syncInterval', function() {
+
+        let fsyncCalls, originalFsync;
+
+        beforeEach(function() {
+            fsyncCalls = 0;
+            originalFsync = fsSync.fsyncSync;
+            fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
+        });
+
+        afterEach(function() {
+            fsSync.fsyncSync = originalFsync;
+        });
+
+        it('syncs the directory when creating a new file in the next run', function(done) {
+            partition.close();
+            fs.emptyDirSync(dataDirectory);
+            const synced = spyOnSyncs();
+            partition = new Partition('.part', { dataDirectory, syncInterval: 5 });
+            partition.open();
+            expect(synced).to.eql([]);
+            setTimeout(() => {
+                synced.restore();
+                expect(synced).to.eql([path.dirname(partition.fileName)]);
+                done();
+            }, 30);
+        });
+
+        it('syncs the directory immediately when creating a new file with syncOnFlush', function() {
+            partition.close();
+            fs.emptyDirSync(dataDirectory);
+            partition = new Partition('.part', { dataDirectory, syncOnFlush: true });
+            partition.open();
+            expect(fsyncCalls).to.be(1);
+        });
+
+        it('does not sync the directory without a durability option', function() {
+            partition.close();
+            fs.emptyDirSync(dataDirectory);
+            partition = new Partition('.part', { dataDirectory });
+            partition.open();
+            expect(fsyncCalls).to.be(0);
+        });
+
+        it('invokes write callbacks only after one shared fsync', function(done) {
+            partition.close();
+            partition = new Partition('.part', { dataDirectory, syncInterval: 10 });
+            partition.open();
+            fsyncCalls = 0;
+            const written = [];
+            const synced = spyOnSyncs();
+            partition.write('one', () => written.push(1));
+            partition.flush();
+            partition.write('two', () => written.push(2));
+            partition.flush();
+            expect(written).to.eql([]);
+            expect(fsyncCalls).to.be(0);
+            setTimeout(() => {
+                synced.restore();
+                expect(written).to.eql([1, 2]);
+                expect(synced.filter(name => name === partition.fileName)).to.eql([partition.fileName]);
+                expect(fsyncCalls).to.be(0);
+                done();
+            }, 30);
+        });
+
+        it('syncs and invokes pending callbacks on sync()', function() {
+            partition.close();
+            partition = new Partition('.part', { dataDirectory, syncInterval: 1000 });
+            partition.open();
+            fsyncCalls = 0;
+            let written = false;
+            partition.write('one', () => (written = true));
+            partition.sync();
+            expect(written).to.be(true);
+            expect(fsyncCalls).to.be.greaterThan(0);
+        });
+
+        it('syncs and invokes pending callbacks on close', function() {
+            partition.close();
+            partition = new Partition('.part', { dataDirectory, syncInterval: 1000 });
+            partition.open();
+            let written = false;
+            partition.write('one', () => (written = true));
+            partition.flush();
+            expect(written).to.be(false);
+            partition.close();
+            expect(written).to.be(true);
+        });
+
+        it('does not sync on a pool eviction, but invokes the callbacks after the next run', function(done) {
+            const fileHandlePool = new FileHandlePool(1);
+            partition.close();
+            partition = new Partition('.part', { dataDirectory, syncInterval: 5, fileHandlePool });
+            partition.open();
+            fsyncCalls = 0;
+            const synced = spyOnSyncs();
+            let written = false;
+            partition.write('one', () => (written = true));
+            const other = new Partition('.other', { dataDirectory, fileHandlePool });
+            other.open();
+            expect(fsyncCalls).to.be(0);
+            expect(written).to.be(false);
+            setTimeout(() => {
+                synced.restore();
+                expect(written).to.be(true);
+                expect(synced).to.contain(partition.fileName);
+                other.close();
+                done();
+            }, 30);
+        });
+
+        it('does not sync on a pool eviction without a durability option', function() {
+            const fileHandlePool = new FileHandlePool(1);
+            partition.close();
+            partition = new Partition('.part', { dataDirectory, fileHandlePool });
+            partition.open();
+            fsyncCalls = 0;
+            partition.write('one');
+            const other = new Partition('.other', { dataDirectory, fileHandlePool });
+            other.open();
+            expect(fsyncCalls).to.be(0);
+            other.close();
+        });
+
+        it('invokes the callback of an unbuffered write only after the next run', function(done) {
+            partition.close();
+            partition = new Partition('.part', { dataDirectory, syncInterval: 5, writeBufferSize: 64 });
+            partition.open();
+            let written = false;
+            partition.write('x'.repeat(100), () => (written = true));
+            setImmediate(() => {
+                expect(written).to.be(false);
+                setTimeout(() => {
+                    expect(written).to.be(true);
+                    done();
+                }, 30);
+            });
+        });
+
+        it('is ignored when syncOnFlush is set', function() {
+            partition.close();
+            partition = new Partition('.part', { dataDirectory, syncInterval: 1000, syncOnFlush: true });
+            partition.open();
+            let written = false;
+            partition.write('one', () => (written = true));
+            partition.flush();
+            expect(written).to.be(true);
+        });
     });
 
     describe('readAll', function() {
@@ -658,6 +812,57 @@ describe('Partition', function() {
 
             partition.truncate(position);
             expect(partition.size).to.be(position);
+        });
+
+    });
+
+    describe('findDocumentPositionBefore', function() {
+
+        function expectDocumentStarts(reader, starts, size) {
+            for (let position = 1; position <= size; position++) {
+                const expected = starts.filter(start => start < position - (position % 4) || (position % 4 === 0 && start < position)).pop();
+                expect(reader.findDocumentPositionBefore(position)).to.be(expected ?? false);
+            }
+        }
+
+        it('ignores separator bytes inside the timestamp of a document header', function() {
+            // A timestamp whose big-endian bytes contain the document separator 00 00 1E 0A at a non-aligned offset
+            const time = Buffer.from([0x40, 0x10, 0x00, 0x00, 0x1E, 0x0A, 0x00, 0x00]).readDoubleBE(0);
+            class SeparatorClock { time() { return time; } }
+            partition = new Partition('.part', { dataDirectory, readBufferSize: 4*1024, clock: SeparatorClock });
+            partition.open();
+            const starts = [];
+            for (let i = 1; i <= 5; i++) starts.push(partition.write('doc-' + i, i));
+            partition.flush();
+
+            const reader = createReader();
+            reader.open();
+            expectDocumentStarts(reader, starts, reader.size);
+        });
+
+        it('finds separators that cross the start of the read buffer', function() {
+            partition.open();
+            const starts = [];
+            for (let i = 1; i <= 10; i++) starts.push(partition.write('x'.repeat(13 * i), i));
+            partition.flush();
+
+            for (const readBufferSize of [61, 64, 67, 100]) {
+                const reader = createReader({ readBufferSize });
+                reader.open();
+                expectDocumentStarts(reader, starts, reader.size);
+            }
+        });
+
+        it('ignores separator bytes in the sequence number of a document header', function() {
+            // Sequence number 7690 is 00 00 1E 0A in big-endian, aligned like a real separator
+            partition.open();
+            const starts = [];
+            for (let i = 7688; i <= 7692; i++) starts.push(partition.write('doc-' + i, i));
+            partition.flush();
+
+            const reader = createReader();
+            reader.open();
+            expectDocumentStarts(reader, starts, reader.size);
         });
 
     });

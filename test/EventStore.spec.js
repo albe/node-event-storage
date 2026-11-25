@@ -316,6 +316,25 @@ describe('EventStore', function() {
             expect(() => eventstore.commit({ foo: 'bar' })).to.throwError();
         });
 
+        it('returns the commit before the callback fires', function(done) {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+
+            eventstore.commit('foo-bar', { foo: 'bar' });
+            let callbackFired = false;
+            const commit = eventstore.commit('foo-bar', [{ foo: 'baz' }, { foo: 'qux' }], 1, persisted => {
+                callbackFired = true;
+                expect(persisted).to.be(commit);
+                done();
+            });
+            expect(callbackFired).to.be(false);
+            expect(commit.commitId).to.be(1);
+            expect(commit.streamName).to.be('foo-bar');
+            expect(commit.streamVersion).to.be(1);
+            expect(commit.events).to.eql([{ foo: 'baz' }, { foo: 'qux' }]);
+        });
+
         it('throws when no events specified', function() {
             eventstore = new EventStore({
                 storageDirectory
@@ -595,6 +614,18 @@ describe('EventStore', function() {
             });
         });
 
+        it('reads to the end when the upper bound lies beyond it and is empty when it starts beyond the end', function() {
+            eventstore = new EventStore({
+                storageDirectory
+            });
+            eventstore.commit('foo-bar', [{ foo: 1 }, { foo: 2 }, { foo: 3 }]);
+
+            expect(eventstore.getEventStream('foo-bar', 2, 100).events).to.eql([{ foo: 2 }, { foo: 3 }]);
+            expect(eventstore.getEventStream('foo-bar', 3, 1).events).to.eql([{ foo: 3 }, { foo: 2 }, { foo: 1 }]);
+            expect(eventstore.getEventStream('foo-bar', 4).events).to.eql([]);
+            expect(eventstore.getEventStream('foo-bar', 10, 1).events).to.eql([]);
+        });
+
         it('can iterate events in reverse order', function() {
             eventstore = new EventStore({
                 storageDirectory
@@ -791,6 +822,17 @@ describe('EventStore', function() {
                     expect(parsed.payload.type).to.be('B');
                     done();
                 });
+            });
+        });
+
+        it('filters by $startsWith in object and raw mode', function(done) {
+            eventstore = new EventStore({ storageDirectory });
+            eventstore.commit('orders', [{ type: 'OrderPlaced' }, { type: 'PaymentReceived' }, { type: 'OrderShipped' }], () => {
+                const matcher = { payload: { type: { $startsWith: 'Order' } } };
+                expect(eventstore.getAllEvents(1, -1, matcher).events.map(event => event.type)).to.eql(['OrderPlaced', 'OrderShipped']);
+                const chunks = [...eventstore.getAllEvents(1, -1, matcher, true)];
+                expect(chunks.map(chunk => JSON.parse(chunk.toString('utf8')).payload.type)).to.eql(['OrderPlaced', 'OrderShipped']);
+                done();
             });
         });
 
