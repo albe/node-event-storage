@@ -4,7 +4,7 @@ import fsSync from 'fs';
 import Partition, { ReadOnly as ReadOnlyPartition, CorruptFileError as PartitionCorruptFileError } from '../src/Partition.js';
 import FileHandlePool from '../src/FileHandlePool.js';
 import SyncScheduler from '../src/SyncScheduler.js';
-import spyOnSyncs from './syncSpy.js';
+import spyOnSyncs, { waitFor } from './syncSpy.js';
 import { InvalidDataSizeError, DOCUMENT_HEADER_SIZE, DOCUMENT_FOOTER_SIZE, HEADER_MAGIC } from '../src/Partition/ReadablePartition.js';
 import { fileURLToPath } from 'url';
 
@@ -261,7 +261,7 @@ describe('Partition', function() {
             expect(fsyncCalls).to.be(3);
         });
 
-        it('invokes write callbacks only after one shared sync', function(done) {
+        it('invokes write callbacks only after one shared sync', async function() {
             openWith({ syncInterval: 10 });
             const synced = spyOnSyncs();
             const written = [];
@@ -270,14 +270,15 @@ describe('Partition', function() {
             partition.write('two', () => written.push(2));
             partition.flush();
             expect(written).to.eql([]);
-            setTimeout(() => {
+            try {
+                await waitFor(() => written.length === 2);
+            } finally {
                 synced.restore();
-                expect(written).to.eql([1, 2]);
-                // the file and its new directory, in the background
-                expect(synced).to.eql([partition.fileName, dataDirectory]);
-                expect(fsyncCalls).to.be(0);
-                done();
-            }, 30);
+            }
+            expect(written).to.eql([1, 2]);
+            // the file and its new directory, in the background
+            expect(synced).to.eql([partition.fileName, dataDirectory]);
+            expect(fsyncCalls).to.be(0);
         });
 
         it('acknowledges unbuffered writes only after the sync', function(done) {

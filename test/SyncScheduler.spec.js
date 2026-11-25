@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import SyncScheduler from '../src/SyncScheduler.js';
 import FileHandlePool from '../src/FileHandlePool.js';
+import { waitFor } from './syncSpy.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -52,6 +53,7 @@ describe('SyncScheduler', function() {
         releases.splice(0).forEach(resolve => resolve());
     }
 
+    // Only for checks that something did NOT happen: long enough for an interval of 1 ms to elapse.
     function settle() {
         return new Promise(resolve => setTimeout(resolve, 20));
     }
@@ -60,12 +62,12 @@ describe('SyncScheduler', function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
         files.forEach((file, i) => scheduler.flushed(file, [() => acknowledged.push(i)]));
-        await settle();
-        // All syncs started before any of them finished
+        // All syncs start before any of them finished
+        await waitFor(() => opened.length === files.length);
         expect(opened).to.eql(files.map(file => file.fileName));
         expect(acknowledged).to.eql([]);
         release();
-        await settle();
+        await waitFor(() => acknowledged.length === files.length);
         expect(acknowledged).to.eql([0, 1, 2]);
         expect(syncSync).to.eql([]);
     });
@@ -74,17 +76,17 @@ describe('SyncScheduler', function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
-        await settle();
+        await waitFor(() => opened.length === 1);
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         await settle();
         // The interval of the second flush has elapsed, but the first run is still syncing
         expect(opened).to.eql([files[0].fileName]);
         release();
-        await settle();
+        await waitFor(() => opened.length === 2);
         expect(acknowledged).to.eql([0]);
         expect(opened).to.eql([files[0].fileName, files[1].fileName]);
         release();
-        await settle();
+        await waitFor(() => acknowledged.length === 2);
         expect(acknowledged).to.eql([0, 1]);
     });
 
@@ -92,7 +94,7 @@ describe('SyncScheduler', function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         const acknowledged = [];
         scheduler.flushed(files[0], [() => acknowledged.push(0)]);
-        await settle();
+        await waitFor(() => opened.length === 1);
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         scheduler.created(files[2]);
         scheduler.run();
@@ -109,7 +111,7 @@ describe('SyncScheduler', function() {
     it('ignores a failed background sync that run() already took over', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         scheduler.flushed(files[0]);
-        await settle();
+        await waitFor(() => opened.length === 1);
         scheduler.run();
         fs.rmSync(files[0].fileName);
         release();
@@ -120,18 +122,17 @@ describe('SyncScheduler', function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         let acknowledged = false;
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
-        await settle();
+        await waitFor(() => opened.length === 1);
         fs.rmSync(files[0].fileName);
         release();
-        await settle();
-        expect(acknowledged).to.be(true);
+        await waitFor(() => acknowledged);
     });
 
     it('throws a failed background sync as an uncaught exception', async function() {
         const scheduler = new SyncScheduler({ syncInterval: 1 });
         let acknowledged = false;
         scheduler.flushed(files[0], [() => (acknowledged = true)]);
-        await settle();
+        await waitFor(() => opened.length === 1);
         failWith = 'EIO';
         const listeners = process.listeners('uncaughtException');
         process.removeAllListeners('uncaughtException');
