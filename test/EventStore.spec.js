@@ -655,6 +655,18 @@ describe('EventStore', function() {
             });
         });
 
+        it('recognizes a retry with a CommitCondition that does not select the committed events', function() {
+            eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
+            eventstore.commit('order-1', [{ type: 'Placed' }]);
+            const { condition } = eventstore.query(['Cancelled']);
+            eventstore.commit('order-2', [{ type: 'Shipped' }]);
+            const original = eventstore.commit('order-1', [{ type: 'Shipped' }], condition, { idempotencyKey: 'k1' });
+            const commit = eventstore.commit('order-1', [{ type: 'Shipped' }], condition, { idempotencyKey: 'k1' });
+            expect(commit.duplicate).to.be(true);
+            expect(commit.commitId).to.be(original.commitId);
+            expect(eventstore.length).to.be(3);
+        });
+
         it('recognizes a retry with a CommitCondition after other commits came in between', function() {
             eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
             const { condition } = eventstore.query(['Ordered']);
@@ -668,7 +680,7 @@ describe('EventStore', function() {
             expect(eventstore.length).to.be(4);
         });
 
-        it('still fails a CommitCondition when the first matching event has the key but another stream', function() {
+        it('still fails a CommitCondition when the key was used in another stream', function() {
             eventstore = new EventStore({ storageDirectory, typeAccessor: 'type' });
             const { condition } = eventstore.query(['Ordered']);
             eventstore.commit('order-2', [{ type: 'Ordered' }], condition, { idempotencyKey: 'k1' });

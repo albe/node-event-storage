@@ -461,27 +461,22 @@ class EventStore extends events.EventEmitter {
      * @throws {OptimisticConcurrencyError}
      */
     checkCondition(condition) {
-        assert(this.findFirstConflict(condition) === false, `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`, OptimisticConcurrencyError);
-    }
+        if (this.storage.length <= condition.noneMatchAfter) return; // no new events since condition was obtained
 
-    /**
-     * @private
-     * @param {CommitCondition} condition
-     * @returns {object|boolean} The first event matching the condition after its position, or false.
-     */
-    findFirstConflict(condition) {
-        if (this.storage.length <= condition.noneMatchAfter) return false; // no new events since condition was obtained
+        const selector = condition.selector || condition.types;
 
         // Only events after condition.noneMatchAfter can be conflicts.
         // Pass the original matcher and raw flag so the stream filters at the source.
-        return this.fromStreams(
+        const stream = this.fromStreams(
             '_check_' + Date.now(),
-            condition.selector || condition.types,
+            selector,
             condition.noneMatchAfter + 1,
             -1,
             condition.matcher,
             condition.raw
-        ).next();
+        );
+
+        assert(stream.next() === false, `Optimistic Concurrency error. A conflicting event was committed since the condition was obtained.`, OptimisticConcurrencyError);
     }
 
     /**
@@ -608,22 +603,25 @@ class EventStore extends events.EventEmitter {
 
     /**
      * A retry comes with the same `expectedVersion` or `CommitCondition` as the original commit, so the original is the
-     * first event after that boundary: right after `expectedVersion` in the stream, or the first event matching the
-     * condition after its position. With `ExpectedVersion.Any` there is no boundary and the last event of the stream
-     * is checked.
+     * first event of the stream after that boundary: right after `expectedVersion`, or after the condition's position in
+     * the store, whatever the condition selects. With `ExpectedVersion.Any` there is no boundary and the last event of
+     * the stream is checked.
      *
      * @private
      * @returns {object|null} The metadata of an event of the original commit, or null.
      */
     findOriginalCommit(streamName, expectedVersion, idempotencyKey) {
-        let event = false;
+        if (!(streamName in this.streams)) {
+            return null;
+        }
+        let event;
         if (expectedVersion instanceof CommitCondition) {
-            event = this.findFirstConflict(expectedVersion);
-        } else if (streamName in this.streams) {
+            event = this.fromStreams('_idempotency_' + Date.now(), [streamName], expectedVersion.noneMatchAfter + 1).next();
+        } else {
             const revision = expectedVersion === ExpectedVersion.Any ? this.getStreamVersion(streamName) : expectedVersion + 1;
             event = this.getEventStream(streamName, revision, revision).next();
         }
-        return event && event.stream === streamName && event.metadata.idempotencyKey === idempotencyKey ? event.metadata : null;
+        return event && event.metadata.idempotencyKey === idempotencyKey ? event.metadata : null;
     }
 
     /**
