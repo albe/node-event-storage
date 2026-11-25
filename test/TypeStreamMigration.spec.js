@@ -66,6 +66,32 @@ describe('Type stream migration', function () {
         expect(store.query({ items: [{ types: ['OrderPlaced'] }] }).stream.events.map(e => e.id)).to.eql([1, 2]);
     });
 
+    it('renames the index file of a legacy type stream instead of copying it', async function () {
+        store = await open(legacy);
+        await commit(store, 'orders', [{ type: 'OrderPlaced', id: 1 }]);
+        const legacyFile = store.streams.OrderPlaced.index.fileName;
+        const inode = fs.statSync(legacyFile).ino;
+        store.close();
+
+        store = await open({ typeAccessor: 'type' });
+        const migratedFile = store.streams['types/OrderPlaced'].index.fileName;
+        expect(fs.existsSync(legacyFile)).to.be(false);
+        expect(fs.statSync(migratedFile).ino).to.be(inode);
+    });
+
+    it('drops the legacy type stream when the namespaced one already exists', async function () {
+        store = await open({ streamSources: [
+            { path: 'type', nameBuilder: (type) => type },
+            { path: 'type', nameBuilder: (type) => `types/${type}` }
+        ] });
+        await commit(store, 'orders', [{ type: 'OrderPlaced', id: 1 }]);
+        store.close();
+
+        store = await open({ typeAccessor: 'type' });
+        expect(store.getStreamVersion('OrderPlaced')).to.be(-1);
+        expect(store.query({ items: [{ types: ['OrderPlaced'] }] }).stream.events.map(e => e.id)).to.eql([1]);
+    });
+
     it('leaves streams alone that only share the name of a type', async function () {
         store = await open({});
         await commit(store, 'OrderPlaced', [{ type: 'Something', id: 1 }]);

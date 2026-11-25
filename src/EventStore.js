@@ -10,6 +10,7 @@ import { assert } from './utils/util.js';
 import { ensureDirectory, resolvePath, scanForFiles } from './utils/fsUtil.js';
 import { fixCommitArgumentTypes, parseStreamFromIndexName, normalizePredicateRaw } from './utils/apiHelpers.js';
 import { normalizeSelector, buildStreamSource, excludeStreams } from "./utils/indexUtil.js";
+import { migrateTypeStreams } from './TypeStreamMigration.js';
 import { isDcbQuery, compileDcbQuery } from "./utils/dcbUtil.js";
 
 const ExpectedVersion = {
@@ -210,7 +211,7 @@ class EventStore extends events.EventEmitter {
         this.mountStorage(storage, () => {
             if (storageConfig.readOnly !== true) {
                 this.checkUnfinishedCommits();
-                this.migrateTypeStreams();
+                migrateTypeStreams(this);
             }
             this.emit('ready');
         });
@@ -229,33 +230,6 @@ class EventStore extends events.EventEmitter {
         this.streams._all = { index: this.storage.index };
         this.storage.on('index-created', this.registerStream.bind(this));
         this.storage.open(onOpened);
-    }
-
-    /**
-     * Move type streams created before type streams were namespaced (named like the type, e.g. `CourseCreated`)
-     * to `types/<type>`. A stream counts as a type stream when its stored matcher is exactly the `typeAccessor`
-     * matcher for its name. The entries are copied, so no document is read, and the old stream is deleted.
-     * @private
-     */
-    migrateTypeStreams() {
-        if (this.typeSource === null) return;
-        const typeMatcher = this.typeSource.matcherFn(undefined);
-        for (const streamName of Object.keys(this.streams)) {
-            if (streamName === '_all' || streamName.includes('/') || this.streams[streamName].closed) continue;
-            const stored = this.storage.secondaryIndexes['stream-' + streamName]?.matcher;
-            if (!stored || typeof stored !== 'object' || JSON.stringify(stored) !== JSON.stringify(typeMatcher(streamName))) continue;
-            const target = this.typeSource.nameBuilder(streamName);
-            if (!(target in this.streams)) {
-                this.createEventStream(target, stored, false);
-                const index = this.streams[target].index;
-                for (const entry of this.streams[streamName].index.all()) {
-                    index.add(entry);
-                }
-                index.flush();
-            }
-            this.deleteEventStream(streamName);
-            this.emit('stream-migrated', streamName, target);
-        }
     }
 
     /**

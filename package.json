@@ -45,6 +45,7 @@
     "src/Storage*.js",
     "src/FileHandlePool.js",
     "src/SyncScheduler.js",
+    "src/TypeStreamMigration.js",
     "src/Watcher*.js",
     "src/Clock*.js",
     "src/Index/*.js",
