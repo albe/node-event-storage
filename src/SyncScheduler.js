@@ -1,5 +1,5 @@
 import path from 'path';
-import { syncDirectory, syncDirectoryBlocking } from './utils/fsUtil.js';
+import { syncDirectory, parallel } from './utils/fsUtil.js';
 /** @typedef {import('./FileHandlePool.js').default} FileHandlePool */
 
 /**
@@ -37,7 +37,7 @@ class SyncScheduler {
      */
     flushed(file, callbacks = []) {
         if (this.immediate) {
-            file.fileHandlePool.syncBlocking(file);
+            file.fileHandlePool.sync(file);
         } else if (this.interval > 0) {
             this.files.add(file);
             for (let i = 0; i < callbacks.length; i++) this.callbacks.push(callbacks[i]);
@@ -55,8 +55,8 @@ class SyncScheduler {
      */
     created(file) {
         if (this.immediate) {
-            file.fileHandlePool.syncBlocking(file);
-            syncDirectoryBlocking(path.dirname(file.fileName));
+            file.fileHandlePool.sync(file);
+            syncDirectory(path.dirname(file.fileName));
         } else if (this.interval > 0) {
             this.files.add(file);
             this.directories.add(path.dirname(file.fileName));
@@ -74,21 +74,28 @@ class SyncScheduler {
 
     /**
      * The interval of the oldest waiting flush has elapsed. If a run is still syncing, the next one starts right after it.
+     * A failed sync is thrown as an uncaught exception: the data may be lost, and no write after it must be acknowledged.
      * @private
      */
     elapsed() {
         this.timeout = null;
         if (this.running) {
             this.due = true;
-        } else {
-            this.runInBackground();
+            return;
         }
+        this.run(error => {
+            if (error) {
+                process.nextTick(() => { throw error; });
+            } else if (this.due) {
+                this.elapsed();
+            }
+        });
     }
 
     /**
      * Take everything waiting for a sync, leaving the scheduler empty.
      * @private
-     * @returns {{files: Set<string>, directories: Set<string>, callbacks: Array<function>}}
+     * @returns {{files: Set<object>, directories: Set<string>, callbacks: Array<function>}}
      */
     take() {
         const { files, directories, callbacks } = this;
@@ -104,48 +111,36 @@ class SyncScheduler {
     }
 
     /**
-     * Sync every waiting file and the directory of every new file in parallel in the background, then invoke the
-     * waiting callbacks. A failed sync is thrown as an uncaught exception: the data may be lost, and no write after it
-     * must be acknowledged.
-     * @private
+     * Sync every waiting file and the directory of every new file, then invoke their write callbacks in the order of
+     * the writes. Writes from within the callbacks belong to the next run.
+     * Without a callback this blocks until everything is on disk, and takes over a run still syncing in the background,
+     * as when closing the storage. With a callback it syncs everything in parallel in the background.
+     *
+     * @param {function(Error|null)} [callback] Called once the run is done, or with the error of a failed sync.
      */
-    runInBackground() {
-        const batch = this.take();
-        const syncs = [];
-        for (const file of batch.files) syncs.push(file.fileHandlePool.sync(file));
-        for (const directory of batch.directories) syncs.push(syncDirectory(directory));
-        this.running = batch;
-        Promise.all(syncs).then(() => {
-            if (this.running !== batch) return;
+    run(callback) {
+        const background = typeof callback === 'function';
+        const batches = !background && this.running ? [this.running, this.take()] : [this.take()];
+        const batch = batches[batches.length - 1];
+        this.running = background ? batch : null;
+        const done = error => {
+            // A run that a blocking run took over was synced and acknowledged by it already.
+            if (background && this.running !== batch) return;
             this.running = null;
-            invoke(batch.callbacks);
-            if (this.due) {
-                this.runInBackground();
-            }
-        }, error => {
-            // A run that `run()` took over was synced again by it already.
-            if (this.running !== batch) return;
-            process.nextTick(() => { throw error; });
-        });
-    }
-
-    /**
-     * Sync everything waiting, and everything a background run is still syncing, right now, then invoke all their
-     * callbacks in the order of the writes. Used when closing the storage, so that nothing remains unsynced.
-     * Writes from within the callbacks belong to the next run.
-     */
-    run() {
-        const running = this.running;
-        const batch = this.take();
-        this.running = null;
-        if (running) {
-            for (const file of running.files) file.fileHandlePool.syncBlocking(file);
-            for (const directory of running.directories) syncDirectoryBlocking(directory);
+            if (!error) batches.forEach(({ callbacks }) => invoke(callbacks));
+            callback?.(error);
+        };
+        const syncs = [];
+        for (const { files, directories } of batches) {
+            for (const file of files) syncs.push(next => file.fileHandlePool.sync(file, next));
+            for (const directory of directories) syncs.push(next => syncDirectory(directory, next));
         }
-        for (const file of batch.files) file.fileHandlePool.syncBlocking(file);
-        for (const directory of batch.directories) syncDirectoryBlocking(directory);
-        if (running) invoke(running.callbacks);
-        invoke(batch.callbacks);
+        if (background) {
+            parallel(syncs, done);
+        } else {
+            syncs.forEach(sync => sync());
+            done(null);
+        }
     }
 }
 

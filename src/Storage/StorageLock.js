@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { assert } from '../utils/util.js';
-import { syncFileBlocking, syncDirectoryBlocking } from '../utils/fsUtil.js';
+import { syncFile, syncDirectory } from '../utils/fsUtil.js';
 
 const LOCK_RECLAIM = 0x1;
 const LOCK_THROW = 0x2;
@@ -148,9 +148,9 @@ class StorageLock {
         const fileName = path.join(this.directory, CHECKPOINT_FILE);
         const tmpFileName = fileName + '.tmp';
         fs.writeFileSync(tmpFileName, String(position));
-        syncFileBlocking(tmpFileName);
+        syncFile(tmpFileName);
         fs.renameSync(tmpFileName, fileName);
-        syncDirectoryBlocking(this.directory);
+        syncDirectory(this.directory);
     }
 
     /**

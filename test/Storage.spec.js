@@ -1378,7 +1378,7 @@ describe('Storage', function() {
             for (let i = 1; i <= 3; i++) {
                 crashedStorage.write({ type: 'foo', i });
             }
-            crashedStorage.checkpoint().then(() => {
+            crashedStorage.checkpoint();
             expect(crashedStorage.storageLock.readCheckpoint()).to.be(3);
             for (let i = 4; i <= 5; i++) {
                 crashedStorage.write({ type: 'foo', i });
@@ -1396,14 +1396,12 @@ describe('Storage', function() {
                 expect(repairedStorage.openIndex('foo').length).to.be(5);
                 // The rebuilt entries are only on disk with the next checkpoint
                 expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
-                repairedStorage.checkpoint().then(() => {
-                    expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
-                    done();
-                }).catch(done);
+                repairedStorage.checkpoint();
+                expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
+                done();
             });
             repairedStorage.open();
             crashedStorage.storageLock.held = false;
-            }).catch(done);
         });
 
         it('records the checkpoint only after the changed indexes were synced', function(done) {
@@ -1414,20 +1412,21 @@ describe('Storage', function() {
             storage.write({ type: 'bar' });
             const synced = spyOnSyncs();
             const indexSyncs = () => synced.map(fileName => path.basename(fileName));
-            storage.checkpoint().then(() => {
+            const finish = error => {
+                synced.restore();
+                done(error);
+            };
+            storage.checkpoint(error => {
+                if (error) return finish(error);
                 expect(indexSyncs().sort()).to.eql(['storage.foo.index', 'storage.index']);
                 expect(storage.storageLock.readCheckpoint()).to.be(2);
                 expect(storage.index.modified).to.be(false);
                 synced.length = 0;
-                return storage.checkpoint();
-            }).then(() => {
-                synced.restore();
-                // Nothing changed since, but the checkpoint file itself is written synchronously
-                expect(synced).to.eql([]);
-                done();
-            }).catch(error => {
-                synced.restore();
-                done(error);
+                storage.checkpoint(error => {
+                    // Nothing changed since, but the checkpoint file itself is written synchronously
+                    if (!error) expect(synced).to.eql([]);
+                    finish(error);
+                });
             });
         });
 
@@ -1446,15 +1445,15 @@ describe('Storage', function() {
             fooIndex.close();
             fsSync.unlinkSync(fooIndex.fileName);
             const synced = [];
-            const originalSync = FileHandlePool.prototype.syncBlocking;
-            FileHandlePool.prototype.syncBlocking = function(target) {
-                synced.push(path.basename(target.fileName));
-                return originalSync.call(this, target);
+            const originalSync = FileHandlePool.prototype.sync;
+            FileHandlePool.prototype.sync = function(target, callback) {
+                if (!callback) synced.push(path.basename(target.fileName));
+                return originalSync.call(this, target, callback);
             };
             try {
                 storage.close();
             } finally {
-                FileHandlePool.prototype.syncBlocking = originalSync;
+                FileHandlePool.prototype.sync = originalSync;
             }
             expect(synced).to.contain('storage.index');
             expect(synced).not.to.contain('storage.bar.index');
@@ -1467,15 +1466,15 @@ describe('Storage', function() {
             storage.open();
             storage.write({ type: 'foo' });
             const synced = [];
-            const originalSync = FileHandlePool.prototype.syncBlocking;
-            FileHandlePool.prototype.syncBlocking = function(target) {
-                synced.push(path.basename(target.fileName));
-                return originalSync.call(this, target);
+            const originalSync = FileHandlePool.prototype.sync;
+            FileHandlePool.prototype.sync = function(target, callback) {
+                if (!callback) synced.push(path.basename(target.fileName));
+                return originalSync.call(this, target, callback);
             };
             try {
                 storage.close();
             } finally {
-                FileHandlePool.prototype.syncBlocking = originalSync;
+                FileHandlePool.prototype.sync = originalSync;
             }
             expect(synced).not.to.contain('storage.index');
         });

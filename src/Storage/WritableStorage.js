@@ -5,7 +5,7 @@ import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableInd
 import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory } from '../utils/fsUtil.js';
+import { ensureDirectory, parallel } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
 import SyncScheduler from '../SyncScheduler.js';
@@ -112,7 +112,7 @@ class WritableStorage extends ReadableStorage {
      */
     startCheckpoints(position) {
         this.storageLock.writeCheckpoint(position);
-        this.checkpointTimer = setInterval(() => this.checkpoint().catch(error => this.emit('error', error)), CHECKPOINT_INTERVAL);
+        this.checkpointTimer = setInterval(() => this.checkpoint(error => error && this.emit('error', error)), CHECKPOINT_INTERVAL);
         this.checkpointTimer.unref();
     }
 
@@ -120,26 +120,36 @@ class WritableStorage extends ReadableStorage {
      * Indexes are not synced on flush, because the repair after a crash can rebuild them from the partitions.
      * A checkpoint syncs all indexes changed since the previous one in the background, and only then records the
      * length the primary index had before, so the repair only needs to rebuild what was written since.
+     * Without a callback this blocks until the checkpoint is recorded. With a callback the indexes are synced in
+     * parallel in the background.
      *
      * @internal
-     * @returns {Promise<void>}
+     * @param {function(Error|null)} [callback] Called once the checkpoint is recorded, or with the error of a failed sync.
      */
-    async checkpoint() {
+    checkpoint(callback) {
         this.flush();
         const length = this.index.length;
-        await this.syncIndexes(this.takeModifiedIndexes());
-        if (this.locked) {
-            this.storageLock.writeCheckpoint(length);
+        const indexes = this.takeModifiedIndexes();
+        const record = () => {
+            if (this.locked) {
+                this.storageLock.writeCheckpoint(length);
+            }
+        };
+        if (typeof callback !== 'function') {
+            for (const index of indexes) index.fileHandlePool.sync(index);
+            record();
+            return;
         }
-    }
-
-    /**
-     * @private
-     * @param {WritableIndex[]} indexes
-     * @returns {Promise<void>}
-     */
-    syncIndexes(indexes) {
-        return Promise.all(indexes.map(index => index.fileHandlePool.sync(index)));
+        parallel(indexes.map(index => next => index.fileHandlePool.sync(index, next)), error => {
+            if (!error) {
+                try {
+                    record();
+                } catch (recordError) {
+                    error = recordError;
+                }
+            }
+            callback(error);
+        });
     }
 
     /**

@@ -84,16 +84,16 @@ describe('FileHandlePool', function() {
             closed = [];
             hold = null;
             originalFsync = fsSync.fsync;
-            originalOpen = fsSync.promises.open;
+            originalOpen = fsSync.open;
             originalClose = fsSync.closeSync;
             fsSync.fsync = (fd, callback) => {
                 fsyncs.push(fd);
                 const sync = () => originalFsync(fd, callback);
                 if (hold) hold.push(sync); else sync();
             };
-            fsSync.promises.open = (fileName, flags) => {
+            fsSync.open = (fileName, flags, callback) => {
                 opened.push(fileName);
-                return originalOpen(fileName, flags);
+                return originalOpen(fileName, flags, callback);
             };
             fsSync.closeSync = fd => {
                 closed.push(fd);
@@ -101,9 +101,13 @@ describe('FileHandlePool', function() {
             };
         });
 
+        function syncInBackground(target) {
+            return new Promise((resolve, reject) => pool.sync(target, error => error ? reject(error) : resolve()));
+        }
+
         afterEach(function() {
             fsSync.fsync = originalFsync;
-            fsSync.promises.open = originalOpen;
+            fsSync.open = originalOpen;
             fsSync.closeSync = originalClose;
         });
 
@@ -111,7 +115,7 @@ describe('FileHandlePool', function() {
             pool = new FileHandlePool();
             const target = createTarget('open');
             const fd = pool.get(target);
-            await pool.sync(target);
+            await syncInBackground(target);
             expect(fsyncs).to.eql([fd]);
             expect(opened).to.eql([]);
             expect(closed).to.eql([]);
@@ -122,7 +126,7 @@ describe('FileHandlePool', function() {
             const target = createTarget('evicted');
             const fd = pool.get(target);
             hold = [];
-            const syncing = pool.sync(target);
+            const syncing = syncInBackground(target);
             pool.evict(target);
             expect(pool.has(target)).to.be(false);
             expect(closed).to.eql([]);
@@ -138,7 +142,7 @@ describe('FileHandlePool', function() {
             pool = new FileHandlePool();
             const target = createTarget('closed');
             fs.writeFileSync(target.fileName, 'x');
-            await pool.sync(target);
+            await syncInBackground(target);
             expect(opened).to.eql([target.fileName]);
             expect(pool.has(target)).to.be(false);
         });
@@ -146,11 +150,11 @@ describe('FileHandlePool', function() {
         it('skips a file deleted before its sync', async function() {
             pool = new FileHandlePool();
             const target = createTarget('deleted');
-            await pool.sync(target);
+            await syncInBackground(target);
             expect(opened).to.eql([target.fileName]);
         });
 
-        it('rejects when the fsync fails and still closes an evicted descriptor', async function() {
+        it('calls back with a failed fsync and still closes an evicted descriptor', async function() {
             pool = new FileHandlePool();
             const target = createTarget('failing');
             const fd = pool.get(target);
@@ -159,15 +163,15 @@ describe('FileHandlePool', function() {
                 callback(Object.assign(new Error('EIO'), { code: 'EIO' }));
             };
             try {
-                await pool.sync(target);
-                expect().fail('sync() should reject');
+                await syncInBackground(target);
+                expect().fail('sync() should call back with the error');
             } catch (error) {
                 expect(error.code).to.be('EIO');
             }
             expect(closed).to.eql([fd]);
         });
 
-        it('syncs an open file blocking through its pooled descriptor', function() {
+        it('syncs an open file without a callback blocking through its pooled descriptor', function() {
             pool = new FileHandlePool();
             const target = createTarget('blocking');
             const fd = pool.get(target);
@@ -175,21 +179,21 @@ describe('FileHandlePool', function() {
             const originalFsyncSync = fsSync.fsyncSync;
             fsSync.fsyncSync = fd => { synced.push(fd); return originalFsyncSync(fd); };
             try {
-                pool.syncBlocking(target);
+                pool.sync(target);
             } finally {
                 fsSync.fsyncSync = originalFsyncSync;
             }
             expect(synced).to.eql([fd]);
         });
 
-        it('syncs a file that is not open blocking and skips it once deleted', function() {
+        it('syncs a file that is not open without a callback blocking and skips it once deleted', function() {
             pool = new FileHandlePool();
             const target = createTarget('blocking-closed');
             fs.writeFileSync(target.fileName, 'x');
-            pool.syncBlocking(target);
+            pool.sync(target);
             expect(pool.has(target)).to.be(false);
             fs.unlinkSync(target.fileName);
-            pool.syncBlocking(target);
+            pool.sync(target);
         });
     });
 

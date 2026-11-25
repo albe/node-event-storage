@@ -29,20 +29,22 @@ describe('SyncScheduler', function() {
         originalFsync = fs.fsyncSync;
         fs.fsyncSync = (fd) => { syncSync.push(fd); return originalFsync(fd); };
         // Hold every background sync until the test releases it, to observe a run while it is in flight.
-        originalOpen = fs.promises.open;
-        fs.promises.open = async (fileName, flags) => {
+        originalOpen = fs.open;
+        fs.open = (fileName, flags, callback) => {
             opened.push(fileName);
-            await new Promise(resolve => releases.push(resolve));
-            if (failWith) {
-                throw Object.assign(new Error(failWith), { code: failWith });
-            }
-            return originalOpen(fileName, flags);
+            releases.push(() => {
+                if (failWith) {
+                    callback(Object.assign(new Error(failWith), { code: failWith }));
+                } else {
+                    originalOpen(fileName, flags, callback);
+                }
+            });
         };
     });
 
     afterEach(function() {
         fs.fsyncSync = originalFsync;
-        fs.promises.open = originalOpen;
+        fs.open = originalOpen;
         fs.rmSync(dataDirectory, { recursive: true, force: true });
     });
 
