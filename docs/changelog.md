@@ -2,7 +2,7 @@
 
 Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation for a released version is available through the version selector on Read the Docs.
 
-## Unreleased
+## 1.5.1
 
 - Restore write throughput with `syncInterval` for commits across many streams: all partitions of a storage share one sync run per interval, which syncs them in parallel in the background instead of blocking the process. New files sync their directory in that run instead of immediately, and evicting a file handle no longer syncs it.
 - Fix the callbacks of large (unbuffered) writes being invoked before the write was synced, and `close()` releasing the lock before the last sync.
