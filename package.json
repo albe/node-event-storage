@@ -40,6 +40,8 @@
     "src/EventStream*.js",
     "src/Index*.js",
     "src/IndexEntry*.js",
+    "src/InvertedIndex*.js",
+    "src/InvertedIndex/*.js",
     "src/JoinEventStream*.js",
     "src/Partition*.js",
     "src/Storage*.js",
@@ -66,7 +68,7 @@
     }
   ],
   "engines": {
-    "node": ">=20.0"
+    "node": ">=20.15"
   },
   "dependencies": {
     "mkdirp": "^3.0.1"

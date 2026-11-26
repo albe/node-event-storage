@@ -71,7 +71,8 @@ function* union(left, right, forwards = true) {
 function* intersect(left, right, forwards = true) {
     const before = comesBefore(forwards);
     let a = left.next();
-    let b = right.next();
+    // Only start the right range when the left one has an entry, so an empty side never touches the other.
+    let b = a.done ? a : right.next();
     while (!a.done && !b.done) {
         const leftNumber = a.value.number;
         const rightNumber = b.value.number;
@@ -85,6 +86,28 @@ function* intersect(left, right, forwards = true) {
             b = right.next(leftNumber);
         }
     }
+}
+
+/**
+ * Resolve a selector tree into one lazy range. Selector levels alternate by depth: OR (union) at even depths,
+ * starting at the top level, and AND (intersect) at odd depths. Strings are resolved to ranges by `leafRange`.
+ *
+ * @param {string|Array<string|Array>} selector
+ * @param {function(string): Iterator} leafRange Returns the range for one name, e.g. a stream or a term.
+ * @param {boolean} [forwards=true]
+ * @param {number} [depth=0]
+ * @returns {Iterator}
+ */
+function resolveSelector(selector, leafRange, forwards = true, depth = 0) {
+    if (typeof selector === 'string') {
+        return leafRange(selector);
+    }
+    const ranges = selector.map(node => resolveSelector(node, leafRange, forwards, depth + 1));
+    if (ranges.length === 0) {
+        return [][Symbol.iterator]();
+    }
+    const combine = depth % 2 === 0 ? union : intersect;
+    return ranges.reduce((left, right) => combine(left, right, forwards));
 }
 
 /**
@@ -189,6 +212,7 @@ export {
     excludeStreams,
     union,
     intersect,
+    resolveSelector,
     normalizeSelector,
     buildStreamSource
 };
