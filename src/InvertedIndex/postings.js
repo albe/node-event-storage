@@ -120,12 +120,12 @@ function* segmentPostings(segment, entry, from) {
 /**
  * Postings of one term in the memtable.
  *
- * @param {Float64Array} positions Ascending positions.
- * @param {number} length The amount of valid positions.
+ * @param {number[]} positions Ascending positions.
  * @param {number} from The lowest position to yield.
  * @returns {Generator<{ number: number }>}
  */
-function* bufferedPostings(positions, length, from) {
+function* bufferedPostings(positions, from) {
+    const length = positions.length;
     const hit = { number: 0 };
     let i = firstAtLeast(positions, 0, length, from);
     while (i < length) {

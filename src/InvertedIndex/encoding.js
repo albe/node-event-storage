@@ -1,5 +1,3 @@
-import zlib from 'zlib';
-
 const TWO_POW_31 = 0x80000000;
 
 /**
@@ -100,30 +98,4 @@ class ByteReader {
     }
 }
 
-let crcTable = null;
-
-function crc32Fallback(buffer) {
-    if (crcTable === null) {
-        crcTable = new Uint32Array(256);
-        for (let n = 0; n < 256; n++) {
-            let c = n;
-            for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-            crcTable[n] = c >>> 0;
-        }
-    }
-    let crc = 0xFFFFFFFF;
-    for (let i = 0; i < buffer.length; i++) crc = crcTable[(crc ^ buffer[i]) & 0xFF] ^ (crc >>> 8);
-    return (crc ^ 0xFFFFFFFF) >>> 0;
-}
-
-/**
- * zlib.crc32 is native but only exists from Node 20.15 / 22.2 on; the package supports Node >= 20.0.
- *
- * @param {Buffer} buffer
- * @returns {number}
- */
-function crc32(buffer) {
-    return typeof zlib.crc32 === 'function' ? zlib.crc32(buffer) >>> 0 : crc32Fallback(buffer);
-}
-
-export { ByteWriter, ByteReader, crc32, crc32Fallback };
+export { ByteWriter, ByteReader };

@@ -2,7 +2,7 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import path from 'path';
 import InvertedIndex, { CorruptSegmentError } from '../src/InvertedIndex.js';
-import { ByteWriter, ByteReader, crc32, crc32Fallback } from '../src/InvertedIndex/encoding.js';
+import { ByteWriter, ByteReader } from '../src/InvertedIndex/encoding.js';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -53,12 +53,6 @@ describe('InvertedIndex', function() {
             const reader = new ByteReader(writer.toBuffer());
             expect(values.map(() => reader.varint())).to.eql(values);
         });
-
-        it('computes the same crc32 as the native implementation', function() {
-            const buffer = Buffer.from('event-storage inverted index');
-            expect(crc32Fallback(buffer)).to.be(crc32(buffer));
-            expect(crc32(Buffer.from('123456789'))).to.be(0xCBF43926);
-        });
     });
 
     it('returns positions per term from the memtable', function() {
@@ -70,7 +64,6 @@ describe('InvertedIndex', function() {
         expect(get('types/A', 2)).to.eql([5]);
         expect(get('unknown')).to.eql([]);
         expect(index.count('types/A')).to.be(2);
-        expect(index.lastPosition('types/A')).to.be(5);
         expect(index.length).to.be(5);
     });
 
@@ -99,7 +92,6 @@ describe('InvertedIndex', function() {
         expect(index.count('all')).to.be(1000);
         expect(get('odd').length).to.be(500);
         expect(get('mod7:3', 990)).to.eql([990, 997]);
-        expect(index.lastPosition('even')).to.be(1000);
         expect(index.verify()).to.be(true);
     });
 

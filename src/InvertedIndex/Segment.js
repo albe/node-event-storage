@@ -1,9 +1,11 @@
 import fs from 'fs';
-import { ByteWriter, ByteReader, crc32 } from './encoding.js';
+import zlib from 'zlib';
+import { ByteWriter, ByteReader } from './encoding.js';
+import { syncFile } from '../utils/fsUtil.js';
 
 const SEGMENT_MAGIC = 'nesinv01';
 const SEGMENT_VERSION = 1;
-const FOOTER_SIZE = 64;
+const FOOTER_SIZE = 52;
 const POSTINGS_BLOCK_SIZE = 128;
 const DICTIONARY_BLOCK_SIZE = 64;
 const DICTIONARY_CACHE_SIZE = 256;
@@ -45,44 +47,6 @@ function encodePostings(writer, positions, length, scratch) {
     writer.bytes(scratch.buffer, 0, scratch.length);
 }
 
-function readSkipTable(reader) {
-    const count = reader.varint();
-    const blockCount = reader.varint();
-    const firsts = new Array(blockCount);
-    const lengths = new Array(blockCount);
-    let first = 0;
-    for (let block = 0; block < blockCount; block++) {
-        first += reader.varint();
-        firsts[block] = first;
-        lengths[block] = reader.varint();
-    }
-    return { count, firsts, lengths };
-}
-
-/**
- * @param {Buffer} buffer The encoded postings of one term.
- * @param {number} from Only positions >= from are returned.
- * @param {number[]} target Positions are appended to this array.
- */
-function decodePostings(buffer, from, target) {
-    const reader = new ByteReader(buffer);
-    const { count, firsts, lengths } = readSkipTable(reader);
-    let startBlock = 0;
-    while (startBlock + 1 < firsts.length && firsts[startBlock + 1] <= from) startBlock++;
-    for (let block = 0; block < startBlock; block++) reader.offset += lengths[block];
-
-    for (let block = startBlock; block < firsts.length; block++) {
-        let position = firsts[block];
-        if (position >= from) target.push(position);
-        const blockLength = Math.min(POSTINGS_BLOCK_SIZE, count - block * POSTINGS_BLOCK_SIZE);
-        for (let i = 1; i < blockLength; i++) {
-            position += reader.varint();
-            if (position >= from) target.push(position);
-        }
-    }
-    return target;
-}
-
 function commonPrefixLength(a, b) {
     const max = Math.min(a.length, b.length);
     let i = 0;
@@ -103,14 +67,12 @@ function writeSegment(fileName, range, sortedTerms, sync = true) {
     const writer = new ByteWriter(64 * 1024);
     const scratch = new ByteWriter(4096);
     const dictionary = [];
-    let postingCount = 0;
 
     writer.bytes(Buffer.from(SEGMENT_MAGIC));
     for (const { term, positions, length } of sortedTerms) {
         const offset = writer.length;
         encodePostings(writer, positions, length, scratch);
         dictionary.push({ term, docFreq: length, lastPosition: positions[length - 1], offset, size: writer.length - offset });
-        postingCount += length;
     }
 
     const dictOffset = writer.length;
@@ -141,25 +103,18 @@ function writeSegment(fileName, range, sortedTerms, sync = true) {
         writer.varint(offset);
     }
 
-    const checksum = crc32(writer.toBuffer());
+    const checksum = zlib.crc32(writer.toBuffer());
     writer.doubleLE(range.from);
     writer.doubleLE(range.to);
     writer.doubleLE(dictOffset);
     writer.doubleLE(sparseOffset);
-    writer.uint32LE(dictionary.length);
     writer.uint32LE(sparse.length);
-    writer.doubleLE(postingCount);
     writer.uint32LE(checksum);
     writer.uint32LE(SEGMENT_VERSION);
     writer.bytes(Buffer.from(SEGMENT_MAGIC));
 
-    const fd = fs.openSync(fileName, 'w');
-    try {
-        fs.writeSync(fd, writer.buffer, 0, writer.length, 0);
-        if (sync) fs.fsyncSync(fd);
-    } finally {
-        fs.closeSync(fd);
-    }
+    fs.writeFileSync(fileName, writer.toBuffer());
+    if (sync) syncFile(fileName);
     return writer.length;
 }
 
@@ -197,17 +152,15 @@ class SegmentReader {
         }
         this.footerOffset = this.size - FOOTER_SIZE;
         const footer = this.readRegion(this.footerOffset, this.size);
-        if (footer.toString('latin1', 56, 64) !== SEGMENT_MAGIC || footer.readUInt32LE(52) !== SEGMENT_VERSION) {
+        if (footer.toString('latin1', 44, 52) !== SEGMENT_MAGIC || footer.readUInt32LE(40) !== SEGMENT_VERSION) {
             throw new CorruptSegmentError(`Segment ${this.fileName} has an invalid footer.`);
         }
         this.from = footer.readDoubleLE(0);
         this.to = footer.readDoubleLE(8);
         this.dictOffset = footer.readDoubleLE(16);
         this.sparseOffset = footer.readDoubleLE(24);
-        this.termCount = footer.readUInt32LE(32);
-        this.dictionaryBlockCount = footer.readUInt32LE(36);
-        this.postingCount = footer.readDoubleLE(40);
-        this.checksum = footer.readUInt32LE(48);
+        this.dictionaryBlockCount = footer.readUInt32LE(32);
+        this.checksum = footer.readUInt32LE(36);
     }
 
     readSparseIndex() {
@@ -227,7 +180,7 @@ class SegmentReader {
      * @returns {boolean}
      */
     verify() {
-        return crc32(this.readRegion(0, this.footerOffset)) === this.checksum;
+        return zlib.crc32(this.readRegion(0, this.footerOffset)) === this.checksum;
     }
 
     decodeDictionaryRegion(buffer, target) {
@@ -304,15 +257,6 @@ class SegmentReader {
     }
 
     /**
-     * @param {object} entry A dictionary entry returned by lookup().
-     * @param {number} from
-     * @param {number[]} target
-     */
-    readPostings(entry, from, target) {
-        return decodePostings(this.readRegion(entry.offset, entry.offset + entry.size), from, target);
-    }
-
-    /**
      * All dictionary entries in term order.
      *
      * @returns {object[]}
@@ -348,4 +292,4 @@ class SegmentReader {
     }
 }
 
-export { writeSegment, SegmentReader, CorruptSegmentError, encodePostings, decodePostings, POSTINGS_BLOCK_SIZE };
+export { writeSegment, SegmentReader, CorruptSegmentError, POSTINGS_BLOCK_SIZE };

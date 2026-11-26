@@ -4,37 +4,13 @@ import { writeSegment, SegmentReader } from './Segment.js';
 import { segmentPostings, bufferedPostings, chainPostings } from './postings.js';
 import { resolveSelector } from '../utils/indexUtil.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory, resolvePath } from '../utils/fsUtil.js';
+import { ensureDirectory, resolvePath, safeUnlink, syncDirectory, syncFile } from '../utils/fsUtil.js';
 
 const MANIFEST_VERSION = 1;
 const DEFAULT_FLUSH_THRESHOLD = 256000;
 const DEFAULT_FLUSH_INTERVAL = 60000;
 const MAX_FLUSH_INTERVAL = 24 * 60 * 60 * 1000;
 const DEFAULT_MERGE_FACTOR = 10;
-
-/**
- * Growable list of ascending positions for one term in the memtable.
- */
-class PostingBuffer {
-
-    constructor() {
-        this.data = new Float64Array(4);
-        this.length = 0;
-    }
-
-    push(position) {
-        if (this.length === this.data.length) {
-            const grown = new Float64Array(this.data.length * 2);
-            grown.set(this.data);
-            this.data = grown;
-        }
-        this.data[this.length++] = position;
-    }
-
-    get last() {
-        return this.length > 0 ? this.data[this.length - 1] : 0;
-    }
-}
 
 function compareTermBuffers(a, b) {
     return Buffer.compare(a.term, b.term);
@@ -119,27 +95,10 @@ class InvertedIndex {
             segments: this.segments.map(segment => path.basename(segment.fileName))
         };
         const tmpFile = this.manifestFile + '.tmp';
-        const fd = fs.openSync(tmpFile, 'w');
-        try {
-            fs.writeSync(fd, JSON.stringify(manifest));
-            if (this.syncOnFlush) fs.fsyncSync(fd);
-        } finally {
-            fs.closeSync(fd);
-        }
+        fs.writeFileSync(tmpFile, JSON.stringify(manifest));
+        if (this.syncOnFlush) syncFile(tmpFile);
         fs.renameSync(tmpFile, this.manifestFile);
-        if (this.syncOnFlush) this.syncDirectory();
-    }
-
-    syncDirectory() {
-        let fd;
-        try {
-            fd = fs.openSync(this.dataDirectory, 'r');
-            fs.fsyncSync(fd);
-        } catch (e) {
-            // Directories can not be opened or fsynced on every platform (e.g. Windows).
-        } finally {
-            if (fd !== undefined) fs.closeSync(fd);
-        }
+        if (this.syncOnFlush) syncDirectory(this.dataDirectory);
     }
 
     segmentFilePattern() {
@@ -153,8 +112,7 @@ class InvertedIndex {
                 fs.unlinkSync(path.join(this.dataDirectory, file));
             }
         }
-        const tmpFile = this.manifestFile + '.tmp';
-        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+        safeUnlink(this.manifestFile + '.tmp');
     }
 
     nextSegmentFile() {
@@ -182,10 +140,10 @@ class InvertedIndex {
         for (const term of terms) {
             let postings = this.memtable.get(term);
             if (postings === undefined) {
-                postings = new PostingBuffer();
+                postings = [];
                 this.memtable.set(term, postings);
             }
-            if (postings.last !== position) {
+            if (postings.at(-1) !== position) {
                 postings.push(position);
                 this.memtablePostings++;
             }
@@ -202,7 +160,7 @@ class InvertedIndex {
     *sortedMemtable() {
         const terms = [];
         for (const [term, postings] of this.memtable) {
-            terms.push({ term: Buffer.from(term, 'utf8'), positions: postings.data, length: postings.length });
+            terms.push({ term: Buffer.from(term, 'utf8'), positions: postings, length: postings.length });
         }
         yield* terms.sort(compareTermBuffers);
     }
@@ -305,7 +263,7 @@ class InvertedIndex {
             if (entry !== null) parts.push(start => segmentPostings(segment, entry, start));
         }
         const buffered = this.memtable.get(term);
-        if (buffered !== undefined) parts.push(start => bufferedPostings(buffered.data, buffered.length, start));
+        if (buffered !== undefined) parts.push(start => bufferedPostings(buffered, start));
         return chainPostings(parts, from);
     }
 
@@ -321,24 +279,6 @@ class InvertedIndex {
             count += segment.lookup(termBuffer)?.docFreq ?? 0;
         }
         return count;
-    }
-
-    /**
-     * @param {string} term
-     * @returns {number} The highest position indexed under the term, or 0.
-     */
-    lastPosition(term) {
-        assert(this.opened, 'Inverted index is not open.');
-        const buffered = this.memtable.get(term);
-        if (buffered !== undefined && buffered.length > 0) {
-            return buffered.last;
-        }
-        const termBuffer = Buffer.from(term, 'utf8');
-        for (let i = this.segments.length - 1; i >= 0; i--) {
-            const entry = this.segments[i].lookup(termBuffer);
-            if (entry !== null) return entry.lastPosition;
-        }
-        return 0;
     }
 
     /**
@@ -448,7 +388,7 @@ function *mergedTerms(inputs) {
         for (let i = 0; i < inputs.length; i++) {
             const entry = dictionaries[i][cursors[i]];
             if (entry !== undefined && Buffer.compare(entry.term, smallest) === 0) {
-                inputs[i].readPostings(entry, 0, positions);
+                for (const hit of segmentPostings(inputs[i], entry, 1)) positions.push(hit.number);
                 cursors[i]++;
             }
         }
