@@ -139,7 +139,7 @@ class WritableStorage extends ReadableStorage {
             const length = this.index.length;
             const indexes = this.takeModifiedIndexes();
             parallel(indexes.map(index => next => index.fileHandlePool.sync(index, next)), error => {
-                if (error || !this.locked) {
+                if (error) {
                     done(error);
                 } else {
                     this.storageLock.writeCheckpoint(length, done);
