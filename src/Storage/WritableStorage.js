@@ -80,6 +80,7 @@ class WritableStorage extends ReadableStorage {
         this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
         this.partitioner = config.partitioner;
         this.partitionIds = {};
+        this.truncations = 0;
     }
 
     /**
@@ -137,10 +138,14 @@ class WritableStorage extends ReadableStorage {
         this.queueCheckpoint(done => {
             this.flush();
             const length = this.index.length;
+            const truncations = this.truncations;
             const indexes = this.takeModifiedIndexes();
             parallel(indexes.map(index => next => index.fileHandlePool.sync(index, next)), error => {
                 if (error) {
                     done(error);
+                } else if (this.truncations !== truncations) {
+                    // A truncation meanwhile rewrites entries before that length, which this checkpoint did not sync.
+                    done(null);
                 } else {
                     this.storageLock.writeCheckpoint(length, done);
                 }
@@ -286,6 +291,25 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * The index entries after the given position are about to be removed, and new ones written in their place are not
+     * on disk until the next checkpoint. So lower the recorded checkpoint to that position, and keep a checkpoint that
+     * is running meanwhile from recording the length it took before.
+     *
+     * @private
+     * @param {number} position
+     */
+    lowerCheckpoint(position) {
+        this.truncations++;
+        this.queueCheckpoint(done => {
+            if (position < this.storageLock.readCheckpoint()) {
+                this.storageLock.writeCheckpoint(position, done);
+            } else {
+                done(null);
+            }
+        });
+    }
+
+    /**
      * Rebuild the primary index and all loaded secondary indexes starting from the given sequence
      * number by scanning the partition data directly.
      * This is the building block for both auto-repair (invoked automatically when the primary
@@ -298,6 +322,7 @@ class WritableStorage extends ReadableStorage {
      *   Defaults to 0, which rebuilds all indexes from scratch.
      */
     reindex(fromSequenceNumber = 0) {
+        this.lowerCheckpoint(fromSequenceNumber);
         this.index.truncate(fromSequenceNumber);
 
         // Truncate all loaded secondary indexes to match the new primary length.
@@ -681,6 +706,7 @@ class WritableStorage extends ReadableStorage {
             after += this.index.length;
         }
 
+        this.lowerCheckpoint(after);
         this.truncatePartitions(after);
 
         this.index.truncate(after);
