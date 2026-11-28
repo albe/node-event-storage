@@ -104,8 +104,10 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * After a clean close all indexes are on disk. A repair does not sync the entries it rebuilt, so it keeps the
-     * previous checkpoint, and a crash before the next checkpoint rebuilds them again.
+     * Record the first checkpoint in the new lock directory. After a clean close all indexes are on disk, so that is
+     * the length of the primary index. A repair does not sync the entries it rebuilt, so it passes the position of
+     * the previous checkpoint (or less, if the files ended before it), not the repaired length: a crash before the
+     * next checkpoint rebuilds the same entries again.
      *
      * @private
      * @param {number} position The global position up to which all indexes are on disk.
@@ -230,7 +232,8 @@ class WritableStorage extends ReadableStorage {
      * entries after the last checkpoint from the partitions.
      *
      * @param {number} [checkpoint] The global position up to which all indexes were on disk. Defaults to the length of the primary index.
-     * @returns {number} The global position up to which all indexes are still on disk.
+     * @returns {number} The global position up to which all indexes are still on disk: at most the checkpoint, so
+     *   that it can be recorded again for the new lock.
      */
     checkTornWrites(checkpoint = this.index.length) {
         const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
