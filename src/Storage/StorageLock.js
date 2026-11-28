@@ -144,17 +144,28 @@ class StorageLock {
      * storage was closed while a checkpoint synced its indexes in the background.
      *
      * @param {number} position
+     * @param {function(Error|null)} callback
      */
-    writeCheckpoint(position) {
+    writeCheckpoint(position, callback) {
         if (!this.held) {
+            callback(null);
             return;
         }
         const fileName = path.join(this.directory, CHECKPOINT_FILE);
-        const tmpFileName = fileName + '.tmp';
-        fs.writeFileSync(tmpFileName, String(position));
-        syncFile(tmpFileName);
-        fs.renameSync(tmpFileName, fileName);
-        syncDirectory(this.directory);
+        // Written asynchronously, so a scan of the storage files can see it: like all lock files, it ends with `.lock`.
+        const tmpFileName = path.join(this.directory, 'checkpoint.tmp.lock');
+        const then = next => error => {
+            if (!error) {
+                next();
+            } else {
+                // The lock was released meanwhile, so there is nothing to repair.
+                callback(error.code === 'ENOENT' ? null : error);
+            }
+        };
+        fs.writeFile(tmpFileName, String(position), then(() =>
+            syncFile(tmpFileName, then(() =>
+                fs.rename(tmpFileName, fileName, then(() =>
+                    syncDirectory(this.directory, callback)))))));
     }
 
     /**

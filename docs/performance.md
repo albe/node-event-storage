@@ -63,22 +63,22 @@ For large deployments consider lazy-loading secondary indexes on first access ra
 
 ### `syncInterval` and commit latency
 
-With `syncInterval`, a commit callback fires only after the next sync run has `fsync`ed the commit. A commit therefore takes about the interval plus the `fsync`s of that run, no matter how fast the write itself is. A smaller interval lowers that latency, but every run costs at least one `fsync`, so the store runs up to `1000 / syncInterval` of them per second. A run syncs its files in the background on the libuv thread pool, so the event loop goes on writing while the disk confirms the writes. Each run still costs CPU time for the timer, the flushes, opening and closing the files and the callbacks, and every `fsync` loads the disk.
+With `syncInterval`, a commit callback fires only after the next sync run has `fsync`ed the commit. A commit therefore takes about the interval plus the `fsync`s of that run, no matter how fast the write itself is. A smaller interval lowers that latency, but every run costs at least one `fsync`, so the store runs up to `1000 / syncInterval` of them per second. A run syncs its files in the background on the libuv thread pool, so the event loop goes on writing while the disk confirms the writes. Each run still costs CPU time for the timer, the flushes and the callbacks, and every `fsync` loads the disk. A file whose descriptor is still open is synced through it; only a file closed meanwhile is opened again just for the sync.
 
 ![syncInterval against commit latency, throughput of one writer that awaits every commit, fsyncs per second and CPU time, on a local SSD and with 2 ms added to every fsync](perf-sync-interval.svg)
 
 The chart shows one writer that awaits each commit before the next, like an import that awaits every `commit()`. On a disk with about 2 ms per `fsync`, typical for a cloud persistent disk:
 
-| `syncInterval` | Median commit latency | Events/s | `fsync`s/s | Time blocked in `fsync` | CPU time |
-|---|---|---|---|---|---|
-| 1 ms | 4.6 ms | 213 | 213 | 0.2 % | 16 % |
-| 5 ms | 8.8 ms | 113 | 114 | 0.2 % | 10 % |
-| 20 ms | 24.1 ms | 41 | 42 | 0.2 % | 4.2 % |
-| 100 ms | 104 ms | 9 | 10 | 0.2 % | 1.0 % |
-| `syncOnFlush` | 2.8 ms | 349 | 350 | 97 % | 8.5 % |
-| default (no sync) | < 0.01 ms | about 200,000 | 0 | 1 % | 100 % (CPU-bound) |
+| `syncInterval` | Median commit latency | Events/s | `fsync`s/s | CPU time |
+|---|---|---|---|---|
+| 1 ms | 4.7 ms | 212 | 212 | 18 % |
+| 5 ms | 9.1 ms | 107 | 107 | 11 % |
+| 20 ms | 24.3 ms | 40 | 40 | 4.9 % |
+| 100 ms | 105 ms | 9 | 9 | 1.3 % |
+| `syncOnFlush` | 3.5 ms | 279 | 279 | 18 % |
+| default (no sync) | < 0.01 ms | about 200,000 | 0 | 100 % (CPU-bound) |
 
-`syncOnFlush` syncs every flush right away and blocks the event loop meanwhile, so the process spends almost all its time waiting for the disk.
+`syncOnFlush` behaves like an interval of 0: a run starts right after the current tick, and commits during a run share the next one.
 
 What follows from this:
 

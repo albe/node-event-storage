@@ -45,7 +45,7 @@ const eventstore = new EventStore('my-event-store', {
 });
 ```
 
-`syncOnFlush: true` calls `fsync` on every flush instead, at a significant cost in write throughput.
+`syncOnFlush: true` syncs right after each tick instead of waiting for an interval, which gives the lowest commit latency at the highest `fsync` load.
 
 Every commit then waits for the next sync run, so an awaited commit takes at least the interval. A smaller interval lowers that latency but costs more `fsync`s, CPU time and time waiting for the disk; see [`syncInterval` and commit latency](performance.md#syncinterval-and-commit-latency) for how to choose the interval and why imports should pipeline their commits.
 

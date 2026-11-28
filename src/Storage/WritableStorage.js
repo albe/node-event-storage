@@ -19,6 +19,7 @@ const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
 // Bounds the events that the repair after a crash needs to scan.
 const CHECKPOINT_INTERVAL = 5 * 60 * 1000;
 
+
 // Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
 const MAX_UINT32 = 0xFFFFFFFF;
 
@@ -72,6 +73,8 @@ class WritableStorage extends ReadableStorage {
         super(storageName, config);
 
         this.syncScheduler = syncScheduler;
+        this.checkpoints = [];
+        this.closing = null;
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
@@ -91,6 +94,7 @@ class WritableStorage extends ReadableStorage {
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open(callback) {
+        assert(!this.closing, `Storage ${this.storageFile} is still closing. Wait for the close() callback before opening it again.`);
         const checkpoint = this.storageLock.readCheckpoint();
         const needsRepair = this.storageLock.reclaimOrphaned();
 
@@ -99,6 +103,8 @@ class WritableStorage extends ReadableStorage {
         }
 
         return super.open(() => {
+            // A clean close synced all indexes. After a repair, only the entries up to the previous checkpoint are known
+            // to be on disk, until the next checkpoint syncs the rebuilt ones.
             this.startCheckpoints(needsRepair ? this.checkTornWrites(checkpoint) : this.index.length);
             callback?.();
         });
@@ -114,7 +120,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} position The global position up to which all indexes are on disk.
      */
     startCheckpoints(position) {
-        this.storageLock.writeCheckpoint(position);
+        this.queueCheckpoint(done => this.storageLock.writeCheckpoint(position, done));
         this.checkpointTimer = setInterval(() => this.checkpoint(), CHECKPOINT_INTERVAL);
         this.checkpointTimer.unref();
     }
@@ -123,30 +129,59 @@ class WritableStorage extends ReadableStorage {
      * Indexes are not synced on flush, because the repair after a crash can rebuild them from the partitions.
      * A checkpoint syncs all indexes changed since the previous one in the background, and only then records the
      * length the primary index had before, so the repair only needs to rebuild what was written since.
-     * The indexes are synced in parallel in the background.
      *
      * @internal
      * @param {function(Error|null)} [callback] Called once the checkpoint is recorded, or with the error of a failed
      *   sync. Without a callback, a failure is emitted as `'error'`.
      */
     checkpoint(callback) {
-        this.flush();
-        const length = this.index.length;
-        const truncations = this.truncations;
-        const indexes = this.takeModifiedIndexes();
-        parallel(indexes.map(index => next => index.fileHandlePool.sync(index, next)), error => {
-            // A truncation meanwhile rewrites entries before that length, which this checkpoint did not sync.
-            if (!error && this.truncations === truncations) {
-                try {
-                    this.storageLock.writeCheckpoint(length);
-                } catch (recordError) {
-                    error = recordError;
+        this.queueCheckpoint(done => {
+            this.flush();
+            const length = this.index.length;
+            const truncations = this.truncations;
+            const indexes = this.takeModifiedIndexes();
+            parallel(indexes.map(index => next => index.fileHandlePool.sync(index, next)), error => {
+                if (error) {
+                    done(error);
+                } else if (this.truncations !== truncations) {
+                    // A truncation meanwhile rewrites entries before that length, which this checkpoint did not sync.
+                    done(null);
+                } else {
+                    this.storageLock.writeCheckpoint(length, done);
                 }
-            }
+            });
+        }, callback);
+    }
+
+    /**
+     * Checkpoints follow each other, so that an older one never overwrites a newer one.
+     *
+     * @private
+     * @param {function(function(Error|null))} task
+     * @param {function(Error|null)} [callback] Called once the task is done. Without a callback, a failure is emitted
+     *   as `'error'`.
+     */
+    queueCheckpoint(task, callback) {
+        this.checkpoints.push({ task, callback });
+        if (this.checkpoints.length === 1) {
+            this.nextCheckpoint();
+        }
+    }
+
+    /**
+     * @private
+     */
+    nextCheckpoint() {
+        const { task, callback } = this.checkpoints[0];
+        task(error => {
+            this.checkpoints.shift();
             if (typeof callback === 'function') {
                 callback(error);
             } else if (error) {
                 this.emit('error', error);
+            }
+            if (this.checkpoints.length > 0) {
+                this.nextCheckpoint();
             }
         });
     }
@@ -256,18 +291,22 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Move the recorded checkpoint back to the given position, before the index entries after it are removed: the
-     * entries written in their place are not on disk until the next checkpoint. A checkpoint that is running meanwhile
-     * records nothing, because the length it took before includes the removed entries.
+     * Move the recorded checkpoint back to the given position, because the index entries after it are removed: the
+     * entries written in their place are not on disk until the next checkpoint. The record is queued behind a running
+     * checkpoint, which then records nothing, because the length it took before includes the removed entries.
      *
      * @private
      * @param {number} position
      */
     rewindCheckpoint(position) {
         this.truncations++;
-        if (position < this.storageLock.readCheckpoint()) {
-            this.storageLock.writeCheckpoint(position);
-        }
+        this.queueCheckpoint(done => {
+            if (position < this.storageLock.readCheckpoint()) {
+                this.storageLock.writeCheckpoint(position, done);
+            } else {
+                done(null);
+            }
+        });
     }
 
     /**
@@ -342,24 +381,41 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * Hand the changed indexes to the sync scheduler and complete its pending run, through the still open file
-     * descriptors. Then close all files and unlock the storage, because a store without a lock is not repaired on the
-     * next open, and emit `'closed'`.
+     * Hand the changed indexes to the sync scheduler and wait for it to sync everything written, through the still
+     * open file descriptors, and for a running checkpoint. Then close all files and unlock the storage, because a store
+     * without a lock is not repaired on the next open, and emit `'closed'`. The storage can only be opened again after
+     * that, until then it is still locked.
      *
      * @api
-     * @param {function(Error=): void} [callback] Called once the storage is closed and unlocked.
+     * @param {function(Error=): void} [callback] Called once the storage is closed and unlocked, or with the error of a failed sync.
      */
     close(callback) {
+        if (this.closing) {
+            this.closing.push(callback);
+            return;
+        }
+        this.closing = [callback];
         clearInterval(this.checkpointTimer);
         this.flush();
         for (const index of this.takeModifiedIndexes()) this.syncScheduler.flushed(index);
-        this.syncScheduler.run();
-        this.closeFiles();
-        if (this.locked) {
-            this.unlock();
-        }
-        this.emit('closed');
-        callback?.();
+        parallel([
+            next => this.queueCheckpoint(done => done(null), next),
+            next => this.syncScheduler.drain(next)
+        ], error => {
+            this.closeFiles();
+            if (!error && this.locked) {
+                this.unlock();
+            }
+            const callbacks = this.closing.filter(Boolean);
+            this.closing = null;
+            if (error) {
+                if (callbacks.length === 0) this.emit('error', error);
+                for (const waiting of callbacks) waiting(error);
+                return;
+            }
+            this.emit('closed');
+            for (const waiting of callbacks) waiting();
+        });
     }
 
     /**

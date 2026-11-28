@@ -4,7 +4,7 @@ Breaking changes come with an [upgrade guide](upgrading/index.md). Documentation
 
 ## Unreleased
 
-- `close()` of `EventStore` and `Storage` takes an optional callback, invoked once everything is synced and the lock is released.
+- **Breaking:** `close()` of a writing `EventStore` or `Storage` completes asynchronously: it syncs everything written and the changed indexes in the background, and only then releases the lock and emits `'closed'`. `syncOnFlush` now starts a sync run right after the current tick, so commits within one tick share an `fsync`. See the [upgrade guide](upgrading/1.6.md).
 - Indexes are no longer synced while the store is open, and closing an unchanged partition or index no longer syncs it. Removed `Partition.sync()`.
 - The crash repair now rebuilds all index entries after a checkpoint that the writer records every 5 minutes, including those of secondary indexes that were not loaded. Before, a stream index could miss events after a power loss.
 - Fix a writing `Storage` not adding new documents to the secondary indexes of a previous run until they were opened again. It now loads all secondary indexes on open, as `EventStore` already did for streams.

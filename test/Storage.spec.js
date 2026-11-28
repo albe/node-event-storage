@@ -6,15 +6,30 @@ import Storage, { ReadOnly as ReadOnlyStorage, StorageLockedError, LOCK_RECLAIM,
 import os from 'os';
 import { spawnSync } from 'child_process';
 import { matches } from '../src/utils/metadataUtil.js';
-import FileHandlePool from '../src/FileHandlePool.js';
-import spyOnSyncs from './syncSpy.js';
 import Index from '../src/Index.js';
 import zlib from 'zlib';
+import FileHandlePool from '../src/FileHandlePool.js';
+import spyOnSyncs, { drained, checkpointed, checkpoint } from './syncSpy.js';
 //import lz4 from 'lz4';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const dataDirectory = __dirname + 'data';
+
+
+/**
+ * Run a test that both awaits and calls back: errors thrown in the async body fail the test as well.
+ * @param {function(function(Error=): void): Promise<void>} test
+ */
+const withDone = (test) => function() {
+    return new Promise((resolve, reject) => {
+        const done = (error) => error ? reject(error) : resolve();
+        test.call(this, done).catch(reject);
+    });
+};
+
+/** Close a store and wait until it released its lock. */
+const closed = (store) => new Promise((resolve, reject) => store.close(error => error ? reject(error) : resolve()));
 
 describe('Storage', function() {
 
@@ -43,11 +58,11 @@ describe('Storage', function() {
         }
     });
 
-    afterEach(function () {
-        refs.forEach(ref => ref.close());
+    afterEach(async function () {
+        const closing = new Set([...refs, storage].filter(Boolean));
         refs = [];
-        if (storage) storage.close();
         storage = null;
+        await Promise.all([...closing].map(ref => new Promise(resolve => ref.close(() => resolve()))));
     });
 
     it('creates the storage directory if it does not exist', function() {
@@ -106,47 +121,90 @@ describe('Storage', function() {
             });
         });
 
-        it('syncs all changed partitions and new directories in one shared run', function(done) {
-            storage = createStorage({ syncInterval: 1000, partitioner: (document) => document.stream });
+        it('syncs all changed partitions and new directories in one shared run', async function() {
+            storage = createStorage({ syncInterval: 10, partitioner: (document) => document.stream });
+            const opened = new Promise(resolve => storage.once('opened', resolve));
             storage.open();
-            let fsyncCalls = 0;
-            const originalFsync = fsSync.fsyncSync;
-            fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
-            const acknowledged = [];
-            for (let i = 0; i < 10; i++) {
-                storage.write({ stream: 'stream-' + i }, () => acknowledged.push(i));
-                storage.write({ stream: 'stream-' + i });
-            }
-            // The partitions flush their write buffers on the next tick
-            setImmediate(() => {
-                try {
-                    expect(fsyncCalls).to.be(0);
-                    storage.syncScheduler.run();
-                    // 10 partitions, the new primary index file and one shared directory sync; index entries are only synced by a checkpoint
-                    expect(fsyncCalls).to.be(12);
-                    expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-                    done();
-                } catch (e) {
-                    done(e);
-                } finally {
-                    fsSync.fsyncSync = originalFsync;
+            await opened;
+            await checkpointed(storage);
+            // The primary index file created on open
+            await drained(storage.syncScheduler);
+            const synced = spyOnSyncs();
+            try {
+                const acknowledged = [];
+                for (let i = 0; i < 10; i++) {
+                    storage.write({ stream: 'stream-' + i }, () => acknowledged.push(i));
+                    storage.write({ stream: 'stream-' + i });
                 }
-            });
+                expect(synced).to.eql([]);
+                await new Promise(resolve => setImmediate(resolve));
+                await drained(storage.syncScheduler);
+                // 10 new partitions and one shared directory sync; index entries are only synced by a checkpoint
+                expect(synced.length).to.be(11);
+                expect(new Set(synced).size).to.be(11);
+                expect(acknowledged).to.eql([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            } finally {
+                synced.restore();
+            }
         });
 
-        it('acknowledges pending writes on close', function() {
+        it('acknowledges pending writes and syncs the changed indexes before close calls back', function(done) {
             storage = createStorage({ syncInterval: 1000 });
             storage.open();
             let acknowledged = false;
             storage.write({ foo: 'bar' }, () => (acknowledged = true));
-            storage.close();
-            expect(acknowledged).to.be(true);
+            const synced = spyOnSyncs();
+            storage.close(() => {
+                synced.restore();
+                expect(acknowledged).to.be(true);
+                expect(synced).to.contain(storage.index.fileName);
+                expect(storage.locked).to.be(false);
+                done();
+            });
+            expect(storage.locked).to.be(true);
         });
 
-        it('ignores the sync interval when syncOnFlush is set', function() {
+        it('passes a failed sync to every close callback and keeps the lock', function(done) {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            storage.write({ foo: 'bar' });
+            storage.flush();
+            const originalSync = FileHandlePool.prototype.sync;
+            FileHandlePool.prototype.sync = (target, callback) => setImmediate(() => callback(Object.assign(new Error('EIO'), { code: 'EIO' })));
+            const errors = [];
+            const closed = error => {
+                errors.push(error.code);
+                if (errors.length < 2) return;
+                FileHandlePool.prototype.sync = originalSync;
+                expect(errors).to.eql(['EIO', 'EIO']);
+                // Not unlocked, so that the next open repairs the store
+                expect(storage.locked).to.be(true);
+                storage.unlock();
+                done();
+            };
+            storage.close(closed);
+            storage.close(closed);
+        });
+
+        it('emits a failed sync on close as error without a callback', function(done) {
+            storage = createStorage({ syncInterval: 1000 });
+            storage.open();
+            storage.write({ foo: 'bar' });
+            const originalSync = FileHandlePool.prototype.sync;
+            FileHandlePool.prototype.sync = (target, callback) => setImmediate(() => callback(Object.assign(new Error('EIO'), { code: 'EIO' })));
+            storage.once('error', error => {
+                FileHandlePool.prototype.sync = originalSync;
+                expect(error.code).to.be('EIO');
+                storage.unlock();
+                done();
+            });
+            storage.close();
+        });
+
+        it('treats syncOnFlush as an interval of 0', function() {
             storage = createStorage({ syncInterval: 1000, syncOnFlush: true });
             storage.open();
-            expect(storage.syncScheduler.immediate).to.be(true);
+            expect(storage.syncScheduler.enabled).to.be(true);
             expect(storage.syncScheduler.interval).to.be(0);
             expect(storage.getPartition('').syncScheduler).to.be(storage.syncScheduler);
         });
@@ -208,10 +266,10 @@ describe('Storage', function() {
             }
         });
 
-        it('can open secondary indexes lazily', function() {
+        it('can open secondary indexes lazily', async function() {
             storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
-            storage.close();
+            await closed(storage);
 
             expect(index.isOpen()).to.be(false);
             for (let i = 1; i <= 10; i++) {
@@ -248,12 +306,12 @@ describe('Storage', function() {
             expect(fs.existsSync(path.join(dataDirectory, 'storage.' + second + '~1'))).to.be(true);
         });
 
-        it('resolves colliding partitions to the same files after reopening', function(done) {
+        it('resolves colliding partitions to the same files after reopening', withDone(async function(done) {
             storage = createStorage({ partitioner: partitionerFor });
             storage.open();
             storage.write({ partition: first, foo: 1 });
             storage.write({ partition: second, foo: 2 });
-            storage.close();
+            await closed(storage);
 
             storage = createStorage({ partitioner: partitionerFor });
             storage.once('opened', () => {
@@ -275,15 +333,15 @@ describe('Storage', function() {
                 reader.open();
             });
             storage.open();
-        });
+        }));
 
-        it('keeps documents readable that were written into a colliding partition before', function(done) {
+        it('keeps documents readable that were written into a colliding partition before', withDone(async function(done) {
             // Simulates a store written by an older version, where the second partition shared the first one's file.
             storage = createStorage({ partitioner: (doc) => doc.partition === second ? first : doc.partition });
             storage.open();
             storage.write({ partition: first, foo: 1 });
             storage.write({ partition: second, foo: 2 });
-            storage.close();
+            await closed(storage);
 
             storage = createStorage({ partitioner: partitionerFor });
             storage.once('opened', () => {
@@ -295,7 +353,7 @@ describe('Storage', function() {
                 done();
             });
             storage.open();
-        });
+        }));
 
         it('passes the partition name to the metadata function for a probed partition', function() {
             storage = createStorage({ partitioner: partitionerFor, metadata: (name) => ({ name }) });
@@ -321,20 +379,19 @@ describe('Storage', function() {
 
     describe('length', function() {
 
-        it('returns the amount of documents in the storage', function(done) {
+        it('returns the amount of documents in the storage', withDone(async function(done) {
             storage = createStorage();
             storage.open(() => {
                 for (let i = 1; i <= 10; i++) {
                     storage.write({ foo: 'bar' });
                     expect(storage.length).to.be(i);
                 }
-                storage.close();
-                storage.open(() => {
+                storage.close(() => storage.open(() => {
                     expect(storage.length).to.be(10);
                     done();
-                });
+                }));
             });
-        });
+        }));
 
     });
 
@@ -348,20 +405,20 @@ describe('Storage', function() {
             expect(storage.read(2)).to.be(false);
         });
 
-        it('can read back written documents', function() {
+        it('can read back written documents', async function() {
             storage = createStorage();
             storage.open();
 
             storage.write({ foo: 'bar' });
             expect(storage.read(1)).to.eql({ foo: 'bar' });
 
-            storage.close();
+            await closed(storage);
             storage.open();
 
             expect(storage.read(1)).to.eql({ foo: 'bar' });
         });
 
-        it('can read back random documents', function() {
+        it('can read back random documents', async function() {
             storage = createStorage();
             storage.open();
 
@@ -371,13 +428,13 @@ describe('Storage', function() {
 
             expect(storage.read(5)).to.eql({ foo: 5 });
 
-            storage.close();
+            await closed(storage);
             storage.open();
 
             expect(storage.read(5)).to.eql({ foo: 5 });
         });
 
-        it('can read back from partitioned storage', function(done) {
+        it('can read back from partitioned storage', withDone(async function(done) {
             storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number-1) % 4) });
             storage.open();
 
@@ -389,14 +446,14 @@ describe('Storage', function() {
                 expect(storage.read(i)).to.eql({ foo: i });
             }
 
-            storage.close();
+            await closed(storage);
             storage.open();
 
             for (let i = 1; i <= 8; i++) {
                 expect(storage.read(i)).to.eql({ foo: i });
             }
 
-            storage.close();
+            await closed(storage);
             storage = createStorage();
             storage.once('opened', () => {
                 for (let i = 1; i <= 8; i++) {
@@ -405,9 +462,9 @@ describe('Storage', function() {
                 done();
             });
             storage.open();
-        });
+        }));
 
-        it('can read with using secondary index', function() {
+        it('can read with using secondary index', async function() {
             storage = createStorage();
             storage.open();
             let odd = storage.ensureIndex('odd', (doc) => (doc.foo % 2) === 1);
@@ -418,26 +475,26 @@ describe('Storage', function() {
 
             expect(storage.read(3, odd)).to.eql({ foo: 5 });
 
-            storage.close();
+            await closed(storage);
             storage.open();
 
             expect(storage.read(3, odd)).to.eql({ foo: 5 });
         });
 
-        it('can open secondary indexes lazily', function() {
+        it('can open secondary indexes lazily', async function() {
             storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
             for (let i = 1; i <= 10; i++) {
                 storage.write({ type: (i % 3) ? 'bar' : 'foo' });
             }
-            storage.close();
+            await closed(storage);
 
             expect(index.isOpen()).to.be(false);
             storage.read(1, index);
             expect(index.isOpen()).to.be(true);
         });
 
-        it('works with arbitrarily sized documents', function(done) {
+        it('works with arbitrarily sized documents', withDone(async function(done) {
             storage = createStorage({ writeBufferSize: 1024 });
             storage.open();
 
@@ -445,7 +502,7 @@ describe('Storage', function() {
                 storage.write({ foo: i, pad: ' '.repeat(storage.partitionConfig.writeBufferSize * i / 12) });
             }
 
-            storage.close();
+            await closed(storage);
             storage = createStorage();
             storage.once('opened', () => {
                 for (let i = 1; i <= 8; i++) {
@@ -454,20 +511,20 @@ describe('Storage', function() {
                 done();
             });
             storage.open();
-        });
+        }));
 
     });
 
     describe('readRange', function() {
 
-        it('can read full range', function() {
+        it('can read full range', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             let documents = storage.readRange(1);
@@ -478,14 +535,14 @@ describe('Storage', function() {
             expect(i).to.be(11);
         });
 
-        it('can read full range in reverse', function() {
+        it('can read full range in reverse', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 20; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             let i = 20;
@@ -496,7 +553,7 @@ describe('Storage', function() {
             expect(i).to.be(0);
         });
 
-        it('reads all items in reverse when range length is a multiple of batch size', function() {
+        it('reads all items in reverse when range length is a multiple of batch size', async function() {
             // 12 items: sequence 12, 1 (step 11) → old code yielded 2..12 then exited,
             // missing item 1.  Regression test for the >= readUntil boundary fix.
             storage = createStorage();
@@ -505,7 +562,7 @@ describe('Storage', function() {
             for (let i = 1; i <= 12; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             let i = 12;
@@ -516,14 +573,14 @@ describe('Storage', function() {
             expect(i).to.be(0);
         });
 
-        it('can read a sub range', function() {
+        it('can read a sub range', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             let documents = storage.readRange(4, 6);
@@ -534,14 +591,14 @@ describe('Storage', function() {
             expect(i).to.be(7);
         });
 
-        it('can read a range from end', function() {
+        it('can read a range from end', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             let documents = storage.readRange(-4);
@@ -552,14 +609,14 @@ describe('Storage', function() {
             expect(i).to.be(11);
         });
 
-        it('can read a range until a position from end', function() {
+        it('can read a range until a position from end', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             let documents = storage.readRange(1, -4);   // readRange(1, 7)
@@ -570,7 +627,7 @@ describe('Storage', function() {
             expect(i).to.be(8);
         });
 
-        it('can read a range from secondary index', function() {
+        it('can read a range from secondary index', async function() {
             storage = createStorage();
             storage.open();
             let odd = storage.ensureIndex('odd', (doc) => (doc.foo % 2) === 1);
@@ -578,7 +635,7 @@ describe('Storage', function() {
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             let documents = storage.readRange(1, 3, odd);
@@ -590,14 +647,14 @@ describe('Storage', function() {
             expect(i).to.be(7);
         });
 
-        it('throws on invalid range', function() {
+        it('throws on invalid range', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             expect(() => storage.readRange(0).next()).to.throwError();
@@ -605,27 +662,27 @@ describe('Storage', function() {
             expect(() => storage.readRange(1, 14).next()).to.throwError();
         });
 
-        it('can open secondary indexes lazily', function() {
+        it('can open secondary indexes lazily', async function() {
             storage = createStorage();
             const index = storage.ensureIndex('foo', { type: 'foo' });
             for (let i = 1; i <= 10; i++) {
                 storage.write({ type: (i % 3) ? 'bar' : 'foo' });
             }
-            storage.close();
+            await closed(storage);
 
             expect(index.isOpen()).to.be(false);
             Array.from(storage.readRange(1, 2, index));
             expect(index.isOpen()).to.be(true);
         });
 
-        it('iterates partitions in sequenceNumber order when index is false', function() {
+        it('iterates partitions in sequenceNumber order when index is false', async function() {
             storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
             storage.open();
 
             for (let i = 1; i <= 9; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             const documents = Array.from(storage.readRange(1, -1, false));
@@ -635,14 +692,14 @@ describe('Storage', function() {
             }
         });
 
-        it('iterates partitions in reverse sequenceNumber order when index is false', function() {
+        it('iterates partitions in reverse sequenceNumber order when index is false', async function() {
             storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
             storage.open();
 
             for (let i = 1; i <= 9; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             const documents = Array.from(storage.readRange(9, 1, false));
@@ -652,14 +709,14 @@ describe('Storage', function() {
             }
         });
 
-        it('iterates partitions in sequenceNumber order for a sub-range when index is false', function() {
+        it('iterates partitions in sequenceNumber order for a sub-range when index is false', async function() {
             storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
             storage.open();
 
             for (let i = 1; i <= 9; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             const documents = Array.from(storage.readRange(3, 7, false));
@@ -669,14 +726,14 @@ describe('Storage', function() {
             }
         });
 
-        it('forEachDocument with noIndex calls callback with document, sequenceNumber and position', function() {
+        it('forEachDocument with noIndex calls callback with document, sequenceNumber and position', async function() {
             storage = createStorage({ partitioner: (doc, number) => 'part-' + ((number - 1) % 3) });
             storage.open();
 
             for (let i = 1; i <= 6; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             const entries = [];
@@ -756,13 +813,13 @@ describe('Storage', function() {
             });
         });
 
-        it('reopens existing indexes', function() {
+        it('reopens existing indexes', async function() {
             storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foo', () => true);
             storage.write({foo: 'bar'});
             expect(index.length).to.be(1);
-            storage.close();
+            await closed(storage);
 
             storage = createStorage();
             storage.open();
@@ -771,13 +828,13 @@ describe('Storage', function() {
             expect(index.length).to.be(1);
         });
 
-        it('restores matcher from existing index', function() {
+        it('restores matcher from existing index', async function() {
             storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
             storage.write({type: 'Foo'});
             expect(index.length).to.be(1);
-            storage.close();
+            await closed(storage);
 
             storage = createStorage();
             storage.open();
@@ -787,11 +844,11 @@ describe('Storage', function() {
             expect(index.length).to.be(2);
         });
 
-        it('throws when hmac does not validate matcher from existing index', function() {
+        it('throws when hmac does not validate matcher from existing index', async function() {
             storage = createStorage({ hmacSecret: 'foo' });
             storage.open();
             storage.ensureIndex('foo-hmac', (doc) => doc.type === 'Foo');
-            storage.close();
+            await closed(storage);
 
             storage = createStorage({ hmacSecret: 'bar' });
             storage.open();
@@ -799,11 +856,11 @@ describe('Storage', function() {
             expect(() => storage.ensureIndex('foo-hmac', (doc) => doc.type === 'Foo')).to.throwError();
         });
 
-        it('throws when reopening with different matcher', function() {
+        it('throws when reopening with different matcher', async function() {
             storage = createStorage();
             storage.open();
             storage.ensureIndex('foo-matcher', () => true);
-            storage.close();
+            await closed(storage);
 
             storage = createStorage();
             storage.open();
@@ -836,23 +893,23 @@ describe('Storage', function() {
             expect(() => storage.openIndex('foo')).to.throwError(/does not exist/);
         });
 
-        it('throws when hmac does not validate matcher from existing index', function () {
+        it('throws when hmac does not validate matcher from existing index', async function () {
             storage = createStorage({ hmacSecret: 'foo'});
             storage.open();
             storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
-            storage.close();
+            await closed(storage);
 
             storage = createStorage({ hmacSecret: 'bar'});
             storage.open();
             expect(() => storage.openIndex('foo')).to.throwError(/HMAC/);
         });
 
-        it('opens existing indexes', function () {
+        it('opens existing indexes', async function () {
             storage = createStorage();
             storage.open();
             storage.ensureIndex('foo', (doc) => doc.type === 'Foo');
             storage.write({type: 'Foo'});
-            storage.close();
+            await closed(storage);
 
             storage = createStorage();
             storage.open();
@@ -860,7 +917,7 @@ describe('Storage', function() {
             expect(index.length).to.be(1);
         });
 
-        it('reuses cached readonly indexes', function () {
+        it('reuses cached readonly indexes', async function () {
             const index = new Index('storage.foo.closed.index', { dataDirectory });
             expect(index.isOpen()).to.be(true);
             index.close();
@@ -875,7 +932,7 @@ describe('Storage', function() {
             expect(first).to.be(second);
             expect(first.isOpen()).to.be(true);
             expect(second.isOpen()).to.be(true);
-            storage.close();
+            await closed(storage);
             expect(first.isOpen()).to.be(false);
             storage.open();
             const third = storage.openReadonlyIndex('foo.closed');
@@ -887,14 +944,14 @@ describe('Storage', function() {
 
     describe('truncate', function() {
 
-        it('does nothing if truncating after the current position', function() {
+        it('does nothing if truncating after the current position', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             storage.truncate(12);
@@ -902,14 +959,14 @@ describe('Storage', function() {
             expect(storage.length).to.be(10);
         });
 
-        it('correctly truncates to empty', function() {
+        it('correctly truncates to empty', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             storage.truncate(0);
@@ -917,14 +974,14 @@ describe('Storage', function() {
             expect(storage.length).to.be(0);
         });
 
-        it('truncates after the given document number', function() {
+        it('truncates after the given document number', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             storage.truncate(6);
@@ -939,14 +996,14 @@ describe('Storage', function() {
             expect(i).to.be(7);
         });
 
-        it('truncates using a negative document number relative to end', function() {
+        it('truncates using a negative document number relative to end', async function() {
             storage = createStorage();
             storage.open();
 
             for (let i = 1; i <= 10; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             storage.open();
 
             storage.truncate(-4); // keep all but last 4: positions 1..6
@@ -955,7 +1012,7 @@ describe('Storage', function() {
             expect(storage.read(6)).to.eql({ foo: 6 });
         });
 
-        it('truncates after the given document number on each partition', function() {
+        it('truncates after the given document number on each partition', async function() {
             storage = createStorage({
                 partitioner: (doc, number) => 'part-' + (parseInt((number - 1) / 4) % 4)
             });
@@ -965,7 +1022,7 @@ describe('Storage', function() {
                 storage.write({foo: i});
             }
 
-            storage.close();
+            await closed(storage);
             storage.open();
 
             storage.truncate(6);
@@ -980,16 +1037,16 @@ describe('Storage', function() {
             expect(i).to.be(7);
         });
 
-        it('truncates secondary indexes correctly', function(done) {
+        it('truncates secondary indexes correctly', withDone(async function(done) {
             storage = createStorage();
             storage.open();
-            storage.once('opened', () => {
+            storage.once('opened', async () => {
                 let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
 
                 for (let i = 1; i <= 10; i++) {
                     storage.write({foo: i});
                 }
-                storage.close();
+                await closed(storage);
                 storage.open();  // scan already done → opens synchronously, indexes also opened
 
                 storage.truncate(6);
@@ -1008,9 +1065,9 @@ describe('Storage', function() {
                 expect(i).to.be(8);
                 done();
             });
-        });
+        }));
 
-        it('keeps truncated secondary indexes closed', function() {
+        it('keeps truncated secondary indexes closed', async function() {
             storage = createStorage();
             storage.open();
             let index = storage.ensureIndex('foobar', (doc) => doc.foo % 2 === 0);
@@ -1019,7 +1076,7 @@ describe('Storage', function() {
                 storage.write({foo: i});
             }
 
-            storage.close();
+            await closed(storage);
 
             storage.truncate(6);
 
@@ -1028,7 +1085,7 @@ describe('Storage', function() {
             expect(index.length).to.be(3);
         });
 
-        it('repairs stale secondary index when opened after a primary index truncation', function() {
+        it('repairs stale secondary index when opened after a primary index truncation', async function() {
             // Simulate the case where checkTornWrites() truncated the primary index before
             // secondary indexes were loaded (e.g. after LOCK_RECLAIM on an unclean shutdown).
             storage = createStorage();
@@ -1042,7 +1099,7 @@ describe('Storage', function() {
                 storage.write({foo: i});
             }
             storage.flush();
-            storage.close();
+            await closed(storage);
 
             // Re-open and truncate primary index directly (simulating checkTornWrites running
             // before secondary indexes are loaded)
@@ -1051,7 +1108,7 @@ describe('Storage', function() {
             storage.index.truncate(truncateAt); // truncate primary index without going through full truncate()
             // Close without touching secondary index on disk
             storage.index.flush();
-            storage.close();
+            await closed(storage);
 
             // Re-open: openIndex() should detect the stale secondary index and repair it
             storage = createStorage();
@@ -1101,7 +1158,7 @@ describe('Storage', function() {
             expect(storage.index.length).to.be(lengthBefore);
         });
 
-        it('does not reindex when torn write is present and index is up to date', function(done) {
+        it('does not reindex when torn write is present and index is up to date', withDone(async function(done) {
             storage = createStorage();
             storage.open();
 
@@ -1109,7 +1166,7 @@ describe('Storage', function() {
                 storage.write({ foo: i });
             }
             storage.flush();
-            storage.close();
+            await closed(storage);
 
             // Simulate torn write: truncate partition file to remove last document's footer (8 bytes)
             const partitionName = path.join(dataDirectory, 'storage');
@@ -1127,9 +1184,9 @@ describe('Storage', function() {
                 done();
             });
             storage.open();
-        });
+        }));
 
-        it('auto-repairs primary index when both torn write and index lag are present', function(done) {
+        it('auto-repairs primary index when both torn write and index lag are present', withDone(async function(done) {
             storage = createStorage();
             storage.open();
 
@@ -1137,7 +1194,7 @@ describe('Storage', function() {
                 storage.write({ foo: i });
             }
             storage.flush();
-            storage.close();
+            await closed(storage);
 
             // Simulate torn write on last doc AND a lagging index (only 3 of 5 entries flushed)
             const partitionName = path.join(dataDirectory, 'storage');
@@ -1148,10 +1205,10 @@ describe('Storage', function() {
 
             // Re-open and truncate index to 3 to simulate index lag
             storage = createStorage();
-            storage.once('opened', () => {
+            storage.once('opened', async () => {
                 storage.index.truncate(3);
                 storage.index.flush();
-                storage.close();
+                await closed(storage);
 
                 storage = createStorage();
                 storage.once('opened', () => {
@@ -1168,36 +1225,33 @@ describe('Storage', function() {
                 storage.open();
             });
             storage.open();
-        });
+        }));
 
 
-        it('removes index entries for documents that never reached the partition', function(done) {
+        it('removes index entries for documents that never reached the partition', async function() {
+            const opened = storage => new Promise(resolve => { storage.once('opened', resolve); storage.open(); });
+            const closed = storage => new Promise((resolve, reject) => storage.close(error => error ? reject(error) : resolve()));
             storage = createStorage();
-            storage.open();
+            await opened(storage);
             for (let i = 1; i <= 4; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             const partitionName = path.join(dataDirectory, 'storage');
             const sizeBefore = fs.statSync(partitionName).size;
 
             storage = createStorage();
-            storage.once('opened', () => {
-                storage.write({ foo: 5 });
-                storage.close();
-                // The index was written back, but the last document was lost completely: no torn write in the partition
-                fs.truncateSync(partitionName, sizeBefore);
+            await opened(storage);
+            storage.write({ foo: 5 });
+            await closed(storage);
+            // The index was written back, but the last document was lost completely: no torn write in the partition
+            fs.truncateSync(partitionName, sizeBefore);
 
-                storage = createStorage();
-                storage.once('opened', () => {
-                    expect(storage.index.length).to.be(5);
-                    storage.checkTornWrites();
-                    expect(storage.index.length).to.be(4);
-                    done();
-                });
-                storage.open();
-            });
-            storage.open();
+            storage = createStorage();
+            await opened(storage);
+            expect(storage.index.length).to.be(5);
+            storage.checkTornWrites();
+            expect(storage.index.length).to.be(4);
         });
     });
 
@@ -1316,7 +1370,7 @@ describe('Storage', function() {
             expect(secIndex.length).to.be(3); // foo=1, foo=3, foo=5
         });
 
-        it('opens partitions that are not yet open when called directly after open()', function(done) {
+        it('opens partitions that are not yet open when called directly after open()', withDone(async function(done) {
             // Session 1: write data and corrupt the index
             storage = createStorage();
             storage.open();
@@ -1326,7 +1380,7 @@ describe('Storage', function() {
             storage.flush();
             storage.index.truncate(3);
             storage.index.flush();
-            storage.close();
+            await closed(storage);
 
             // Session 2: open without writing — partitions are lazily opened, so they are
             // NOT open yet when reindex() is called directly after open()
@@ -1341,7 +1395,7 @@ describe('Storage', function() {
                 done();
             });
             storage.open();
-        });
+        }));
 
     });
 
@@ -1384,12 +1438,12 @@ describe('Storage', function() {
             crashedStorage.storageLock.held = false;
         });
 
-        it('adds new documents to the secondary indexes found on open before anybody opens them', function(done) {
+        it('adds new documents to the secondary indexes found on open before anybody opens them', withDone(async function(done) {
             storage = createStorage();
             storage.open();
             storage.ensureIndex('foo', { type: 'foo' });
             storage.write({ type: 'foo' });
-            storage.close();
+            await closed(storage);
             storage = createStorage();
             storage.once('opened', () => {
                 storage.write({ type: 'foo' });
@@ -1398,20 +1452,16 @@ describe('Storage', function() {
                 done();
             });
             storage.open();
-        });
+        }));
 
-        function checkpointed(storage) {
-            return new Promise((resolve, reject) => storage.checkpoint(error => error ? reject(error) : resolve()));
-        }
-
-        it('rebuilds the index entries after the last checkpoint, also of secondary indexes nobody opened', async function() {
+        it('rebuilds the index entries after the last checkpoint, also of secondary indexes nobody opened', function(done) {
             const crashedStorage = new Storage({ dataDirectory });
             crashedStorage.open();
             const index = crashedStorage.ensureIndex('foo', { type: 'foo' });
             for (let i = 1; i <= 3; i++) {
                 crashedStorage.write({ type: 'foo', i });
             }
-            await checkpointed(crashedStorage);
+            checkpoint(crashedStorage).then(() => {
             expect(crashedStorage.storageLock.readCheckpoint()).to.be(3);
             for (let i = 4; i <= 5; i++) {
                 crashedStorage.write({ type: 'foo', i });
@@ -1425,15 +1475,20 @@ describe('Storage', function() {
 
             const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
             refs.push(repairedStorage);
-            const opened = new Promise(resolve => repairedStorage.once('opened', resolve));
+            repairedStorage.once('opened', () => {
+                expect(repairedStorage.openIndex('foo').length).to.be(5);
+                // The rebuilt entries are only on disk with the next checkpoint
+                checkpointed(repairedStorage).then(() => {
+                    expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
+                    return checkpoint(repairedStorage);
+                }).then(() => {
+                    expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
+                    done();
+                }).catch(done);
+            });
             repairedStorage.open();
             crashedStorage.storageLock.held = false;
-            await opened;
-            expect(repairedStorage.openIndex('foo').length).to.be(5);
-            // The rebuilt entries are only on disk with the next checkpoint
-            expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
-            await checkpointed(repairedStorage);
-            expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
+            }).catch(done);
         });
 
         it('records the checkpoint only after the changed indexes were synced', function(done) {
@@ -1442,23 +1497,26 @@ describe('Storage', function() {
             storage.ensureIndex('foo', { type: 'foo' });
             storage.write({ type: 'foo' });
             storage.write({ type: 'bar' });
-            const synced = spyOnSyncs();
-            const indexSyncs = () => synced.map(fileName => path.basename(fileName));
-            const finish = error => {
-                synced.restore();
-                done(error);
-            };
-            storage.checkpoint(error => {
-                if (error) return finish(error);
+            let synced;
+            const indexSyncs = () => synced.filter(fileName => fileName.endsWith('.index')).map(fileName => path.basename(fileName));
+            checkpointed(storage).then(() => {
+                synced = spyOnSyncs();
+                return checkpoint(storage);
+            }).then(() => {
                 expect(indexSyncs().sort()).to.eql(['storage.foo.index', 'storage.index']);
+                // The checkpoint file is synced only after the indexes
+                expect(path.basename(synced[synced.length - 2])).to.be('checkpoint.tmp.lock');
                 expect(storage.storageLock.readCheckpoint()).to.be(2);
                 expect(storage.index.modified).to.be(false);
                 synced.length = 0;
-                storage.checkpoint(error => {
-                    // Nothing changed since, but the checkpoint file itself is written synchronously
-                    if (!error) expect(synced).to.eql([]);
-                    finish(error);
-                });
+                return checkpoint(storage);
+            }).then(() => {
+                synced.restore();
+                expect(indexSyncs()).to.eql([]);
+                done();
+            }).catch(error => {
+                synced?.restore();
+                done(error);
             });
         });
 
@@ -1466,7 +1524,7 @@ describe('Storage', function() {
             storage = createStorage();
             storage.open(() => {
                 storage.write({ foo: 'bar' });
-                storage.storageLock.writeCheckpoint = () => { throw new Error('disk full'); };
+                storage.storageLock.writeCheckpoint = (position, callback) => callback(new Error('disk full'));
                 storage.once('error', error => {
                     expect(error.message).to.be('disk full');
                     done();
@@ -1475,17 +1533,20 @@ describe('Storage', function() {
             });
         });
 
-        it('records no checkpoint when the storage was closed while the indexes were synced', function(done) {
+        it('finishes a running checkpoint before close releases the lock', function(done) {
             storage = createStorage();
             storage.open();
             storage.write({ foo: 'bar' });
-            const lockDirectory = storage.storageLock.directory;
+            let recorded;
             storage.checkpoint(error => {
                 expect(error).to.be(null);
-                expect(fs.existsSync(lockDirectory)).to.be(false);
+                recorded = storage.storageLock.readCheckpoint();
+            });
+            storage.close(error => {
+                expect(error).to.not.be.ok();
+                expect(recorded).to.be(1);
                 done();
             });
-            storage.close();
         });
 
         it('lowers the checkpoint when the storage is truncated or reindexed before it', async function() {
@@ -1494,19 +1555,22 @@ describe('Storage', function() {
             for (let i = 1; i <= 5; i++) {
                 storage.write({ foo: i });
             }
-            await checkpointed(storage);
+            await checkpoint(storage);
             expect(storage.storageLock.readCheckpoint()).to.be(5);
             storage.truncate(3);
+            await checkpointed(storage);
             expect(storage.storageLock.readCheckpoint()).to.be(3);
             storage.reindex(2);
+            await checkpointed(storage);
             expect(storage.storageLock.readCheckpoint()).to.be(2);
             storage.truncate(4);
+            await checkpointed(storage);
             expect(storage.storageLock.readCheckpoint()).to.be(2);
         });
 
         it('records no checkpoint when the storage was truncated while the indexes were synced', function(done) {
             storage = createStorage();
-            storage.open(() => {
+            storage.open(() => checkpointed(storage).then(() => {
                 for (let i = 1; i <= 5; i++) {
                     storage.write({ foo: i });
                 }
@@ -1517,10 +1581,10 @@ describe('Storage', function() {
                 });
                 storage.truncate(3);
                 storage.write({ foo: 'rewritten' });
-            });
+            }).catch(done));
         });
 
-        it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', function() {
+        it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', async function() {
             storage = createStorage({ syncInterval: 1000 });
             storage.open();
             storage.ensureIndex('foo', { type: 'foo' });
@@ -1528,45 +1592,39 @@ describe('Storage', function() {
             storage.write({ type: 'foo' });
             storage.write({ type: 'bar' });
             storage.flush();
+            await checkpointed(storage);
             // Sync the new files, so that only the changed indexes are left for close
-            storage.syncScheduler.run();
+            await drained(storage.syncScheduler);
             storage.openIndex('bar').modified = false;
             const fooIndex = storage.openIndex('foo');
             fooIndex.close();
             fsSync.unlinkSync(fooIndex.fileName);
-            const synced = [];
-            const originalSync = FileHandlePool.prototype.sync;
-            FileHandlePool.prototype.sync = function(target, callback) {
-                if (!callback) synced.push(path.basename(target.fileName));
-                return originalSync.call(this, target, callback);
-            };
+            const synced = spyOnSyncs();
             try {
-                storage.close();
+                await new Promise((resolve, reject) => storage.close(error => error ? reject(error) : resolve()));
             } finally {
-                FileHandlePool.prototype.sync = originalSync;
+                synced.restore();
             }
-            expect(synced).to.contain('storage.index');
-            expect(synced).not.to.contain('storage.bar.index');
-            expect(synced).to.contain('storage.foo.index');
+            const indexSyncs = synced.map(fileName => path.basename(fileName));
+            expect(indexSyncs).to.contain('storage.index');
+            // Deleted meanwhile, so there is nothing to sync
+            expect(indexSyncs).not.to.contain('storage.foo.index');
+            expect(indexSyncs).not.to.contain('storage.bar.index');
             expect(storage.locked).to.be(false);
         });
 
-        it('does not sync the indexes on close without a sync configuration', function() {
+        it('does not sync the indexes on close without a sync configuration', async function() {
             storage = createStorage();
             storage.open();
             storage.write({ type: 'foo' });
-            const synced = [];
-            const originalSync = FileHandlePool.prototype.sync;
-            FileHandlePool.prototype.sync = function(target, callback) {
-                if (!callback) synced.push(path.basename(target.fileName));
-                return originalSync.call(this, target, callback);
-            };
+            await checkpointed(storage);
+            const synced = spyOnSyncs();
             try {
-                storage.close();
+                await new Promise((resolve, reject) => storage.close(error => error ? reject(error) : resolve()));
             } finally {
-                FileHandlePool.prototype.sync = originalSync;
+                synced.restore();
             }
-            expect(synced).not.to.contain('storage.index');
+            expect(synced.map(fileName => path.basename(fileName))).not.to.contain('storage.index');
         });
 
     });
@@ -1674,16 +1732,17 @@ describe('Storage', function() {
             crashedStorage.flush();
             crashedStorage.index.truncate(3);
             crashedStorage.index.flush();
-            crashedStorage.close();
-            leaveLock(crashedStorage, { pid: deadPid() });
+            crashedStorage.close(() => {
+                leaveLock(crashedStorage, { pid: deadPid() });
 
-            storage = createStorage();
-            storage.once('opened', () => {
-                expect(storage.index.length).to.be(5);
-                expect(storage.readLockOwner().pid).to.be(process.pid);
-                done();
+                storage = createStorage();
+                storage.once('opened', () => {
+                    expect(storage.index.length).to.be(5);
+                    expect(storage.readLockOwner().pid).to.be(process.pid);
+                    done();
+                });
+                storage.open();
             });
-            storage.open();
         });
 
         it('does not treat lock files as partitions', function(done) {
@@ -1703,10 +1762,10 @@ describe('Storage', function() {
             });
         });
 
-        it('releases write lock after closing', function(){
+        it('releases write lock after closing', async function(){
             const storage2 = createStorage();
             storage2.open();
-            storage2.close();
+            await closed(storage2);
             expect(() => {
                 storage = createStorage();
                 storage.open();

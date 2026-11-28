@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { syncFile, ignoreDeletedFile } from './utils/fsUtil.js';
+import { syncFile } from './utils/fsUtil.js';
 
 /**
  * LRU pool for file descriptors shared across multiple file-backed objects.
@@ -71,24 +71,13 @@ class FileHandlePool {
      * Sync the target's file to disk. An fsync covers all data written to the file through any descriptor, so the
      * pooled one is used if the file is open, which saves opening and closing one just for the sync. A file that is not
      * open in the pool is synced through its own descriptor, without displacing another one. A file deleted meanwhile
-     * needs no sync.
-     * Without a callback this blocks until the file is on disk. With a callback it syncs in the background and pins the
-     * descriptor until then.
+     * needs no sync. Runs on the libuv thread pool and pins the descriptor until then.
      *
      * @param {object} target
-     * @param {function(Error|null)} [callback]
+     * @param {function(Error|null)} callback
      */
     sync(target, callback) {
         const handle = this.handles.get(target);
-        if (typeof callback !== 'function') {
-            try {
-                if (handle) fs.fsyncSync(handle.fd);
-                else syncFile(target.fileName);
-            } catch (error) {
-                ignoreDeletedFile(error);
-            }
-            return;
-        }
         if (!handle) {
             syncFile(target.fileName, error => callback(error && error.code !== 'ENOENT' ? error : null));
             return;

@@ -64,7 +64,7 @@ async function measure(label, storageConfig) {
     const wall = performance.now() - start;
     const { user, system } = process.cpuUsage(cpu);
 
-    store.close();
+    await new Promise(resolve => store.close(resolve));
     fs.rmSync(storageDirectory, { recursive: true, force: true });
 
     latencies.sort((a, b) => a - b);

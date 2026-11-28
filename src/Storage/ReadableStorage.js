@@ -231,7 +231,7 @@ class ReadableStorage extends events.EventEmitter {
 
     /**
      * Open the storage; scans existing partitions and indexes asynchronously on first open.
-     * Re-opens after `close()` are synchronous.
+     * Re-opens after `close()` are synchronous; a writer can only be reopened once its `close()` called back.
      * Will emit an `'opened'` event when finished.
      *
      * @api
