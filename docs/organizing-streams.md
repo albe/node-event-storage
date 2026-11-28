@@ -4,19 +4,27 @@ Every stream is a lightweight index over the shared event log, so one event can 
 
 ## Derived Streams
 
-You can create derived read streams that contain only a filtered subset of another stream, or even events from multiple streams combined.
+You can create derived read streams that contain only a filtered subset of the events, selected by a matcher. `createEventStream()` accepts either an object matcher or a matcher function; both are evaluated against the stored document `{ stream, payload, metadata }`, not just the event payload.
+
+Object matchers are the preferred form. They describe the properties an event must have, support nested equality, arrays of alternatives (OR), scalar operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`), string prefixes (`$startsWith`) and array containment (`$has`, `$hasAny`). They are routed in O(1) on writes (see [`matcherProperties`](performance.md#matcherproperties)) and are persisted as plain JSON, so they are never evaluated as code when the store is reopened.
 
 ```javascript
 // Only events whose type is 'FooHappened' or 'BarHappened'
 const projectionStream = eventstore.createEventStream(
     'my-projection-stream',
-    (document) => ['FooHappened', 'BarHappened'].includes(document.payload.type)
+    { payload: { type: ['FooHappened', 'BarHappened'] } }
 );
 
-// The same with an object matcher (preferred: routed in O(1) on writes and not eval'd on load)
-const sameStream = eventstore.createEventStream(
-    'my-projection-stream-2',
-    { payload: { type: ['FooHappened', 'BarHappened'] } }
+// All events of a flat category, e.g. user-1, user-2, ...
+const usersStream = eventstore.createEventStream(
+    'users',
+    { stream: { $startsWith: 'user-' } }
+);
+
+// All high-value orders of one tenant
+const bigOrders = eventstore.createEventStream(
+    'acme-big-orders',
+    { payload: { type: 'OrderPlaced', total: { $gte: 1000 } }, metadata: { tenantId: 'acme' } }
 );
 
 for (const event of projectionStream) {
@@ -24,7 +32,18 @@ for (const event of projectionStream) {
 }
 ```
 
-A function matcher receives the stored document `{ stream, payload, metadata }`, not just the event payload. The matcher is persisted in the index file so you do not need to re-specify it when reopening the store. See [Security](customization.md#security) for how the matcher is protected against tampering.
+See [Matchers](matchers.md) for the full syntax.
+
+When a condition cannot be expressed as an object matcher, pass a function that receives the stored document and returns `true` for events that belong to the stream:
+
+```javascript
+const sameStream = eventstore.createEventStream(
+    'my-projection-stream-2',
+    (document) => ['FooHappened', 'BarHappened'].includes(document.payload.type)
+);
+```
+
+The matcher is persisted in the index file, so you do not need to re-specify it when reopening the store. Function matchers are stored as source code and evaluated on load; see [Security](customization.md#security) for how they are protected against tampering.
 
 ## Automatically Maintained Streams
 
