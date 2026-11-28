@@ -271,11 +271,13 @@ class WritableStorage extends ReadableStorage {
                 partition.truncateAfterSequence(lastValidSequenceNumber - 1);
             });
         }
-        const documents = torn ? lastValidSequenceNumber : maxPartitionSequenceNumber + 1;
+        const writtenUntil = torn ? lastValidSequenceNumber : maxPartitionSequenceNumber + 1;
 
         this.index.open();
-        const indexedUntil = Math.min(checkpoint, this.index.length, documents);
-        if (torn || indexedUntil < documents || indexedUntil < this.index.length) {
+        const indexedUntil = Math.min(checkpoint, this.index.length, writtenUntil);
+        // The primary index can lag behind the partitions (entries missing) or run ahead of them (entries for
+        // documents that never reached the disk), because the OS writes the files back in no particular order.
+        if (torn || indexedUntil < Math.max(writtenUntil, this.index.length)) {
             this.reindex(indexedUntil);
         }
 
