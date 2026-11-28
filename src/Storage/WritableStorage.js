@@ -114,7 +114,7 @@ class WritableStorage extends ReadableStorage {
      */
     startCheckpoints(position) {
         this.storageLock.writeCheckpoint(position);
-        this.checkpointTimer = setInterval(() => this.checkpoint(error => error && this.emit('error', error)), CHECKPOINT_INTERVAL);
+        this.checkpointTimer = setInterval(() => this.checkpoint(), CHECKPOINT_INTERVAL);
         this.checkpointTimer.unref();
     }
 
@@ -122,31 +122,29 @@ class WritableStorage extends ReadableStorage {
      * Indexes are not synced on flush, because the repair after a crash can rebuild them from the partitions.
      * A checkpoint syncs all indexes changed since the previous one in the background, and only then records the
      * length the primary index had before, so the repair only needs to rebuild what was written since.
-     * Without a callback this blocks until the checkpoint is recorded. With a callback the indexes are synced in
-     * parallel in the background.
+     * The indexes are synced in parallel in the background.
      *
      * @internal
-     * @param {function(Error|null)} [callback] Called once the checkpoint is recorded, or with the error of a failed sync.
+     * @param {function(Error|null)} [callback] Called once the checkpoint is recorded, or with the error of a failed
+     *   sync. Without a callback, a failure is emitted as `'error'`.
      */
     checkpoint(callback) {
         this.flush();
         const length = this.index.length;
         const indexes = this.takeModifiedIndexes();
-        const record = () => this.storageLock.writeCheckpoint(length);
-        if (typeof callback !== 'function') {
-            for (const index of indexes) index.fileHandlePool.sync(index);
-            record();
-            return;
-        }
         parallel(indexes.map(index => next => index.fileHandlePool.sync(index, next)), error => {
             if (!error) {
                 try {
-                    record();
+                    this.storageLock.writeCheckpoint(length);
                 } catch (recordError) {
                     error = recordError;
                 }
             }
-            callback(error);
+            if (typeof callback === 'function') {
+                callback(error);
+            } else if (error) {
+                this.emit('error', error);
+            }
         });
     }
 

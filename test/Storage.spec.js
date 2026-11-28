@@ -1371,14 +1371,18 @@ describe('Storage', function() {
             storage.open();
         });
 
-        it('rebuilds the index entries after the last checkpoint, also of secondary indexes nobody opened', function(done) {
+        function checkpointed(storage) {
+            return new Promise((resolve, reject) => storage.checkpoint(error => error ? reject(error) : resolve()));
+        }
+
+        it('rebuilds the index entries after the last checkpoint, also of secondary indexes nobody opened', async function() {
             const crashedStorage = new Storage({ dataDirectory });
             crashedStorage.open();
             const index = crashedStorage.ensureIndex('foo', { type: 'foo' });
             for (let i = 1; i <= 3; i++) {
                 crashedStorage.write({ type: 'foo', i });
             }
-            crashedStorage.checkpoint();
+            await checkpointed(crashedStorage);
             expect(crashedStorage.storageLock.readCheckpoint()).to.be(3);
             for (let i = 4; i <= 5; i++) {
                 crashedStorage.write({ type: 'foo', i });
@@ -1392,16 +1396,15 @@ describe('Storage', function() {
 
             const repairedStorage = new Storage({ dataDirectory, lock: LOCK_RECLAIM });
             refs.push(repairedStorage);
-            repairedStorage.once('opened', () => {
-                expect(repairedStorage.openIndex('foo').length).to.be(5);
-                // The rebuilt entries are only on disk with the next checkpoint
-                expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
-                repairedStorage.checkpoint();
-                expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
-                done();
-            });
+            const opened = new Promise(resolve => repairedStorage.once('opened', resolve));
             repairedStorage.open();
             crashedStorage.storageLock.held = false;
+            await opened;
+            expect(repairedStorage.openIndex('foo').length).to.be(5);
+            // The rebuilt entries are only on disk with the next checkpoint
+            expect(repairedStorage.storageLock.readCheckpoint()).to.be(3);
+            await checkpointed(repairedStorage);
+            expect(repairedStorage.storageLock.readCheckpoint()).to.be(5);
         });
 
         it('records the checkpoint only after the changed indexes were synced', function(done) {
@@ -1427,6 +1430,19 @@ describe('Storage', function() {
                     if (!error) expect(synced).to.eql([]);
                     finish(error);
                 });
+            });
+        });
+
+        it('emits a failed checkpoint as error without a callback', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.write({ foo: 'bar' });
+                storage.storageLock.writeCheckpoint = () => { throw new Error('disk full'); };
+                storage.once('error', error => {
+                    expect(error.message).to.be('disk full');
+                    done();
+                });
+                storage.checkpoint();
             });
         });
 
