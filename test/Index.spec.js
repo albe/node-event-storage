@@ -2,9 +2,8 @@ import expect from 'expect.js';
 import fs from 'fs-extra';
 import fsSync from 'fs';
 import Index, { ReadOnly as ReadOnlyIndex, Entry as IndexEntry } from '../src/Index.js';
-import path from 'path';
-import spyOnSyncs, { waitFor } from './syncSpy.js';
 import FileHandlePool from '../src/FileHandlePool.js';
+import SyncScheduler from '../src/SyncScheduler.js';
 import { assertValidEntryClass } from '../src/IndexEntry.js';
 import { CHUNK_CAPACITY } from '../src/Index/ReadableIndex.js';
 import { fileURLToPath } from 'url';
@@ -58,49 +57,49 @@ describe('Index', function() {
         return reader;
     }
 
-    it('syncs the directory when creating a new file with syncOnFlush', function() {
-        let fsyncCalls = 0;
-        const originalFsync = fsSync.fsyncSync;
-        fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
-        try {
-            index = createIndex('durable.index', { syncOnFlush: true });
-            index.open();
-            expect(fsyncCalls).to.be(1);
-        } finally {
+    describe('syncScheduler', function() {
+
+        let fsyncCalls, originalFsync;
+
+        beforeEach(function() {
+            fsyncCalls = 0;
+            originalFsync = fsSync.fsyncSync;
+            fsSync.fsyncSync = (fd) => { fsyncCalls++; return originalFsync(fd); };
+        });
+
+        afterEach(function() {
             fsSync.fsyncSync = originalFsync;
-        }
-    });
+        });
 
-    it('syncs the directory when creating a new file in the next run with syncInterval', async function() {
-        const synced = spyOnSyncs();
-        try {
-            index = createIndex('durable.index', { syncInterval: 5 });
+        it('syncs a new file with its directory, but not its flushes, with syncOnFlush', function() {
+            index = createIndex('durable.index', { syncScheduler: new SyncScheduler({ syncOnFlush: true }) });
             index.open();
-            expect(synced).to.eql([]);
-            await waitFor(() => synced.length > 0);
-            expect(synced).to.eql([path.dirname(index.fileName)]);
-        } finally {
-            synced.restore();
-        }
-    });
+            expect(fsyncCalls).to.be(2);
+            index.add(new Index.Entry(1, 0));
+            index.flush();
+            expect(fsyncCalls).to.be(2);
+        });
 
-    it('does not sync on a pool eviction, but on close', function() {
-        let fsyncCalls = 0;
-        const originalFdatasync = fsSync.fdatasyncSync;
-        fsSync.fdatasyncSync = (fd) => { fsyncCalls++; return originalFdatasync(fd); };
-        try {
-            const fileHandlePool = new FileHandlePool(1);
-            index = createIndex('evicted.index', { fileHandlePool });
-            index.add(new IndexEntry(1, 0));
-            const other = createIndex('other.index', { fileHandlePool });
-            other.add(new IndexEntry(1, 0));
-            other.flush();
+        it('syncs a new file with its directory with the next run', function() {
+            const syncScheduler = new SyncScheduler({ syncInterval: 1000 });
+            index = createIndex('durable.index', { syncScheduler });
+            index.open();
+            index.add(new Index.Entry(1, 0));
+            index.flush();
             expect(fsyncCalls).to.be(0);
-            other.close();
-            expect(fsyncCalls).to.be(1);
-        } finally {
-            fsSync.fdatasyncSync = originalFdatasync;
-        }
+            syncScheduler.run();
+            expect(fsyncCalls).to.be(2);
+        });
+
+        it('only marks itself modified on close and leaves the sync to the storage', function() {
+            index = setupIndexWithEntries();
+            index.modified = false;
+            index.add(new Index.Entry(index.length + 1, 0));
+            fsyncCalls = 0;
+            index.close();
+            expect(index.modified).to.be(true);
+            expect(fsyncCalls).to.be(0);
+        });
     });
 
     it('is opened on instantiation', function() {

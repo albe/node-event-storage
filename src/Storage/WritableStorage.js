@@ -5,15 +5,19 @@ import WritableIndex, { Entry as WritableIndexEntry } from '../Index/WritableInd
 import ReadableStorage from './ReadableStorage.js';
 import StorageLock, { StorageLockedError, LOCK_THROW, LOCK_RECLAIM, LOCK_AUTO } from './StorageLock.js';
 import { assert } from '../utils/util.js';
-import { ensureDirectory } from '../utils/fsUtil.js';
-import SyncScheduler from '../SyncScheduler.js';
+import { ensureDirectory, parallel } from '../utils/fsUtil.js';
 import { matches, buildMetadataForMatcher, buildMatcherFromMetadata } from '../utils/metadataUtil.js';
 import { normalizeNamedCtorArgs } from '../utils/apiHelpers.js';
+import SyncScheduler from '../SyncScheduler.js';
 
 const PARTITION_PROBE_SEPARATOR = '~';
+
 const PROBE_SUFFIX_PATTERN = new RegExp(PARTITION_PROBE_SEPARATOR + '\\d+$');
 
 const DEFAULT_WRITE_BUFFER_SIZE = 16 * 1024;
+
+// Bounds the events that the repair after a crash needs to scan.
+const CHECKPOINT_INTERVAL = 5 * 60 * 1000;
 
 // Index entries and document headers store sequence numbers, file positions and sizes as unsigned 32-bit integers.
 const MAX_UINT32 = 0xFFFFFFFF;
@@ -41,7 +45,7 @@ class WritableStorage extends ReadableStorage {
      * @param {number} [config.writeBufferSize] Size of the write buffer in bytes. Default 16384.
      * @param {number} [config.maxWriteBufferDocuments] How many documents to have in the write buffer at max. 0 means as much as possible. Default 0.
      * @param {boolean} [config.syncOnFlush] If fsync should be called on write buffer flush. Set this if you need strict durability. Defaults to false.
-     * @param {number} [config.syncInterval] Group commit: fsync every partition written at most this many ms later, in one shared run, and only then invoke write callbacks. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
+     * @param {number} [config.syncInterval] Group commit: sync all changed partitions together at most every this many ms and only then invoke write callbacks. Ignored when `syncOnFlush` is set. Defaults to 0 (off).
      * @param {boolean} [config.dirtyReads] If dirty reads should be allowed. This means that writes that are in write buffer but not yet flushed can be read. Defaults to true.
      * @param {function(object, number): string} [config.partitioner] A function that takes a document and sequence number and returns a partition name that the document should be stored in. Defaults to write all documents to the primary partition.
      * @param {object} [config.indexOptions] An options object that should be passed to all indexes on construction.
@@ -62,18 +66,18 @@ class WritableStorage extends ReadableStorage {
         };
         config = Object.assign(defaults, config);
         assert(Number.isInteger(config.syncInterval) && config.syncInterval >= 0, 'syncInterval must be a non-negative integer.');
-        // One scheduler for all partitions and indexes, so that the files flushed within an interval share one sync run.
         const syncScheduler = new SyncScheduler(config);
-        config.indexOptions = Object.assign({ syncOnFlush: config.syncOnFlush, syncInterval: config.syncInterval }, config.indexOptions, { syncScheduler });
-        config.syncScheduler = syncScheduler;
+        config.indexOptions = Object.assign({ syncScheduler }, config.indexOptions);
         ensureDirectory(config.dataDirectory);
         super(storageName, config);
+
         this.syncScheduler = syncScheduler;
 
         this.lockFile = path.resolve(this.dataDirectory, this.storageFile + '.lock');
         this.storageLock = new StorageLock(this.lockFile, this.storageFile, config.lock);
         this.partitioner = config.partitioner;
         this.partitionIds = {};
+        this.truncations = 0;
     }
 
     /**
@@ -87,16 +91,83 @@ class WritableStorage extends ReadableStorage {
      * @throws {StorageLockedError} If this storage is locked by another process.
      */
     open(callback) {
+        const checkpoint = this.storageLock.readCheckpoint();
         const needsRepair = this.storageLock.reclaimOrphaned();
 
         if (!this.lock()) {
             return true;
         }
 
-        const onOpen = needsRepair
-            ? () => { this.checkTornWrites(); callback?.(); }
-            : callback;
-        return super.open(onOpen);
+        return super.open(() => {
+            this.startCheckpoints(needsRepair ? this.checkTornWrites(checkpoint) : this.index.length);
+            callback?.();
+        });
+    }
+
+    /**
+     * Record the first checkpoint in the new lock directory. After a clean close all indexes are on disk, so that is
+     * the length of the primary index. A repair does not sync the entries it rebuilt, so it passes the position of
+     * the previous checkpoint (or less, if the files ended before it), not the repaired length: a crash before the
+     * next checkpoint rebuilds the same entries again.
+     *
+     * @private
+     * @param {number} position The global position up to which all indexes are on disk.
+     */
+    startCheckpoints(position) {
+        this.storageLock.writeCheckpoint(position);
+        this.checkpointTimer = setInterval(() => this.checkpoint(), CHECKPOINT_INTERVAL);
+        this.checkpointTimer.unref();
+    }
+
+    /**
+     * Indexes are not synced on flush, because the repair after a crash can rebuild them from the partitions.
+     * A checkpoint syncs all indexes changed since the previous one in the background, and only then records the
+     * length the primary index had before, so the repair only needs to rebuild what was written since.
+     * The indexes are synced in parallel in the background.
+     *
+     * @internal
+     * @param {function(Error|null)} [callback] Called once the checkpoint is recorded, or with the error of a failed
+     *   sync. Without a callback, a failure is emitted as `'error'`.
+     */
+    checkpoint(callback) {
+        this.flush();
+        const length = this.index.length;
+        const truncations = this.truncations;
+        const indexes = this.takeModifiedIndexes();
+        parallel(indexes.map(index => next => index.fileHandlePool.sync(index, next)), error => {
+            // A truncation meanwhile rewrites entries before that length, which this checkpoint did not sync.
+            if (!error && this.truncations === truncations) {
+                try {
+                    this.storageLock.writeCheckpoint(length);
+                } catch (recordError) {
+                    error = recordError;
+                }
+            }
+            if (typeof callback === 'function') {
+                callback(error);
+            } else if (error) {
+                this.emit('error', error);
+            }
+        });
+    }
+
+    /**
+     * An index that changes again while it is synced stays modified for the next checkpoint.
+     *
+     * @private
+     * @returns {WritableIndex[]}
+     */
+    takeModifiedIndexes() {
+        const indexes = [];
+        const take = index => {
+            if (index.modified) {
+                index.modified = false;
+                indexes.push(index);
+            }
+        };
+        take(this.index);
+        this.forEachSecondaryIndex(take);
+        return indexes;
     }
 
     /**
@@ -154,40 +225,49 @@ class WritableStorage extends ReadableStorage {
      * (i.e. position + documentWriteSize(dataSize) > partition.size).  Detected inline in
      * findTornWriteBoundary(), without any checkTornWrite() call.
      *
-     * Repair flow:
-     * 1. findTornWriteBoundary() reads the last document of every partition and finds the global
-     *    torn-write boundary (minimum torn sequence number across all partitions).
-     * 2. If torn writes were found, truncateAfterSequence() removes all documents at or beyond
-     *    the boundary from each partition.
-     * 3. Truncate all indexes to the torn-write boundary, then reindex to fill any lagging entries.
-     * 4. If no torn writes were found but the index is lagging, reindex directly.
+     * Indexes are not synced while the storage is open, only by a checkpoint. So the repair rebuilds all index
+     * entries after the last checkpoint from the partitions.
+     *
+     * @param {number} [checkpoint] The global position up to which all indexes were on disk. Defaults to the length of the primary index.
+     * @returns {number} The global position up to which all indexes are still on disk: at most the checkpoint, so
+     *   that it can be recorded again for the new lock.
      */
-    checkTornWrites() {
+    checkTornWrites(checkpoint = this.index.length) {
         const { lastValidSequenceNumber, maxPartitionSequenceNumber } = this.findTornWriteBoundary();
-
-        if (lastValidSequenceNumber < Number.MAX_SAFE_INTEGER) {
-            // Phase 2: remove all documents at or beyond the torn-write boundary from each partition.
+        const torn = lastValidSequenceNumber < Number.MAX_SAFE_INTEGER;
+        if (torn) {
             this.forEachPartition(partition => {
                 partition.open();
                 partition.truncateAfterSequence(lastValidSequenceNumber - 1);
             });
+        }
+        const writtenUntil = torn ? lastValidSequenceNumber : maxPartitionSequenceNumber + 1;
 
-            // Truncate all indexes to the torn-write boundary.
-            this.index.open();
-            this.index.truncate(lastValidSequenceNumber);
-            /* c8 ignore next */
-            this.forEachWritableSecondaryIndex(index => {
-                index.truncate(index.find(lastValidSequenceNumber));
-            });
-
-            // Reindex to fill in any missing complete-document entries.
-            this.reindex(this.index.length);
-        } else if (maxPartitionSequenceNumber >= 0 && maxPartitionSequenceNumber + 1 > this.index.length) {
-            // No torn writes, but the index is lagging — repair it.
-            this.reindex(this.index.length);
+        this.index.open();
+        const indexedUntil = Math.min(checkpoint, this.index.length, writtenUntil);
+        // The primary index can lag behind the partitions (entries missing) or run ahead of them (entries for
+        // documents that never reached the disk), because the OS writes the files back in no particular order.
+        if (torn || indexedUntil < Math.max(writtenUntil, this.index.length)) {
+            this.reindex(indexedUntil);
         }
 
         this.forEachPartition(partition => partition.close());
+        return indexedUntil;
+    }
+
+    /**
+     * Move the recorded checkpoint back to the given position, before the index entries after it are removed: the
+     * entries written in their place are not on disk until the next checkpoint. A checkpoint that is running meanwhile
+     * records nothing, because the length it took before includes the removed entries.
+     *
+     * @private
+     * @param {number} position
+     */
+    rewindCheckpoint(position) {
+        this.truncations++;
+        if (position < this.storageLock.readCheckpoint()) {
+            this.storageLock.writeCheckpoint(position);
+        }
     }
 
     /**
@@ -203,6 +283,7 @@ class WritableStorage extends ReadableStorage {
      *   Defaults to 0, which rebuilds all indexes from scratch.
      */
     reindex(fromSequenceNumber = 0) {
+        this.rewindCheckpoint(fromSequenceNumber);
         this.index.truncate(fromSequenceNumber);
 
         // Truncate all loaded secondary indexes to match the new primary length.
@@ -261,16 +342,24 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * @inheritDoc
-     * Syncs everything written as configured, unlocks the storage, then delegates to the parent close().
+     * Hand the changed indexes to the sync scheduler and complete its pending run, through the still open file
+     * descriptors. Then close all files and unlock the storage, because a store without a lock is not repaired on the
+     * next open, and emit `'closed'`.
+     *
+     * @api
+     * @param {function(Error=): void} [callback] Called once the storage is closed and unlocked.
      */
-    close() {
-        this.forEachPartition(partition => partition.flush());
+    close(callback) {
+        clearInterval(this.checkpointTimer);
+        this.flush();
+        for (const index of this.takeModifiedIndexes()) this.syncScheduler.flushed(index);
         this.syncScheduler.run();
+        this.closeFiles();
         if (this.locked) {
             this.unlock();
         }
-        super.close();
+        this.emit('closed');
+        callback?.();
     }
 
     /**
@@ -561,6 +650,7 @@ class WritableStorage extends ReadableStorage {
             after += this.index.length;
         }
 
+        this.rewindCheckpoint(after);
         this.truncatePartitions(after);
 
         this.index.truncate(after);
@@ -610,13 +700,27 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
+     * The writer loads every secondary index it finds, so that new documents are added to it and the repair after a
+     * crash reaches it, even before anybody opens it. Indexes of closed streams take no new documents.
+     *
+     * @protected
+     * @param {string} name The name of the secondary index.
+     */
+    foundIndexFile(name) {
+        super.foundIndexFile(name);
+        if (!name.endsWith('.closed')) {
+            this.openIndex(name);
+        }
+    }
+
+    /**
      * @protected
      * @param {string} name
      * @param {object} [config]
      * @returns {WritablePartition}
      */
     createPartition(name, config = {}) {
-        return new WritablePartition(name, { ...config, fileHandlePool: this.partitionHandlePool });
+        return new WritablePartition(name, { ...config, fileHandlePool: this.partitionHandlePool, syncScheduler: this.syncScheduler });
     }
 
 }

@@ -37,7 +37,7 @@ On open, the store truncates an incomplete (torn) commit and, if the primary ind
 
 ## Durability
 
-By default, commits are acknowledged once they are handed to the operating system, which protects against process crashes but not against an OS crash or power loss. To never lose acknowledged commits, enable group commit with `syncInterval`, which acknowledges commits after a shared `fsync` at most every given milliseconds and costs little throughput:
+By default, commits are acknowledged once they are handed to the operating system, which protects against process crashes but not against an OS crash or power loss. To never lose acknowledged commits, enable group commit with `syncInterval`, which acknowledges commits after a shared `fsync` at most every given milliseconds:
 
 ```javascript
 const eventstore = new EventStore('my-event-store', {
@@ -46,6 +46,8 @@ const eventstore = new EventStore('my-event-store', {
 ```
 
 `syncOnFlush: true` calls `fsync` on every flush instead, at a significant cost in write throughput.
+
+Every commit then waits for the next sync run, so an awaited commit takes at least the interval. A smaller interval lowers that latency but costs more `fsync`s, CPU time and time waiting for the disk; see [`syncInterval` and commit latency](performance.md#syncinterval-and-commit-latency) for how to choose the interval and why imports should pipeline their commits.
 
 See [Guarantees](guarantees.md#durability) for what each setting protects against.
 

@@ -10,7 +10,7 @@ import { syncDirectory, parallel } from './utils/fsUtil.js';
  *   its files in parallel in the background, so that it takes about as long as a single fsync and the process can go
  *   on writing meanwhile. Runs never overlap, so write callbacks are invoked in the order of the writes.
  * - neither: nothing is synced.
- * The directory of a new file follows the same rule, so that the file survives a power loss.
+ * A new file is only guaranteed to survive a power loss once its directory is synced as well, which follows the same rule.
  */
 class SyncScheduler {
 
@@ -48,26 +48,19 @@ class SyncScheduler {
     }
 
     /**
-     * Sync the directory entry of a new file, so that the file survives a power loss. Its content is synced with its
-     * flushes. With an interval it is synced by the next run.
+     * Sync a new file with its header and its directory entry. Nothing is acknowledged before a write to the new
+     * file, so with an interval this waits for the next run.
      *
-     * @param {{fileName: string}} file The partition or index that was created.
+     * @param {{fileName: string, fileHandlePool: FileHandlePool}} file The partition or index that was created.
      */
     created(file) {
         if (this.immediate) {
+            file.fileHandlePool.sync(file);
             syncDirectory(path.dirname(file.fileName));
         } else if (this.interval > 0) {
+            this.files.add(file);
             this.directories.add(path.dirname(file.fileName));
-            this.schedule();
         }
-    }
-
-    /**
-     * @param {object} file
-     * @returns {boolean} If a flush of the file waits for the next run.
-     */
-    isWaiting(file) {
-        return this.files.has(file);
     }
 
     /**

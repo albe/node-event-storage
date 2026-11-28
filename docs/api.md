@@ -33,10 +33,10 @@ All options are listed in [Configuration](configuration.md#eventstore-options).
 #### `close()` ✅ Stable
 
 ```javascript
-eventstore.close()
+eventstore.close((error) => { /* closed */ })
 ```
 
-Close the event store and free all resources.
+Close the event store and free all resources. The optional callback is invoked once everything written is synced as configured and the lock is released.
 
 ---
 
@@ -621,10 +621,10 @@ Open the storage and all loaded indexes.  Emits `'opened'`.  The writable varian
 #### `close()` ✅ Stable
 
 ```javascript
-storage.close()
+storage.close((error) => { /* closed */ })
 ```
 
-Close the storage and release all resources (file handles, indexes, write buffers, file watcher).  Emits `'closed'`.
+Close the storage and release all resources (file handles, indexes, write buffers, file watcher).  Emits `'closed'` and invokes the optional callback once a writer synced everything as configured and released the lock.
 
 ---
 

@@ -27,14 +27,13 @@ class WritableIndex extends ReadableIndex {
      * @param {number} [options.writeBufferSize] The amount of bytes of unwritten entries after which they are flushed. Default 4096.
      * @param {number} [options.flushDelay] How many ms to delay the write buffer flush to optimize throughput. Default 100.
      * @param {object} [options.metadata] An object containing the metadata information for this index. Will be written on initial creation and checked on subsequent openings.
-     * @param {SyncScheduler} [options.syncScheduler] Syncs the directory of a new index file, shared by all files of a storage. Defaults to one for this index, configured by `syncOnFlush` and `syncInterval`.
+     * @param {SyncScheduler} [options.syncScheduler] Decides when a new index file is synced to disk. Its entries are only synced by a storage checkpoint. Defaults to never syncing.
      */
     constructor(name = '.index', options = {}) {
         ({ name, options } = normalizeNamedCtorArgs(name, options, '.index'));
         let defaults = {
             writeBufferSize: 4096,
-            flushDelay: 100,
-            syncOnFlush: false
+            flushDelay: 100
         };
         options = Object.assign(defaults, options);
         super(name, options);
@@ -54,8 +53,9 @@ class WritableIndex extends ReadableIndex {
         this.flushedLength = 0;
         this.flushCallbacks = [];
         this.flushDelay = options.flushDelay >>> 0; // jshint ignore:line
-        this.syncOnFlush = !!options.syncOnFlush;
-        this.syncScheduler = options.syncScheduler || new SyncScheduler({ syncOnFlush: options.syncOnFlush, syncInterval: options.syncInterval });
+        this.syncScheduler = options.syncScheduler || new SyncScheduler();
+        // If the file changed since the storage last synced it.
+        this.modified = false;
     }
 
     /**
@@ -119,25 +119,18 @@ class WritableIndex extends ReadableIndex {
     }
 
     /**
-     * Flush pending buffered writes before the pool closes the descriptor. Closing the index also syncs it, an eviction
-     * does not.
-     *
-     * @param {number} fd
-     * @param {boolean} evicted
+     * Flush pending buffered writes before the pool closes the descriptor.
      */
-    onBeforeClose(fd, evicted) {
-        if (!this.flushCallbacks) {
-            return;
-        }
-        this.flush();
-        if (!evicted) {
-            fs.fdatasyncSync(fd);
+    onBeforeClose() {
+        if (this.flushCallbacks) {
+            this.flush();
         }
     }
 
     /**
-     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it
-     * since the last write, so no buffered entry is lost.
+     * Write the buffered entries and close the index. The flush reopens the file handle if the pool evicted it since
+     * the last write, so no buffered entry is lost. The index is not synced: the storage syncs all modified indexes
+     * with a checkpoint and on close, because the repair after a crash rebuilds their entries from the partitions.
      *
      * @api
      */
@@ -151,6 +144,7 @@ class WritableIndex extends ReadableIndex {
      * @api
      */
     destroy() {
+        this.modified = false;
         this.close();
         fs.unlinkSync(this.fileName);
     }
@@ -172,11 +166,8 @@ class WritableIndex extends ReadableIndex {
             return false;
         }
 
-        const fd = this.getFileHandle();
-        this.writeUnflushedEntries(fd);
-        if (this.syncOnFlush) {
-            fs.fsyncSync(fd);
-        }
+        this.writeUnflushedEntries(this.getFileHandle());
+        this.modified = true;
 
         const callbacks = this.flushCallbacks;
         this.flushCallbacks = [];
@@ -285,6 +276,7 @@ class WritableIndex extends ReadableIndex {
             return;
         }
         fs.truncateSync(this.fileName, truncatePosition);
+        this.modified = true;
         this.setLength(after);
         this.flushedLength = Math.min(this.flushedLength, after);
     }

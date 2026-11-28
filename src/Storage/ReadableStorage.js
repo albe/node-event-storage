@@ -193,9 +193,12 @@ class ReadableStorage extends events.EventEmitter {
             }
             const indexPattern = new RegExp(`^${escaped}\\.(.+)\\.index$`);
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
-                if (!(name in this.secondaryIndexes)) {
-                    this.emit('index-created', name);
-                }
+                // Scan was cancelled by close() meanwhile.
+                if (this.initialized === null) return;
+                // The listing can be outdated: an index closed or deleted since is no longer there.
+                /* c8 ignore next */
+                if (!fs.existsSync(path.join(this.indexDirectory, `${this.storageFile}.${name}.index`))) return;
+                this.foundIndexFile(name);
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
                 /* c8 ignore next */
@@ -203,6 +206,18 @@ class ReadableStorage extends events.EventEmitter {
                 done();
             });
         });
+    }
+
+    /**
+     * Called by the scan on open for every secondary index file.
+     *
+     * @protected
+     * @param {string} name The name of the secondary index.
+     */
+    foundIndexFile(name) {
+        if (!(name in this.secondaryIndexes)) {
+            this.emit('index-created', name);
+        }
     }
 
     /**
@@ -251,8 +266,18 @@ class ReadableStorage extends events.EventEmitter {
      * Will emit a 'closed' event when finished.
      *
      * @api
+     * @param {function(Error=): void} [callback] Called once the storage is closed.
      */
-    close() {
+    close(callback) {
+        this.closeFiles();
+        this.emit('closed');
+        callback?.();
+    }
+
+    /**
+     * @protected
+     */
+    closeFiles() {
         // Cancel in-progress scan so the callback does not re-open after an explicit close.
         if (this.initialized === false) {
             this.initialized = null;
@@ -264,7 +289,6 @@ class ReadableStorage extends events.EventEmitter {
         }
         this.readonlyIndexes = {};
         this.forEachPartition(partition => partition.close());
-        this.emit('closed');
     }
 
     /**

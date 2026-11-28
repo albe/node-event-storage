@@ -98,8 +98,8 @@ describe('SyncScheduler', function() {
         scheduler.flushed(files[1], [() => acknowledged.push(1)]);
         scheduler.created(files[2]);
         scheduler.run();
-        // The running file, the waiting file and the directory of the new file
-        expect(syncSync.length).to.be(3);
+        // The running file, the waiting file, the new file and its directory
+        expect(syncSync.length).to.be(4);
         expect(acknowledged).to.eql([0, 1]);
         release();
         await settle();

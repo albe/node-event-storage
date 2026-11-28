@@ -95,9 +95,9 @@ class ReadOnlyStorage extends ReadableStorage {
      * Will emit a 'closed' event when finished.
      *
      * @api
-     * @returns void
+     * @param {function(Error=): void} [callback] Called once the storage is closed.
      */
-    close() {
+    close(callback) {
         if (this.scanSchedule) {
             clearTimeout(this.scanSchedule);
             this.scanSchedule = null;
@@ -107,7 +107,7 @@ class ReadOnlyStorage extends ReadableStorage {
             this.watcher.close();
             this.watcher = null;
         }
-        super.close();
+        super.close(callback);
     }
 
     /**
