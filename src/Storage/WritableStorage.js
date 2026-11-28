@@ -132,11 +132,7 @@ class WritableStorage extends ReadableStorage {
         this.flush();
         const length = this.index.length;
         const indexes = this.takeModifiedIndexes();
-        const record = () => {
-            if (this.locked) {
-                this.storageLock.writeCheckpoint(length);
-            }
-        };
+        const record = () => this.storageLock.writeCheckpoint(length);
         if (typeof callback !== 'function') {
             for (const index of indexes) index.fileHandlePool.sync(index);
             record();

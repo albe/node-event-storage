@@ -1430,6 +1430,19 @@ describe('Storage', function() {
             });
         });
 
+        it('records no checkpoint when the storage was closed while the indexes were synced', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+            const lockDirectory = storage.storageLock.directory;
+            storage.checkpoint(error => {
+                expect(error).to.be(null);
+                expect(fs.existsSync(lockDirectory)).to.be(false);
+                done();
+            });
+            storage.close();
+        });
+
         it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', function() {
             storage = createStorage({ syncInterval: 1000 });
             storage.open();

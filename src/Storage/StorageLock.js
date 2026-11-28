@@ -140,11 +140,15 @@ class StorageLock {
 
     /**
      * Record up to which global position all indexes are on disk. It belongs to the lock, because only the repair after
-     * a crash, which finds the lock left behind, needs it.
+     * a crash, which finds the lock left behind, needs it. Does nothing once the lock is released, e.g. when the
+     * storage was closed while a checkpoint synced its indexes in the background.
      *
      * @param {number} position
      */
     writeCheckpoint(position) {
+        if (!this.held) {
+            return;
+        }
         const fileName = path.join(this.directory, CHECKPOINT_FILE);
         const tmpFileName = fileName + '.tmp';
         fs.writeFileSync(tmpFileName, String(position));
