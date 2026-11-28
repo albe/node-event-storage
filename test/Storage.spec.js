@@ -1494,6 +1494,35 @@ describe('Storage', function() {
             });
         });
 
+        it('emits a failed checkpoint as error without a callback', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                storage.write({ foo: 'bar' });
+                storage.storageLock.writeCheckpoint = (position, callback) => callback(new Error('disk full'));
+                storage.once('error', error => {
+                    expect(error.message).to.be('disk full');
+                    done();
+                });
+                storage.checkpoint();
+            });
+        });
+
+        it('finishes a running checkpoint before close releases the lock', function(done) {
+            storage = createStorage();
+            storage.open();
+            storage.write({ foo: 'bar' });
+            let recorded;
+            storage.checkpoint(error => {
+                expect(error).to.be(null);
+                recorded = storage.storageLock.readCheckpoint();
+            });
+            storage.close(error => {
+                expect(error).to.not.be.ok();
+                expect(recorded).to.be(1);
+                done();
+            });
+        });
+
         it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', async function() {
             storage = createStorage({ syncInterval: 1000 });
             storage.open();

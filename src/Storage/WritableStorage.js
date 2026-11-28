@@ -119,9 +119,8 @@ class WritableStorage extends ReadableStorage {
      * @param {number} position The global position up to which all indexes are on disk.
      */
     startCheckpoints(position) {
-        const reportError = error => error && this.emit('error', error);
-        this.queueCheckpoint(done => this.storageLock.writeCheckpoint(position, done), reportError);
-        this.checkpointTimer = setInterval(() => this.checkpoint(reportError), CHECKPOINT_INTERVAL);
+        this.queueCheckpoint(done => this.storageLock.writeCheckpoint(position, done));
+        this.checkpointTimer = setInterval(() => this.checkpoint(), CHECKPOINT_INTERVAL);
         this.checkpointTimer.unref();
     }
 
@@ -131,7 +130,8 @@ class WritableStorage extends ReadableStorage {
      * length the primary index had before, so the repair only needs to rebuild what was written since.
      *
      * @internal
-     * @param {function(Error|null)} [callback] Called once the checkpoint is recorded, or with the error of a failed sync.
+     * @param {function(Error|null)} [callback] Called once the checkpoint is recorded, or with the error of a failed
+     *   sync. Without a callback, a failure is emitted as `'error'`.
      */
     checkpoint(callback) {
         this.queueCheckpoint(done => {
@@ -153,7 +153,8 @@ class WritableStorage extends ReadableStorage {
      *
      * @private
      * @param {function(function(Error|null))} task
-     * @param {function(Error|null)} [callback] Called once the task is done.
+     * @param {function(Error|null)} [callback] Called once the task is done. Without a callback, a failure is emitted
+     *   as `'error'`.
      */
     queueCheckpoint(task, callback) {
         this.checkpoints.push({ task, callback });
@@ -169,7 +170,11 @@ class WritableStorage extends ReadableStorage {
         const { task, callback } = this.checkpoints[0];
         task(error => {
             this.checkpoints.shift();
-            callback?.(error);
+            if (typeof callback === 'function') {
+                callback(error);
+            } else if (error) {
+                this.emit('error', error);
+            }
             if (this.checkpoints.length > 0) {
                 this.nextCheckpoint();
             }
