@@ -1170,6 +1170,35 @@ describe('Storage', function() {
             storage.open();
         });
 
+
+        it('removes index entries for documents that never reached the partition', function(done) {
+            storage = createStorage();
+            storage.open();
+            for (let i = 1; i <= 4; i++) {
+                storage.write({ foo: i });
+            }
+            storage.close();
+            const partitionName = path.join(dataDirectory, 'storage');
+            const sizeBefore = fs.statSync(partitionName).size;
+
+            storage = createStorage();
+            storage.once('opened', () => {
+                storage.write({ foo: 5 });
+                storage.close();
+                // The index was written back, but the last document was lost completely: no torn write in the partition
+                fs.truncateSync(partitionName, sizeBefore);
+
+                storage = createStorage();
+                storage.once('opened', () => {
+                    expect(storage.index.length).to.be(5);
+                    storage.checkTornWrites();
+                    expect(storage.index.length).to.be(4);
+                    done();
+                });
+                storage.open();
+            });
+            storage.open();
+        });
     });
 
     describe('reindex', function() {
