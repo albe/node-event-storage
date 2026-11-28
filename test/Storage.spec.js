@@ -1228,33 +1228,30 @@ describe('Storage', function() {
         }));
 
 
-        it('removes index entries for documents that never reached the partition', function(done) {
+        it('removes index entries for documents that never reached the partition', async function() {
+            const opened = storage => new Promise(resolve => { storage.once('opened', resolve); storage.open(); });
+            const closed = storage => new Promise((resolve, reject) => storage.close(error => error ? reject(error) : resolve()));
             storage = createStorage();
-            storage.open();
+            await opened(storage);
             for (let i = 1; i <= 4; i++) {
                 storage.write({ foo: i });
             }
-            storage.close();
+            await closed(storage);
             const partitionName = path.join(dataDirectory, 'storage');
             const sizeBefore = fs.statSync(partitionName).size;
 
             storage = createStorage();
-            storage.once('opened', () => {
-                storage.write({ foo: 5 });
-                storage.close();
-                // The index was written back, but the last document was lost completely: no torn write in the partition
-                fs.truncateSync(partitionName, sizeBefore);
+            await opened(storage);
+            storage.write({ foo: 5 });
+            await closed(storage);
+            // The index was written back, but the last document was lost completely: no torn write in the partition
+            fs.truncateSync(partitionName, sizeBefore);
 
-                storage = createStorage();
-                storage.once('opened', () => {
-                    expect(storage.index.length).to.be(5);
-                    storage.checkTornWrites();
-                    expect(storage.index.length).to.be(4);
-                    done();
-                });
-                storage.open();
-            });
-            storage.open();
+            storage = createStorage();
+            await opened(storage);
+            expect(storage.index.length).to.be(5);
+            storage.checkTornWrites();
+            expect(storage.index.length).to.be(4);
         });
     });
 
