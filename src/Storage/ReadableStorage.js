@@ -195,6 +195,9 @@ class ReadableStorage extends events.EventEmitter {
             scanForFiles(this.indexDirectory, indexPattern, (name) => {
                 // Scan was cancelled by close() meanwhile.
                 if (this.initialized === null) return;
+                // The listing can be outdated: an index closed or deleted since is no longer there.
+                /* c8 ignore next */
+                if (!fs.existsSync(path.join(this.indexDirectory, `${this.storageFile}.${name}.index`))) return;
                 this.foundIndexFile(name);
             }, (indexErr) => {
                 // The directory could disappear between existsSync and readdir (e.g. test cleanup).
