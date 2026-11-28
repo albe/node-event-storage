@@ -1488,6 +1488,38 @@ describe('Storage', function() {
             storage.close();
         });
 
+        it('lowers the checkpoint when the storage is truncated or reindexed before it', async function() {
+            storage = createStorage();
+            await new Promise(resolve => storage.open(resolve));
+            for (let i = 1; i <= 5; i++) {
+                storage.write({ foo: i });
+            }
+            await checkpointed(storage);
+            expect(storage.storageLock.readCheckpoint()).to.be(5);
+            storage.truncate(3);
+            expect(storage.storageLock.readCheckpoint()).to.be(3);
+            storage.reindex(2);
+            expect(storage.storageLock.readCheckpoint()).to.be(2);
+            storage.truncate(4);
+            expect(storage.storageLock.readCheckpoint()).to.be(2);
+        });
+
+        it('records no checkpoint when the storage was truncated while the indexes were synced', function(done) {
+            storage = createStorage();
+            storage.open(() => {
+                for (let i = 1; i <= 5; i++) {
+                    storage.write({ foo: i });
+                }
+                storage.checkpoint(error => {
+                    expect(error).to.be(null);
+                    expect(storage.storageLock.readCheckpoint()).to.be(0);
+                    done();
+                });
+                storage.truncate(3);
+                storage.write({ foo: 'rewritten' });
+            });
+        });
+
         it('syncs the indexes changed since the last checkpoint on close, even when one was deleted', function() {
             storage = createStorage({ syncInterval: 1000 });
             storage.open();
