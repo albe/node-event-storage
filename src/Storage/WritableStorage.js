@@ -256,14 +256,14 @@ class WritableStorage extends ReadableStorage {
     }
 
     /**
-     * The index entries after the given position are about to be removed, and new ones written in their place are not
-     * on disk until the next checkpoint. So lower the recorded checkpoint to that position, and keep a checkpoint that
-     * is running meanwhile from recording the length it took before.
+     * Move the recorded checkpoint back to the given position, before the index entries after it are removed: the
+     * entries written in their place are not on disk until the next checkpoint. A checkpoint that is running meanwhile
+     * records nothing, because the length it took before includes the removed entries.
      *
      * @private
      * @param {number} position
      */
-    lowerCheckpoint(position) {
+    rewindCheckpoint(position) {
         this.truncations++;
         if (position < this.storageLock.readCheckpoint()) {
             this.storageLock.writeCheckpoint(position);
@@ -283,7 +283,7 @@ class WritableStorage extends ReadableStorage {
      *   Defaults to 0, which rebuilds all indexes from scratch.
      */
     reindex(fromSequenceNumber = 0) {
-        this.lowerCheckpoint(fromSequenceNumber);
+        this.rewindCheckpoint(fromSequenceNumber);
         this.index.truncate(fromSequenceNumber);
 
         // Truncate all loaded secondary indexes to match the new primary length.
@@ -650,7 +650,7 @@ class WritableStorage extends ReadableStorage {
             after += this.index.length;
         }
 
-        this.lowerCheckpoint(after);
+        this.rewindCheckpoint(after);
         this.truncatePartitions(after);
 
         this.index.truncate(after);
